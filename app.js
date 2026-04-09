@@ -43,7 +43,7 @@ const app = express();
 
 const allowedOrigins = new Set([
   process.env.FRONTEND_URL,
-  'https://hkmsite2-0-client.vercel.app',
+  'https://hkmsite2-0-client-9fyg.vercel.app',
   'http://localhost:3000',
   'http://localhost:8080',
 ].filter(Boolean));
