@@ -1,14 +1,4 @@
-node_modules
-npm-debug.log
-Dockerfile
-.git
-.gitignore
-.env
-.env.*
-coverage
-logs
-*.sqlite
-*.db
+
 node_modules
 npm-debug.log
 Dockerfile
