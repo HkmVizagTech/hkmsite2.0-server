@@ -9,6 +9,7 @@ const userController = {
             const users = await userModel.find({}, "-password");
             res.status(200).json({ users });
         } catch (err) {
+            console.error('user.register error', err);
             res.status(500).json({ message: "Server error" });
         }
     },
@@ -28,6 +29,7 @@ const userController = {
             const user = await userModel.create({ name, email, password: hash });
             res.status(201).json({ message: "User registered successfully", user: { _id: user._id, name: user.name, email: user.email, role: user.role } });
         } catch (err) {
+            console.error('user.login error', err);
             res.status(500).json({ message: "Server error" });
         }
     },
@@ -56,6 +58,7 @@ const userController = {
             });
             res.status(200).json({ user: { _id: user._id, name: user.name, email: user.email, role: user.role } });
         } catch (err) {
+            console.error('user.profile error', err);
             res.status(500).json({ message: "Server error" });
         }
     },
@@ -71,6 +74,7 @@ const userController = {
             if (!user) return res.status(404).json({ message: "User not found" });
             res.status(200).json({ user });
         } catch (err) {
+            console.error('user.update error', err);
             res.status(500).json({ message: "Server error" });
         }
     },
@@ -84,6 +88,7 @@ const userController = {
             const user = await userModel.findByIdAndUpdate(req.user.userId, updateData, { new: true, select: "-password" });
             res.status(200).json({ message: "Profile updated", user });
         } catch (err) {
+            console.error('user.delete error', err);
             res.status(500).json({ message: "Server error" });
         }
     },
