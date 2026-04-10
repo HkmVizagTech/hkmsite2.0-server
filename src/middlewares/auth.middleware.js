@@ -9,6 +9,10 @@ const authMiddleware = (req, res, next) => {
 	} else if (req.cookies && req.cookies.token) {
 		token = req.cookies.token;
 	}
+
+	if (process.env.DEBUG_AUTH === 'true') {
+		console.log('[DEBUG_AUTH] authHeader present:', !!authHeader, 'cookieToken present:', !!(req.cookies && req.cookies.token));
+	}
 	if (!token) {
 		return res.status(401).json({ message: "No token provided" });
 	}

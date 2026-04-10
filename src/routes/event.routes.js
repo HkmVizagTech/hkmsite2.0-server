@@ -29,11 +29,12 @@ eventRouter.post(
 	},
 	eventController.create
 );
-eventRouter.put("/:id", authMiddleware, adminMiddleware, eventController.update);
+// Update event (allow multipart/form-data and images)
 eventRouter.put(
 	"/:id",
 	authMiddleware,
 	adminMiddleware,
+	upload.array("images", 5),
 	eventValidationRules,
 	(req, res, next) => {
 		const errors = validationResult(req);

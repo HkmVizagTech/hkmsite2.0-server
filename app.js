@@ -58,6 +58,8 @@ app.use("/donations", donationRouter);
 app.use("/important-dates", importantDateRouter);
 app.use("/festival-donations", festivalDonationRouter);
 
+// dev routes removed for production safety
+
 
 app.get('/health', (req, res) => {
   const states = ['disconnected', 'connected', 'connecting', 'disconnecting'];
