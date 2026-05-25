@@ -7,21 +7,26 @@ const upload = require("../utils/multer");
 
 const blogRouter = express.Router();
 
-// PUBLIC
-blogRouter.get("/", blogController.list);
-blogRouter.get("/:idOrSlug", blogController.get);
-blogRouter.get("/:id/related", blogController.related);
+// PUBLIC - landing data (multi-section /blogs page)
+// Returns recents, devotional, categories, byCategory, popular, recent in one call
+blogRouter.get("/landing", blogController.landing);
 
-// ADMIN: inline image upload for CKEditor — must come BEFORE :idOrSlug shadows
+// PUBLIC - categories with counts (for nav/filter)
+blogRouter.get("/categories", blogController.categories);
+
+// PUBLIC - paginated/filterable list
+blogRouter.get("/", blogController.list);
+
+// ADMIN - inline image upload for CKEditor (must come before :idOrSlug)
 blogRouter.post(
   "/upload-inline",
   authMiddleware,
   adminMiddleware,
-  upload.single("upload"), // CKEditor SimpleUploadAdapter sends file under "upload"
+  upload.single("upload"),
   blogController.uploadInline
 );
 
-// ADMIN: create
+// ADMIN - create
 blogRouter.post(
   "/",
   authMiddleware,
@@ -36,7 +41,13 @@ blogRouter.post(
   blogController.create
 );
 
-// ADMIN: update
+// PUBLIC - get one by slug or id (must come after the static routes above)
+blogRouter.get("/:idOrSlug", blogController.get);
+
+// PUBLIC - related
+blogRouter.get("/:id/related", blogController.related);
+
+// ADMIN - update
 blogRouter.put(
   "/:id",
   authMiddleware,
@@ -51,7 +62,7 @@ blogRouter.put(
   blogController.update
 );
 
-// ADMIN: delete
+// ADMIN - delete
 blogRouter.delete("/:id", authMiddleware, adminMiddleware, blogController.delete);
 
 module.exports = { blogRouter };

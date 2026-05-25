@@ -1,8 +1,7 @@
-const { blogModel } = require("../models/blog.model");
+const { blogModel, BLOG_CATEGORIES } = require("../models/blog.model");
 const { uploadToCloudinary } = require("../utils/cloudinary");
 const fs = require("fs");
 
-// Generate a URL-friendly slug from title
 const slugify = (s) =>
   String(s || "")
     .toLowerCase()
@@ -12,15 +11,12 @@ const slugify = (s) =>
     .replace(/^-+|-+$/g, "")
     .slice(0, 100);
 
-// Make sure the slug is unique; append -2, -3, ... if needed
 const ensureUniqueSlug = async (base, excludeId) => {
   let slug = base || `post-${Date.now()}`;
   let n = 1;
-  // eslint-disable-next-line no-await-in-loop
   while (true) {
     const query = { slug };
     if (excludeId) query._id = { $ne: excludeId };
-    // eslint-disable-next-line no-await-in-loop
     const exists = await blogModel.findOne(query).lean();
     if (!exists) return slug;
     n += 1;
@@ -28,7 +24,6 @@ const ensureUniqueSlug = async (base, excludeId) => {
   }
 };
 
-// Coerce tags coming in as JSON string OR comma-separated string OR array
 const parseTags = (raw) => {
   if (!raw) return [];
   if (Array.isArray(raw)) return raw.map((t) => String(t).trim()).filter(Boolean);
@@ -39,16 +34,32 @@ const parseTags = (raw) => {
   return s.split(",").map((t) => t.trim()).filter(Boolean);
 };
 
+// Build author object from form fields
+const buildAuthor = (body, req) => {
+  // Support both flat fields and a JSON author object
+  let author = {};
+  if (body.author && typeof body.author === "string" && body.author.startsWith("{")) {
+    try { author = JSON.parse(body.author); } catch (_) {}
+  }
+  return {
+    name: body.authorName || author.name || body.author || (req.user && req.user.name) || "Admin",
+    avatar: body.authorAvatar || author.avatar || "",
+    bio: body.authorBio || author.bio || "",
+    slug: body.authorSlug || author.slug || slugify(body.authorName || author.name || "admin"),
+  };
+};
+
 const blogController = {
-  // PUBLIC — list (published only by default; ?status=all for admin/listing in dashboard)
+  // PUBLIC - list (published only by default)
   list: async (req, res) => {
     try {
-      const { status, category, tag, q, page = 1, limit = 12 } = req.query;
+      const { status, category, tag, q, featured, page = 1, limit = 12 } = req.query;
       const filter = {};
       if (status && status !== "all") filter.status = status;
       else if (!status) filter.status = "published";
       if (category) filter.category = category;
       if (tag) filter.tags = tag;
+      if (featured === "true") filter.featured = true;
       if (q) filter.$text = { $search: q };
 
       const pageNum = Math.max(1, parseInt(page, 10) || 1);
@@ -79,7 +90,115 @@ const blogController = {
     }
   },
 
-  // PUBLIC — get single by slug OR id (front-end may use either)
+  // PUBLIC - landing data for /blogs (GVD-style multi-section page)
+  // Returns: recents, devotionalWisdom, byCategory[], popular, recent
+  // Saves the client from making 8 separate requests.
+  landing: async (req, res) => {
+    try {
+      const base = { status: "published" };
+
+      // Recent posts (top 5) for hero strip
+      const recents = await blogModel
+        .find(base)
+        .sort({ publishedAt: -1 })
+        .limit(5)
+        .select("-content")
+        .lean();
+
+      // Devotional Wisdom carousel - latest one per several categories
+      const devotional = await blogModel
+        .find(base)
+        .sort({ publishedAt: -1 })
+        .limit(5)
+        .select("-content")
+        .lean();
+
+      // Category counts for the "Get Started Here" 13-tile grid
+      const counts = await blogModel.aggregate([
+        { $match: base },
+        { $group: { _id: "$category", count: { $sum: 1 } } },
+      ]);
+      const countMap = Object.fromEntries(counts.map((c) => [c._id, c.count]));
+      const categories = BLOG_CATEGORIES.map((name) => ({
+        name,
+        slug: slugify(name),
+        count: countMap[name] || 0,
+      }));
+
+      // Per-category latest 6 - GVD shows a section for each populated category
+      const populatedCategories = categories.filter((c) => c.count > 0).slice(0, 6);
+      const byCategory = await Promise.all(
+        populatedCategories.map(async (cat) => {
+          const items = await blogModel
+            .find({ ...base, category: cat.name })
+            .sort({ publishedAt: -1 })
+            .limit(6)
+            .select("-content")
+            .lean();
+          return { ...cat, items };
+        })
+      );
+
+      // Popular - featured flag, fallback to most-viewed
+      let popular = await blogModel
+        .find({ ...base, featured: true })
+        .sort({ publishedAt: -1 })
+        .limit(6)
+        .select("-content")
+        .lean();
+      if (popular.length < 6) {
+        const fill = await blogModel
+          .find(base)
+          .sort({ views: -1, publishedAt: -1 })
+          .limit(6 - popular.length)
+          .select("-content")
+          .lean();
+        const have = new Set(popular.map((p) => String(p._id)));
+        popular = [...popular, ...fill.filter((f) => !have.has(String(f._id)))];
+      }
+
+      // Most recent 7 - rich detailed cards near the bottom of the page
+      const recent = await blogModel
+        .find(base)
+        .sort({ publishedAt: -1 })
+        .limit(7)
+        .select("-content")
+        .lean();
+
+      res.status(200).json({
+        recents,
+        devotional,
+        categories,
+        byCategory,
+        popular,
+        recent,
+      });
+    } catch (err) {
+      console.error("Blog landing error:", err);
+      res.status(500).json({ message: "Server error", error: err.message });
+    }
+  },
+
+  // PUBLIC - list of categories with counts (for category navigation)
+  categories: async (req, res) => {
+    try {
+      const counts = await blogModel.aggregate([
+        { $match: { status: "published" } },
+        { $group: { _id: "$category", count: { $sum: 1 } } },
+      ]);
+      const countMap = Object.fromEntries(counts.map((c) => [c._id, c.count]));
+      const categories = BLOG_CATEGORIES.map((name) => ({
+        name,
+        slug: slugify(name),
+        count: countMap[name] || 0,
+      }));
+      res.status(200).json({ categories });
+    } catch (err) {
+      res.status(500).json({ message: "Server error" });
+    }
+  },
+
+  // PUBLIC - get one by slug or id
   get: async (req, res) => {
     try {
       const { idOrSlug } = req.params;
@@ -87,11 +206,9 @@ const blogController = {
       const query = isObjectId ? { _id: idOrSlug } : { slug: idOrSlug };
       const blog = await blogModel.findOne(query);
       if (!blog) return res.status(404).json({ message: "Blog not found" });
-      // public should only see published; admins fetch with ?preview=1
       if (blog.status !== "published" && req.query.preview !== "1") {
         return res.status(404).json({ message: "Blog not found" });
       }
-      // best-effort view counter (non-blocking)
       blogModel.updateOne({ _id: blog._id }, { $inc: { views: 1 } }).catch(() => {});
       res.status(200).json({ blog });
     } catch (err) {
@@ -100,7 +217,7 @@ const blogController = {
     }
   },
 
-  // PUBLIC — related (same category, exclude self)
+  // PUBLIC - related blogs (same category, exclude self)
   related: async (req, res) => {
     try {
       const { id } = req.params;
@@ -109,7 +226,7 @@ const blogController = {
       const items = await blogModel
         .find({ _id: { $ne: id }, status: "published", category: current.category })
         .sort({ publishedAt: -1 })
-        .limit(4)
+        .limit(5)
         .select("-content")
         .lean();
       res.status(200).json({ items });
@@ -118,19 +235,20 @@ const blogController = {
     }
   },
 
-  // ADMIN — create
+  // ADMIN - create
   create: async (req, res) => {
     try {
-      const { title, excerpt, content, category, status, author, slug, metaTitle, metaDescription } = req.body;
+      const { title, excerpt, content, category, status, slug, metaTitle, metaDescription, featured } = req.body;
 
-      // Cover image upload
       let coverImage = req.body.coverImage || "";
+      let authorAvatar = req.body.authorAvatar || "";
       let extraImages = [];
+
       if (req.files && req.files.length > 0) {
         for (const file of req.files) {
-          // eslint-disable-next-line no-await-in-loop
           const result = await uploadToCloudinary(file.path, "blogs");
           if (file.fieldname === "coverImage") coverImage = result.secure_url;
+          else if (file.fieldname === "authorAvatar") authorAvatar = result.secure_url;
           else extraImages.push(result.secure_url);
           try { fs.unlinkSync(file.path); } catch (_) {}
         }
@@ -139,6 +257,8 @@ const blogController = {
       const baseSlug = slugify(slug || title);
       const uniqueSlug = await ensureUniqueSlug(baseSlug);
 
+      const author = buildAuthor({ ...req.body, authorAvatar }, req);
+
       const blog = await blogModel.create({
         title,
         slug: uniqueSlug,
@@ -146,10 +266,11 @@ const blogController = {
         content,
         coverImage,
         images: extraImages,
-        category: category || "General",
+        category: category || "Spiritual Knowledge",
         tags: parseTags(req.body.tags),
-        author: author || (req.user && req.user.name) || "Admin",
+        author,
         status: status || "draft",
+        featured: featured === "true" || featured === true,
         metaTitle: metaTitle || "",
         metaDescription: metaDescription || excerpt || "",
         createdBy: req.user ? req.user.userId : undefined,
@@ -161,33 +282,34 @@ const blogController = {
     }
   },
 
-  // ADMIN — update
+  // ADMIN - update
   update: async (req, res) => {
     try {
       const { id } = req.params;
       const existing = await blogModel.findById(id);
       if (!existing) return res.status(404).json({ message: "Blog not found" });
 
-      // Handle image uploads (cover + extras)
       let coverImage = req.body.coverImage !== undefined ? req.body.coverImage : existing.coverImage;
+      let authorAvatar = req.body.authorAvatar !== undefined ? req.body.authorAvatar : (existing.author && existing.author.avatar) || "";
       let newExtras = [];
       if (req.files && req.files.length > 0) {
         for (const file of req.files) {
-          // eslint-disable-next-line no-await-in-loop
           const result = await uploadToCloudinary(file.path, "blogs");
           if (file.fieldname === "coverImage") coverImage = result.secure_url;
+          else if (file.fieldname === "authorAvatar") authorAvatar = result.secure_url;
           else newExtras.push(result.secure_url);
           try { fs.unlinkSync(file.path); } catch (_) {}
         }
       }
 
-      // Update fields
+      const author = buildAuthor({ ...req.body, authorAvatar }, req);
+
       const patch = {
         title: req.body.title ?? existing.title,
         excerpt: req.body.excerpt ?? existing.excerpt,
         content: req.body.content ?? existing.content,
         category: req.body.category ?? existing.category,
-        author: req.body.author ?? existing.author,
+        author,
         status: req.body.status ?? existing.status,
         metaTitle: req.body.metaTitle ?? existing.metaTitle,
         metaDescription: req.body.metaDescription ?? existing.metaDescription,
@@ -195,17 +317,15 @@ const blogController = {
         images: newExtras.length ? [...(existing.images || []), ...newExtras] : existing.images,
       };
       if (req.body.tags !== undefined) patch.tags = parseTags(req.body.tags);
+      if (req.body.featured !== undefined) {
+        patch.featured = req.body.featured === "true" || req.body.featured === true;
+      }
 
-      // Handle slug change
       if (req.body.slug !== undefined && req.body.slug !== existing.slug) {
         const base = slugify(req.body.slug);
         patch.slug = await ensureUniqueSlug(base, id);
-      } else if (req.body.title && req.body.title !== existing.title && !req.body.slug) {
-        // Auto-bump slug only if it was auto-derived AND title meaningfully changed
-        // (we keep slug stable on edits unless explicitly changed — safest)
       }
 
-      // Apply and save to trigger readTime/publishedAt logic
       Object.assign(existing, patch);
       await existing.save();
 
@@ -216,7 +336,6 @@ const blogController = {
     }
   },
 
-  // ADMIN — delete
   delete: async (req, res) => {
     try {
       const { id } = req.params;
@@ -224,19 +343,16 @@ const blogController = {
       if (!blog) return res.status(404).json({ message: "Blog not found" });
       res.status(200).json({ message: "Blog deleted" });
     } catch (err) {
-      console.error("Blog delete error:", err);
       res.status(500).json({ message: "Server error", error: err.message });
     }
   },
 
-  // ADMIN — generic image upload endpoint that CKEditor's SimpleUploadAdapter posts to.
-  // Returns { url } shape that CKEditor expects.
+  // CKEditor inline image upload
   uploadInline: async (req, res) => {
     try {
       if (!req.file) return res.status(400).json({ error: { message: "No file uploaded" } });
       const result = await uploadToCloudinary(req.file.path, "blogs/inline");
       try { fs.unlinkSync(req.file.path); } catch (_) {}
-      // CKEditor SimpleUpload response format:
       return res.status(200).json({ url: result.secure_url });
     } catch (err) {
       console.error("Blog inline upload error:", err);

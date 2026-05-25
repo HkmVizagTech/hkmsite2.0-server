@@ -1,4 +1,5 @@
 const { body } = require("express-validator");
+const { BLOG_CATEGORIES } = require("../models/blog.model");
 
 const blogValidationRules = [
   body("title")
@@ -9,11 +10,9 @@ const blogValidationRules = [
     .notEmpty().withMessage("Content is required")
     .isLength({ min: 30 }).withMessage("Content too short"),
   body("excerpt").optional().isLength({ max: 500 }).withMessage("Excerpt too long"),
-  body("category").optional().isIn([
-    "Spirituality", "Festivals", "Vizag Guide", "Recipes", "Philosophy", "General",
-  ]).withMessage("Invalid category"),
+  body("category").optional().isIn(BLOG_CATEGORIES).withMessage("Invalid category"),
   body("status").optional().isIn(["draft", "published"]).withMessage("Invalid status"),
-  body("tags").optional(), // accepted either as JSON string or array (multipart-friendly)
+  body("tags").optional(),
 ];
 
 module.exports = { blogValidationRules };
