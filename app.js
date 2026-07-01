@@ -8,6 +8,7 @@ const { userRouter } = require("./src/routes/user.routes");
 const { eventRouter } = require("./src/routes/event.routes");
 const { galleryRouter } = require("./src/routes/gallery.routes");
 const { donationRouter } = require("./src/routes/donation.routes");
+const { donationPageRouter } = require("./src/routes/donationPage.routes");
 const { festivalDonationRouter } = require("./src/routes/festivalDonation.routes");
 const { paymentRouter } = require("./src/routes/payment.routes");
 const { importantDateRouter } = require("./src/routes/importantDate.routes.js");
@@ -54,6 +55,7 @@ app.use("/users", userRouter);
 app.use("/events", eventRouter);
 app.use("/gallery", galleryRouter);
 app.use("/donations", donationRouter);
+app.use("/donation-page", donationPageRouter);
 
 app.use("/important-dates", importantDateRouter);
 app.use("/festival-donations", festivalDonationRouter);
