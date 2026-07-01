@@ -6,6 +6,8 @@ const donationPageSchema = new mongoose.Schema({
   heroSubtitle: { type: String },
   heroEyebrow: { type: String },
   bannerImage: { type: String },
+  bannerMobileImage: { type: String },
+  trusteeBannerImage: { type: String },
   annadaanImage: { type: String },
   goSevaImage: { type: String },
   annadaanTitle: { type: String },
@@ -18,6 +20,7 @@ const donationPageSchema = new mongoose.Schema({
     title: String,
     amount: Number,
   }],
+  galleryImages: [String],
   impactItems: [{
     title: String,
     text: String,

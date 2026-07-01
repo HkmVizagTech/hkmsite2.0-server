@@ -4,8 +4,10 @@ const defaultDonationPage = {
   key: "donations",
   heroEyebrow: "Hare Krishna Movement Vizag",
   heroTitle: "Donate Annadaan and Gau Seva Online",
-  heroSubtitle: "Support prasadam distribution and protected cow care with a heartfelt seva offering.",
-  bannerImage: "/assets/donations-annadana-real.jpg",
+  heroSubtitle: "Support Narasimha Jayanthi meals for hungry and needy people.",
+  bannerImage: "/assets/donations-nsj-annadan-web.jpeg",
+  bannerMobileImage: "/assets/donations-nsj-annadan-mobile.jpeg",
+  trusteeBannerImage: "/assets/donations-trustee-banner.png",
   annadaanImage: "/assets/donations-annadana-real.jpg",
   goSevaImage: "/assets/donations-gau-seva-real.jpeg",
   annadaanTitle: "Annadaan Seva",
@@ -40,6 +42,12 @@ const defaultDonationPage = {
     { id: 18, category: "GO SEVA", title: "Adopt 3 Cows For An Year", amount: 120000 },
     { id: 19, category: "GO SEVA", title: "Adopt 5 Cows For An Year", amount: 200000 },
     { id: 20, category: "GO SEVA", title: "Donate any other Amount", amount: null },
+  ],
+  galleryImages: [
+    "/assets/donations-service-activity-1.png",
+    "/assets/donations-service-activity-2.png",
+    "/assets/donations-service-activity-3.png",
+    "/assets/donations-service-activity-4.png",
   ],
   impactItems: [
     { title: "Daily prasadam", text: "Offer food with dignity, devotion and care." },
@@ -76,6 +84,9 @@ const mergeWithDefaults = (page) => ({
   donationOptions: page && Array.isArray(page.donationOptions) && page.donationOptions.length
     ? page.donationOptions
     : defaultDonationPage.donationOptions,
+  galleryImages: page && Array.isArray(page.galleryImages) && page.galleryImages.length
+    ? page.galleryImages
+    : defaultDonationPage.galleryImages,
 });
 
 const donationPageController = {
@@ -96,6 +107,8 @@ const donationPageController = {
         "heroSubtitle",
         "heroEyebrow",
         "bannerImage",
+        "bannerMobileImage",
+        "trusteeBannerImage",
         "annadaanImage",
         "goSevaImage",
         "annadaanTitle",
@@ -103,6 +116,7 @@ const donationPageController = {
         "goSevaTitle",
         "goSevaDescription",
         "donationOptions",
+        "galleryImages",
         "impactItems",
         "bankDetails",
         "contact",
