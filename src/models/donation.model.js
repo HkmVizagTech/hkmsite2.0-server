@@ -36,6 +36,12 @@ const donationSchema = new mongoose.Schema({
   isRecurring: { type: Boolean, default: false },
   receiptNumber: { type: String },
   receiptGeneratedAt: { type: Date },
+  dccSyncStatus: { type: String, enum: ["pending", "syncing", "synced", "failed"], default: "pending" },
+  dccSyncedAt: { type: Date },
+  dccLastAttemptAt: { type: Date },
+  dccSyncError: { type: String },
+  dccPayload: { type: mongoose.Schema.Types.Mixed },
+  dccResponse: { type: mongoose.Schema.Types.Mixed },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "user" }
 }, {
   timestamps: true,

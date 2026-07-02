@@ -2,6 +2,7 @@ const Razorpay = require('razorpay');
 const crypto = require('crypto');
 const { donationModel } = require('../models/donation.model');
 const { enqueueJob } = require('../redis/redisClient');
+const { completeDonation } = require('../services/paymentCompletion.service');
 
 const RAZORPAY_ACCOUNTS = {
   default: {
@@ -159,15 +160,11 @@ const paymentController = {
 
       if (!valid) return res.status(400).json({ message: 'Invalid payment signature' });
 
-      const updated = await donationModel.findByIdAndUpdate(
-        donation._id,
-        {
-          status: 'completed',
-          razorpayPaymentId: razorpay_payment_id,
-          transactionId: razorpay_payment_id,
-        },
-        { new: true }
-      );
+      const updated = await completeDonation({
+        donationId: donation._id,
+        orderId: razorpay_order_id,
+        paymentId: razorpay_payment_id,
+      });
 
       return res.status(200).json({ message: 'Payment verified', donation: updated });
     } catch (err) {
@@ -210,12 +207,11 @@ const paymentController = {
           const payment = event.payload && event.payload.payment && event.payload.payment.entity;
           if (!payment) break;
           const orderId = payment.order_id;
-          const existingDonation = await donationModel.findOne({ razorpayOrderId: orderId });
-          if (existingDonation) {
-            await donationModel.findOneAndUpdate(
-              { razorpayOrderId: orderId, status: { $ne: 'completed' } },
-              { status: 'completed', razorpayPaymentId: payment.id, transactionId: payment.id }
-            );
+          const completedDonation = await completeDonation({
+            orderId,
+            paymentId: payment.id,
+          });
+          if (completedDonation) {
             console.log('Donation marked completed for order', orderId);
           } else {
             console.warn('Donation not found for order:', orderId);

@@ -1,5 +1,5 @@
 const { popJob } = require('../src/redis/redisClient');
-const { donationModel } = require('../src/models/donation.model');
+const { completeDonation } = require('../src/services/paymentCompletion.service');
 
 const QUEUE = 'payments:jobs';
 
@@ -12,16 +12,12 @@ async function processJob(job) {
         if (!payment) break;
         const orderId = payment.order_id;
         if (!orderId) break;
-        const existingDonation = await donationModel.findOne({ razorpayOrderId: orderId });
-        if (existingDonation) {
-          if (existingDonation.status !== 'completed') {
-            await donationModel.findOneAndUpdate(
-              { razorpayOrderId: orderId },
-              { status: 'completed', razorpayPaymentId: payment.id, transactionId: payment.id }
-            );
+        const completedDonation = await completeDonation({ orderId, paymentId: payment.id });
+        if (completedDonation) {
+          if (completedDonation.status === 'completed') {
             console.log('Worker: Donation marked completed for order', orderId);
           } else {
-            console.log('Worker: Donation already marked completed for order', orderId);
+            console.log('Worker: Donation already processed for order', orderId);
           }
         } else {
           console.warn('Worker: Donation not found for order:', orderId);
