@@ -10,6 +10,9 @@ const donationSchema = new mongoose.Schema({
   type: { type: String, default: "General" }, // e.g., "Anna Daan", "Seva", etc.
   status: { type: String, enum: ["pending", "completed", "failed"], default: "pending" },
   message: { type: String },
+  sourcePage: { type: String },
+  sevaName: { type: String },
+  paymentAccount: { type: String },
   transactionId: { type: String },
   festivalId: { type: mongoose.Schema.Types.ObjectId, ref: "festivalDonation" },
   festivalSlug: { type: String },

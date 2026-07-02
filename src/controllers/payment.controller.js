@@ -3,27 +3,73 @@ const crypto = require('crypto');
 const { donationModel } = require('../models/donation.model');
 const { enqueueJob } = require('../redis/redisClient');
 
-const createRazorpayInstance = () => {
-  const key_id = process.env.RAZORPAY_KEY_ID;
-  const key_secret = process.env.RAZORPAY_KEY_SECRET;
+const RAZORPAY_ACCOUNTS = {
+  default: {
+    key_id: () => process.env.RAZORPAY_KEY_ID,
+    key_secret: () => process.env.RAZORPAY_KEY_SECRET,
+    webhook_secret: () => process.env.RAZORPAY_WEBHOOK_SECRET,
+  },
+  donations: {
+    key_id: () => process.env.RAZORPAY_DONATIONS_KEY_ID,
+    key_secret: () => process.env.RAZORPAY_DONATIONS_KEY_SECRET,
+    webhook_secret: () => process.env.RAZORPAY_DONATIONS_WEBHOOK_SECRET || process.env.RAZORPAY_WEBHOOK_SECRET,
+  },
+};
+
+const normalizeAccount = (account) => (
+  account && RAZORPAY_ACCOUNTS[account] ? account : 'default'
+);
+
+const resolveAccount = (accountName) => {
+  const name = normalizeAccount(accountName);
+  const config = RAZORPAY_ACCOUNTS[name];
+  return {
+    name,
+    key_id: config.key_id(),
+    key_secret: config.key_secret(),
+    webhook_secret: config.webhook_secret(),
+  };
+};
+
+const createRazorpayInstance = (accountName) => {
+  const account = resolveAccount(accountName);
+  const { key_id, key_secret } = account;
   if (!key_id || !key_secret) return null;
   try {
-    console.log('createRazorpayInstance: RAZORPAY_KEY_ID=', key_id ? `${key_id.slice(0, 6)}...` : 'not-set');
+    console.log('createRazorpayInstance:', account.name, key_id ? `${key_id.slice(0, 6)}...` : 'not-set');
   } catch (e) {}
-  return new Razorpay({ key_id, key_secret });
+  return { account, instance: new Razorpay({ key_id, key_secret }) };
+};
+
+const verifySignature = ({ orderId, paymentId, signature, keySecret }) => {
+  const body = `${orderId}|${paymentId}`;
+  const expected = crypto.createHmac('sha256', keySecret).update(body).digest('hex');
+  return expected === signature;
 };
 
 const paymentController = {
   createOrder: async (req, res) => {
     try {
-      const { name, email, mobile, amount, certificate, panNumber, mahaprasadam, prasadamAddress } = req.body;
+      const {
+        name,
+        email,
+        mobile,
+        amount,
+        certificate,
+        panNumber,
+        mahaprasadam,
+        prasadamAddress,
+        sourcePage,
+        sevaName,
+      } = req.body;
 
       if (!amount || Number(amount) < 1) {
         return res.status(400).send('Invalid amount');
       }
 
-      const instance = createRazorpayInstance();
-      if (!instance) return res.status(500).json({ message: 'Razorpay keys not configured on server' });
+      const razorpay = createRazorpayInstance(req.body.account);
+      if (!razorpay) return res.status(500).json({ message: 'Razorpay keys not configured on server' });
+      const { account, instance } = razorpay;
 
       const options = {
         amount: Math.round(Number(amount) * 100),
@@ -50,6 +96,10 @@ const paymentController = {
         donorEmail: email || req.body.donorEmail,
         donorMobile: mobile || req.body.donorMobile,
         amount,
+        type: req.body.type || (sourcePage === 'donations' ? 'Donation' : undefined),
+        sourcePage,
+        sevaName,
+        paymentAccount: account.name,
         panNumber: panNumber || req.body.panNumber,
         certificate: certificate || req.body.certificate,
         wantPrasadam: mahaprasadam || req.body.wantPrasadam,
@@ -60,7 +110,7 @@ const paymentController = {
         status: 'pending'
       });
 
-      return res.status(200).json({ orderId: order.id, key: process.env.RAZORPAY_KEY_ID, donationId: donation._id });
+      return res.status(200).json({ orderId: order.id, key: account.key_id, donationId: donation._id });
     } catch (err) {
       try {
         const serialized = JSON.stringify(err, Object.getOwnPropertyNames(err));
@@ -76,22 +126,64 @@ const paymentController = {
     }
   },
 
+  verifyPayment: async (req, res) => {
+    try {
+      const { razorpay_order_id, razorpay_payment_id, razorpay_signature, donationId } = req.body;
+      if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+        return res.status(400).json({ message: 'Payment verification details missing' });
+      }
+
+      const query = donationId
+        ? { _id: donationId, razorpayOrderId: razorpay_order_id }
+        : { razorpayOrderId: razorpay_order_id };
+      const donation = await donationModel.findOne(query);
+      if (!donation) return res.status(404).json({ message: 'Donation not found' });
+
+      const account = resolveAccount(donation.paymentAccount);
+      if (!account.key_secret) return res.status(500).json({ message: 'Razorpay keys not configured on server' });
+
+      const valid = verifySignature({
+        orderId: razorpay_order_id,
+        paymentId: razorpay_payment_id,
+        signature: razorpay_signature,
+        keySecret: account.key_secret,
+      });
+
+      if (!valid) return res.status(400).json({ message: 'Invalid payment signature' });
+
+      const updated = await donationModel.findByIdAndUpdate(
+        donation._id,
+        {
+          status: 'completed',
+          razorpayPaymentId: razorpay_payment_id,
+          transactionId: razorpay_payment_id,
+        },
+        { new: true }
+      );
+
+      return res.status(200).json({ message: 'Payment verified', donation: updated });
+    } catch (err) {
+      console.error('verifyPayment error', err && err.stack ? err.stack : err);
+      return res.status(500).json({ message: 'Failed to verify payment' });
+    }
+  },
+
   webhook: async (req, res) => {
     try {
-      const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
       const signature = req.headers['x-razorpay-signature'];
-      if (!webhookSecret) {
-        console.warn('Webhook secret not configured; rejecting');
-        return res.status(500).send('Webhook secret not configured');
-      }
       if (!signature) return res.status(400).send('Signature missing');
 
       const body = (req.body && req.body.toString) ? req.body.toString() : JSON.stringify(req.body || {});
-      const expected = crypto.createHmac('sha256', webhookSecret).update(body).digest('hex');
-      if (expected !== signature) {
+      const webhookAccounts = Object.keys(RAZORPAY_ACCOUNTS)
+        .map(resolveAccount)
+        .filter((account) => account.webhook_secret);
+      const matchedAccount = webhookAccounts.find((account) => {
+        const expected = crypto.createHmac('sha256', account.webhook_secret).update(body).digest('hex');
+        return expected === signature;
+      });
+      if (!matchedAccount) {
         console.warn('Invalid webhook signature');
         console.log('Received signature:', signature);
-        console.log('Generated signature:', expected);
         return res.status(400).send('Invalid signature');
       }
 
@@ -112,8 +204,11 @@ const paymentController = {
           const orderId = payment.order_id;
           const existingDonation = await donationModel.findOne({ razorpayOrderId: orderId });
           if (existingDonation) {
-            await donationModel.findOneAndUpdate({ razorpayOrderId: orderId, status: { $ne: 'paid' } }, { status: 'paid', razorpayPaymentId: payment.id });
-            console.log('Donation marked paid for order', orderId);
+            await donationModel.findOneAndUpdate(
+              { razorpayOrderId: orderId, status: { $ne: 'completed' } },
+              { status: 'completed', razorpayPaymentId: payment.id, transactionId: payment.id }
+            );
+            console.log('Donation marked completed for order', orderId);
           } else {
             console.warn('Donation not found for order:', orderId);
           }

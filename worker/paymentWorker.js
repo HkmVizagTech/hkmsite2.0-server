@@ -14,11 +14,14 @@ async function processJob(job) {
         if (!orderId) break;
         const existingDonation = await donationModel.findOne({ razorpayOrderId: orderId });
         if (existingDonation) {
-          if (existingDonation.status !== 'paid' && existingDonation.status !== 'completed') {
-            await donationModel.findOneAndUpdate({ razorpayOrderId: orderId }, { status: 'paid', razorpayPaymentId: payment.id });
-            console.log('Worker: Donation marked paid for order', orderId);
+          if (existingDonation.status !== 'completed') {
+            await donationModel.findOneAndUpdate(
+              { razorpayOrderId: orderId },
+              { status: 'completed', razorpayPaymentId: payment.id, transactionId: payment.id }
+            );
+            console.log('Worker: Donation marked completed for order', orderId);
           } else {
-            console.log('Worker: Donation already marked paid for order', orderId);
+            console.log('Worker: Donation already marked completed for order', orderId);
           }
         } else {
           console.warn('Worker: Donation not found for order:', orderId);
