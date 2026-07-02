@@ -11,8 +11,8 @@ const DCC_PAYMENT_MODES = {
 };
 
 const DEFAULT_SEVA_MAPPING = {
-  sevaCategory: Number(process.env.DCC_SEVA_CATEGORY || 1),
-  sevaSubCategory: Number(process.env.DCC_SEVA_SUBCATEGORY || 1),
+  sevaCategory: Number(process.env.DCC_SEVA_CATEGORY || 24),
+  sevaSubCategory: Number(process.env.DCC_SEVA_SUBCATEGORY || 115),
   sevaSubCategoryCode: process.env.DCC_SEVA_SUBCATEGORY_CODE || null,
 };
 
@@ -28,6 +28,29 @@ const parseJsonEnv = (name, fallback) => {
 };
 
 const DCC_SEVA_MAPPINGS = parseJsonEnv("DCC_SEVA_MAPPINGS", []);
+const DEFAULT_NAME_BASED_SEVA_MAPPINGS = [
+  {
+    sourcePage: ["donations", "janmashtami"],
+    sevaNameIncludes: ["annadana", "anna daan", "anna-daan", "annadaan"],
+    sevaCategory: 24,
+    sevaSubCategory: 115,
+    sevaSubCategoryCode: "MNSO-A",
+  },
+  {
+    sourcePage: ["donations", "janmashtami"],
+    sevaNameIncludes: ["gau seva", "go seva", "cow", "goshala"],
+    sevaCategory: 24,
+    sevaSubCategory: 116,
+    sevaSubCategoryCode: "MNSO-G",
+  },
+  {
+    sourcePage: ["donations", "janmashtami"],
+    sevaNameIncludes: ["square feet", "square foot", "sq ft"],
+    sevaCategory: 24,
+    sevaSubCategory: 117,
+    sevaSubCategoryCode: "MNSO-S",
+  },
+];
 
 const formatDateForDcc = (value) => {
   const date = value ? new Date(value) : new Date();
@@ -78,7 +101,7 @@ const resolveEnrolledBy = (donation) => {
       process.env.DCC_ENROLLED_BY_DONATIONS_AND_JANMASHTAMI ||
       process.env.DCC_ENROLLED_BY_SPECIAL ||
       process.env.DCC_ENROLLED_BY ||
-      36
+      25
     );
   }
 
@@ -86,7 +109,7 @@ const resolveEnrolledBy = (donation) => {
     process.env.DCC_ENROLLED_BY_REST ||
     process.env.DCC_ENROLLED_BY_DEFAULT ||
     process.env.DCC_ENROLLED_BY ||
-    36
+      36
   );
 };
 
@@ -136,7 +159,8 @@ const mappingMatchesDonation = (mapping, donation) => {
 };
 
 const resolveSevaMapping = (donation) => {
-  const matched = DCC_SEVA_MAPPINGS.find((mapping) => mappingMatchesDonation(mapping, donation));
+  const matched = DCC_SEVA_MAPPINGS.find((mapping) => mappingMatchesDonation(mapping, donation))
+    || DEFAULT_NAME_BASED_SEVA_MAPPINGS.find((mapping) => mappingMatchesDonation(mapping, donation));
   if (!matched) return DEFAULT_SEVA_MAPPING;
 
   return {
