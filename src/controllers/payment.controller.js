@@ -61,6 +61,7 @@ const paymentController = {
         prasadamAddress,
         sourcePage,
         sevaName,
+        legacySevaId,
       } = req.body;
 
       if (!amount || Number(amount) < 1) {
@@ -76,6 +77,12 @@ const paymentController = {
         currency: 'INR',
         receipt: `receipt_${Date.now()}`,
         payment_capture: 1,
+        notes: {
+          sourcePage: sourcePage || '',
+          festivalSlug: req.body.festivalSlug || '',
+          sevaName: sevaName || '',
+          legacySevaId: legacySevaId ? String(legacySevaId) : '',
+        },
       };
 
       const order = await instance.orders.create(options);
@@ -99,6 +106,7 @@ const paymentController = {
         type: req.body.type || (sourcePage === 'donations' ? 'Donation' : undefined),
         sourcePage,
         sevaName,
+        legacySevaId,
         paymentAccount: account.name,
         panNumber: panNumber || req.body.panNumber,
         certificate: certificate || req.body.certificate,

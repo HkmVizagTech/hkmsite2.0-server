@@ -12,6 +12,7 @@ const donationSchema = new mongoose.Schema({
   message: { type: String },
   sourcePage: { type: String },
   sevaName: { type: String },
+  legacySevaId: { type: Number },
   paymentAccount: { type: String },
   transactionId: { type: String },
   festivalId: { type: mongoose.Schema.Types.ObjectId, ref: "festivalDonation" },
