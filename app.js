@@ -12,6 +12,7 @@ const { donationPageRouter } = require("./src/routes/donationPage.routes");
 const { festivalDonationRouter } = require("./src/routes/festivalDonation.routes");
 const { paymentRouter } = require("./src/routes/payment.routes");
 const { importantDateRouter } = require("./src/routes/importantDate.routes.js");
+const { blogRouter } = require("./src/routes/blog.routes");
 const app = express();
 
 const allowedOrigins = new Set([
@@ -24,7 +25,7 @@ const allowedOrigins = new Set([
 app.use(
   cors({
     origin: (origin, callback) => {
-     
+
       if (!origin) return callback(null, true);
       if (allowedOrigins.has(origin)) return callback(null, true);
 
@@ -32,7 +33,7 @@ app.use(
         const hostname = new URL(origin).hostname;
         if (hostname.endsWith('.vercel.app')) return callback(null, true);
       } catch (e) {
-      
+
       }
 
       return callback(new Error('CORS policy: Origin not allowed'));
@@ -48,7 +49,7 @@ app.use(
 
 app.use(cookieParser());
 
-app.use(express.json());
+app.use(express.json({ limit: '10mb' })); // increased for rich CKEditor HTML payloads
 
 app.use("/payments", paymentRouter);
 app.use("/users", userRouter);
@@ -56,6 +57,7 @@ app.use("/events", eventRouter);
 app.use("/gallery", galleryRouter);
 app.use("/donations", donationRouter);
 app.use("/donation-page", donationPageRouter);
+app.use("/blogs", blogRouter);
 
 app.use("/important-dates", importantDateRouter);
 app.use("/festival-donations", festivalDonationRouter);
