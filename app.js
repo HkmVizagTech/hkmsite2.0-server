@@ -14,6 +14,9 @@ const { paymentRouter } = require("./src/routes/payment.routes");
 const { importantDateRouter } = require("./src/routes/importantDate.routes.js");
 const { blogRouter } = require("./src/routes/blog.routes");
 const { contactMessageRouter } = require("./src/routes/contactMessage.routes");
+const { dashboardRouter } = require("./src/routes/dashboard.routes");
+const { devoteeRouter } = require("./src/routes/devotee.routes");
+const { siteContentRouter } = require("./src/routes/siteContent.routes");
 const app = express();
 
 const allowedOrigins = new Set([
@@ -60,6 +63,9 @@ app.use("/donations", donationRouter);
 app.use("/donation-page", donationPageRouter);
 app.use("/blogs", blogRouter);
 app.use("/contact-messages", contactMessageRouter);
+app.use("/dashboard", dashboardRouter);
+app.use("/devotees", devoteeRouter);
+app.use("/site-content", siteContentRouter);
 
 app.use("/important-dates", importantDateRouter);
 app.use("/festival-donations", festivalDonationRouter);

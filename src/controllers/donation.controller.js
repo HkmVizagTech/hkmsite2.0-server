@@ -118,6 +118,34 @@ const donationController = {
     } catch (err) {
       res.status(500).json({ message: "Server error" });
     }
+  },
+
+  // ADMIN - real "Resend Receipt" action: force-retries the DCC donor-CRM
+  // sync for this donation, which is what actually generates/re-generates
+  // the receiptNumber. Replaces the previous no-op empty-body PUT.
+  resendReceipt: async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { syncDonationToDcc, isDccConfigured } = require("../services/dcc.service");
+      const donation = await donationModel.findById(id);
+      if (!donation) return res.status(404).json({ message: "Donation not found" });
+
+      if (!isDccConfigured()) {
+        return res.status(200).json({
+          message: "DCC_API_KEY is not configured on this server, so no receipt system is connected yet. Nothing was sent.",
+          skipped: true,
+        });
+      }
+
+      const result = await syncDonationToDcc(id);
+      if (result.ok) {
+        return res.status(200).json({ message: "Receipt sync re-triggered successfully", receiptNumber: result.receiptNumber });
+      }
+      return res.status(502).json({ message: "Receipt resync failed", error: result.error });
+    } catch (err) {
+      console.error("Resend receipt error:", err);
+      res.status(500).json({ message: "Server error", error: err.message });
+    }
   }
 };
 

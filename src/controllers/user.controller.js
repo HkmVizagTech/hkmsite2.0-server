@@ -83,14 +83,39 @@ const userController = {
 
     update: async (req, res) => {
         try {
-            const { name, password } = req.body;
+            const { name, email, currentPassword, newPassword, preferences } = req.body;
+            const user = await userModel.findById(req.user.userId);
+            if (!user) return res.status(404).json({ message: "User not found" });
+
             const updateData = {};
             if (name) updateData.name = name;
-            if (password) updateData.password = await bcrypt.hash(password, 10);
-            const user = await userModel.findByIdAndUpdate(req.user.userId, updateData, { new: true, select: "-password" });
-            res.status(200).json({ message: "Profile updated", user });
+            if (email && email !== user.email) {
+                const existing = await userModel.findOne({ email, _id: { $ne: user._id } });
+                if (existing) return res.status(400).json({ message: "Email already in use" });
+                updateData.email = email;
+            }
+            if (preferences && typeof preferences === "object") {
+                updateData.preferences = { ...(user.preferences?.toObject?.() || user.preferences || {}), ...preferences };
+            }
+
+            if (newPassword) {
+                if (!currentPassword) {
+                    return res.status(400).json({ message: "Current password is required to set a new password" });
+                }
+                const matches = await bcrypt.compare(currentPassword, user.password);
+                if (!matches) {
+                    return res.status(400).json({ message: "Current password is incorrect" });
+                }
+                if (String(newPassword).length < 8) {
+                    return res.status(400).json({ message: "New password must be at least 8 characters" });
+                }
+                updateData.password = await bcrypt.hash(newPassword, 10);
+            }
+
+            const updated = await userModel.findByIdAndUpdate(req.user.userId, updateData, { new: true, select: "-password" });
+            res.status(200).json({ message: "Profile updated", user: updated });
         } catch (err) {
-            console.error('user.delete error', err);
+            console.error('user.update error', err);
             res.status(500).json({ message: "Server error" });
         }
     },
