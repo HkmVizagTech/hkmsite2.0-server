@@ -13,6 +13,7 @@ const { festivalDonationRouter } = require("./src/routes/festivalDonation.routes
 const { paymentRouter } = require("./src/routes/payment.routes");
 const { importantDateRouter } = require("./src/routes/importantDate.routes.js");
 const { blogRouter } = require("./src/routes/blog.routes");
+const { contactMessageRouter } = require("./src/routes/contactMessage.routes");
 const app = express();
 
 const allowedOrigins = new Set([
@@ -58,6 +59,7 @@ app.use("/gallery", galleryRouter);
 app.use("/donations", donationRouter);
 app.use("/donation-page", donationPageRouter);
 app.use("/blogs", blogRouter);
+app.use("/contact-messages", contactMessageRouter);
 
 app.use("/important-dates", importantDateRouter);
 app.use("/festival-donations", festivalDonationRouter);
