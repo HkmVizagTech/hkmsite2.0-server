@@ -14,7 +14,7 @@ const siteContentSchema = new mongoose.Schema(
       },
     },
     about: {
-      heading: { type: String, default: "A Legacy of Devotion & Service" },
+      heading: { type: String, default: "" },
       body: { type: String, default: "" },
     },
     contact: {
