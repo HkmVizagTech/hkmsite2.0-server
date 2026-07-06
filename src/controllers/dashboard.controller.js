@@ -4,6 +4,18 @@ const { galleryModel } = require("../models/gallery.model");
 const { blogModel } = require("../models/blog.model");
 const { contactMessageModel } = require("../models/contactMessage.model");
 
+const timeAgo = (date) => {
+  const diffMs = Date.now() - new Date(date).getTime();
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs} hr${hrs > 1 ? "s" : ""} ago`;
+  const days = Math.floor(hrs / 24);
+  if (days === 1) return "Yesterday";
+  return `${days} days ago`;
+};
+
 const dashboardController = {
   // ADMIN - real dashboard summary stats (replaces hardcoded numbers)
   stats: async (req, res) => {
@@ -82,6 +94,84 @@ const dashboardController = {
         count: m.count,
       }));
 
+      // Real seva-type breakdown (was a hardcoded pie chart before)
+      const sevaAgg = await donationModel.aggregate([
+        { $match: { status: "completed" } },
+        {
+          $group: {
+            _id: { $ifNull: ["$sevaName", "$type"] },
+            value: { $sum: 1 },
+          },
+        },
+        { $sort: { value: -1 } },
+        { $limit: 6 },
+      ]);
+      const sevaBreakdown = sevaAgg.map((s) => ({ name: s._id || "Other", value: s.value }));
+
+      // Status breakdown (completed / pending / failed) - real data for Analytics page
+      const statusAgg = await donationModel.aggregate([
+        { $group: { _id: "$status", count: { $sum: 1 }, amount: { $sum: "$amount" } } },
+      ]);
+      const statusBreakdown = statusAgg.map((s) => ({ status: s._id, count: s.count, amount: s.amount }));
+
+      // Daily donation count for the last 30 days - finer-grained trend for Analytics
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 29);
+      thirtyDaysAgo.setHours(0, 0, 0, 0);
+      const dailyAgg = await donationModel.aggregate([
+        { $match: { status: "completed", date: { $gte: thirtyDaysAgo } } },
+        {
+          $group: {
+            _id: { $dateToString: { format: "%Y-%m-%d", date: "$date" } },
+            donations: { $sum: "$amount" },
+            count: { $sum: 1 },
+          },
+        },
+        { $sort: { _id: 1 } },
+      ]);
+      const dailyData = dailyAgg.map((d) => ({ date: d._id, donations: d.donations, count: d.count }));
+
+      // Real recent-activity feed merged across collections (was hardcoded before)
+      const [recentDonation, recentEvent, recentGallery, recentBlog, recentMessage] = await Promise.all([
+        donationModel.findOne({ status: "completed" }).sort({ createdAt: -1 }).select("amount sevaName type createdAt").lean(),
+        eventModel.findOne().sort({ createdAt: -1 }).select("title createdAt").lean(),
+        galleryModel.findOne().sort({ createdAt: -1 }).select("title images createdAt").lean(),
+        blogModel.findOne({ status: "published" }).sort({ createdAt: -1 }).select("title createdAt").lean(),
+        contactMessageModel.findOne().sort({ createdAt: -1 }).select("name subject createdAt").lean(),
+      ]);
+      const recentActivity = [
+        recentDonation && {
+          action: "New donation received",
+          detail: `₹${recentDonation.amount?.toLocaleString("en-IN")} — ${recentDonation.sevaName || recentDonation.type || "General"}`,
+          time: timeAgo(recentDonation.createdAt),
+          at: recentDonation.createdAt,
+        },
+        recentEvent && {
+          action: "Event created",
+          detail: recentEvent.title,
+          time: timeAgo(recentEvent.createdAt),
+          at: recentEvent.createdAt,
+        },
+        recentGallery && {
+          action: "Gallery updated",
+          detail: `${recentGallery.images?.length || 1} photo(s) — ${recentGallery.title}`,
+          time: timeAgo(recentGallery.createdAt),
+          at: recentGallery.createdAt,
+        },
+        recentBlog && {
+          action: "Blog published",
+          detail: recentBlog.title,
+          time: timeAgo(recentBlog.createdAt),
+          at: recentBlog.createdAt,
+        },
+        recentMessage && {
+          action: "New contact message",
+          detail: `${recentMessage.name} — ${recentMessage.subject}`,
+          time: timeAgo(recentMessage.createdAt),
+          at: recentMessage.createdAt,
+        },
+      ].filter(Boolean).sort((a, b) => new Date(b.at) - new Date(a.at));
+
       res.status(200).json({
         stats: {
           totalDonations,
@@ -95,6 +185,10 @@ const dashboardController = {
           newMessages: newMessagesCount,
         },
         monthlyData,
+        sevaBreakdown,
+        statusBreakdown,
+        dailyData,
+        recentActivity,
       });
     } catch (err) {
       console.error("Dashboard stats error:", err);
