@@ -17,6 +17,8 @@ const { contactMessageRouter } = require("./src/routes/contactMessage.routes");
 const { dashboardRouter } = require("./src/routes/dashboard.routes");
 const { devoteeRouter } = require("./src/routes/devotee.routes");
 const { siteContentRouter } = require("./src/routes/siteContent.routes");
+const { heroBannerRouter } = require("./src/routes/heroBanner.routes");
+const { sevaStatsRouter } = require("./src/routes/sevaStats.routes");
 const app = express();
 
 const allowedOrigins = new Set([
@@ -66,6 +68,8 @@ app.use("/contact-messages", contactMessageRouter);
 app.use("/dashboard", dashboardRouter);
 app.use("/devotees", devoteeRouter);
 app.use("/site-content", siteContentRouter);
+app.use("/hero-banners", heroBannerRouter);
+app.use("/seva-stats", sevaStatsRouter);
 
 app.use("/important-dates", importantDateRouter);
 app.use("/festival-donations", festivalDonationRouter);
