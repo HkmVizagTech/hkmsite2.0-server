@@ -24,22 +24,32 @@ const heroBannerController = {
       const desktopFile = files.find((f) => f.fieldname === "desktopImage");
       const mobileFile = files.find((f) => f.fieldname === "mobileImage");
 
-      if (!desktopFile || !mobileFile) {
-        return res.status(400).json({ message: "Both desktop and mobile images are required" });
+      // Support both a real file upload (normal admin UI flow) and a direct
+      // URL string (used for seeding existing static assets as real,
+      // manageable records without re-uploading them).
+      let desktopImage = req.body.desktopImage;
+      let mobileImage = req.body.mobileImage;
+
+      if (desktopFile) {
+        const up = await uploadToCloudinary(desktopFile.path, "hero-banners");
+        desktopImage = up.secure_url;
+        try { fs.unlinkSync(desktopFile.path); } catch (_) {}
+      }
+      if (mobileFile) {
+        const up = await uploadToCloudinary(mobileFile.path, "hero-banners");
+        mobileImage = up.secure_url;
+        try { fs.unlinkSync(mobileFile.path); } catch (_) {}
       }
 
-      const [desktopUpload, mobileUpload] = await Promise.all([
-        uploadToCloudinary(desktopFile.path, "hero-banners"),
-        uploadToCloudinary(mobileFile.path, "hero-banners"),
-      ]);
-      try { fs.unlinkSync(desktopFile.path); } catch (_) {}
-      try { fs.unlinkSync(mobileFile.path); } catch (_) {}
+      if (!desktopImage || !mobileImage) {
+        return res.status(400).json({ message: "Both desktop and mobile images are required" });
+      }
 
       const count = await heroBannerModel.countDocuments();
       const banner = await heroBannerModel.create({
         title: title || `Banner ${count + 1}`,
-        desktopImage: desktopUpload.secure_url,
-        mobileImage: mobileUpload.secure_url,
+        desktopImage,
+        mobileImage,
         order: order !== undefined ? Number(order) : count,
         createdBy: req.user ? req.user.userId : undefined,
       });
