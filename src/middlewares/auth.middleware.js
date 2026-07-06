@@ -1,5 +1,6 @@
 
 const jwt = require("jsonwebtoken");
+const { getJwtSecret } = require("../utils/utils");
 
 const authMiddleware = (req, res, next) => {
 	let token;
@@ -17,7 +18,7 @@ const authMiddleware = (req, res, next) => {
 		return res.status(401).json({ message: "No token provided" });
 	}
 	try {
-		const decoded = jwt.verify(token, process.env.JWT_SECRET || "secret");
+		const decoded = jwt.verify(token, getJwtSecret());
 		req.user = decoded;
 		next();
 	} catch (err) {

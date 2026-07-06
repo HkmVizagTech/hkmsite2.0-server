@@ -2,6 +2,7 @@
 const { userModel } = require("../models/user.model");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const { getJwtSecret } = require("../utils/utils");
 
 const userController = {
     getUser: async (req, res) => {
@@ -49,7 +50,7 @@ const userController = {
             if (!match) {
                 return res.status(401).json({ message: "Invalid credentials" });
             }
-            const token = jwt.sign({ userId: user._id, role: user.role }, process.env.JWT_SECRET || "secret", { expiresIn: "7d" });
+            const token = jwt.sign({ userId: user._id, role: user.role }, getJwtSecret(), { expiresIn: "7d" });
             res.cookie("token", token, {
                 httpOnly: true,
                 secure: process.env.NODE_ENV === "production",
