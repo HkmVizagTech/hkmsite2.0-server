@@ -19,6 +19,7 @@ const { devoteeRouter } = require("./src/routes/devotee.routes");
 const { siteContentRouter } = require("./src/routes/siteContent.routes");
 const { heroBannerRouter } = require("./src/routes/heroBanner.routes");
 const { sevaStatsRouter } = require("./src/routes/sevaStats.routes");
+const { campaignerRouter } = require("./src/routes/campaigner.routes");
 const app = express();
 
 const allowedOrigins = new Set([
@@ -69,6 +70,7 @@ app.use("/dashboard", dashboardRouter);
 app.use("/devotees", devoteeRouter);
 app.use("/site-content", siteContentRouter);
 app.use("/hero-banners", heroBannerRouter);
+app.use("/campaigners", campaignerRouter);
 app.use("/seva-stats", sevaStatsRouter);
 
 app.use("/important-dates", importantDateRouter);

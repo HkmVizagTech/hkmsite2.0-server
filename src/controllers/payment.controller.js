@@ -83,6 +83,7 @@ const paymentController = {
           festivalSlug: req.body.festivalSlug || '',
           sevaName: sevaName || '',
           legacySevaId: legacySevaId ? String(legacySevaId) : '',
+          campaignerSlug: req.body.campaignerSlug || '',
         },
       };
 
@@ -114,6 +115,7 @@ const paymentController = {
         wantPrasadam: mahaprasadam || req.body.wantPrasadam,
         prasadamAddress: prasadamAddress || req.body.prasadamAddress,
         festivalSlug: req.body.festivalSlug || undefined,
+        campaignerSlug: req.body.campaignerSlug || undefined,
         festivalId: resolvedFestivalId,
         razorpayOrderId: order.id,
         status: 'pending'

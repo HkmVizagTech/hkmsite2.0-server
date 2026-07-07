@@ -17,6 +17,7 @@ const donationSchema = new mongoose.Schema({
   transactionId: { type: String },
   festivalId: { type: mongoose.Schema.Types.ObjectId, ref: "festivalDonation" },
   festivalSlug: { type: String },
+  campaignerSlug: { type: String, index: true }, // P2P Square Foot Seva attribution
   panNumber: { type: String },
   certificate: { type: Boolean, default: false },
   wantPrasadam: { type: Boolean, default: false },
