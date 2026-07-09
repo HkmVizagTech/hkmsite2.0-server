@@ -134,6 +134,58 @@ const sevaStatsController = {
       res.status(500).json({ message: "Server error" });
     }
   },
+  // PUBLIC - aggregate stats across every seva, for the centralized /donate
+  // hub page: overall total raised, overall donor count, per-seva subtotal
+  // (to badge each card with real progress), and a recent-donors wall
+  // spanning all sevas combined.
+  overview: async (req, res) => {
+    try {
+      const filter = { status: "completed" };
+
+      const [totals, perSeva, recent] = await Promise.all([
+        donationModel.aggregate([
+          { $match: filter },
+          { $group: { _id: null, totalAmount: { $sum: "$amount" }, donorCount: { $sum: 1 } } },
+        ]),
+        donationModel.aggregate([
+          { $match: filter },
+          {
+            $group: {
+              _id: { $ifNull: ["$sevaName", "$type"] },
+              totalAmount: { $sum: "$amount" },
+              donorCount: { $sum: 1 },
+            },
+          },
+        ]),
+        donationModel
+          .find(filter)
+          .sort({ date: -1 })
+          .limit(15)
+          .select("donorName amount date sevaName type")
+          .lean(),
+      ]);
+
+      const bySeva = {};
+      perSeva.forEach((s) => {
+        if (s._id) bySeva[s._id] = { totalAmount: s.totalAmount, donorCount: s.donorCount };
+      });
+
+      res.status(200).json({
+        totalAmount: totals[0]?.totalAmount || 0,
+        donorCount: totals[0]?.donorCount || 0,
+        bySeva,
+        donors: recent.map((d) => ({
+          name: toDisplayName(d.donorName),
+          amount: d.amount,
+          seva: d.sevaName || d.type || "General",
+          time: timeAgo(d.date),
+        })),
+      });
+    } catch (err) {
+      console.error("sevaStats.overview error:", err);
+      res.status(500).json({ message: "Server error" });
+    }
+  },
 };
 
 module.exports = { sevaStatsController };

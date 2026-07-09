@@ -28,27 +28,53 @@ const parseJsonEnv = (name, fallback) => {
 };
 
 const DCC_SEVA_MAPPINGS = parseJsonEnv("DCC_SEVA_MAPPINGS", []);
+// NOTE: intentionally no `sourcePage` restriction on these — sevaNameIncludes
+// alone is specific enough to identify the seva correctly, and a sourcePage
+// allowlist silently breaks every time a new donation entry point is added
+// (this bit us: /donate/[seva] and /sqft-seva-campaign donations were falling
+// through to the generic Annadana default because their sourcePage wasn't in
+// the original ["donations","janmashtami"] list).
+//
+// DCC subcategory codes for Brick/Gita Daan/Vastra/Mandir Nirman below are
+// best-guess placeholders following the existing MNSO-* numbering pattern
+// (118-120) — verify against the real DCC configuration and override via the
+// DCC_SEVA_MAPPINGS env var if they differ, no code deploy needed to fix.
 const DEFAULT_NAME_BASED_SEVA_MAPPINGS = [
   {
-    sourcePage: ["donations", "janmashtami"],
     sevaNameIncludes: ["annadana", "anna daan", "anna-daan", "annadaan"],
     sevaCategory: 24,
     sevaSubCategory: 115,
     sevaSubCategoryCode: "MNSO-A",
   },
   {
-    sourcePage: ["donations", "janmashtami"],
     sevaNameIncludes: ["gau seva", "go seva", "cow", "goshala"],
     sevaCategory: 24,
     sevaSubCategory: 116,
     sevaSubCategoryCode: "MNSO-G",
   },
   {
-    sourcePage: ["donations", "janmashtami"],
-    sevaNameIncludes: ["square feet", "square foot", "sq ft"],
+    sevaNameIncludes: ["square feet", "square foot", "sq ft", "mandir nirman"],
     sevaCategory: 24,
     sevaSubCategory: 117,
     sevaSubCategoryCode: "MNSO-S",
+  },
+  {
+    sevaNameIncludes: ["brick"],
+    sevaCategory: 24,
+    sevaSubCategory: 118,
+    sevaSubCategoryCode: "MNSO-B",
+  },
+  {
+    sevaNameIncludes: ["gita daan", "gita dan", "bhagavad gita"],
+    sevaCategory: 24,
+    sevaSubCategory: 119,
+    sevaSubCategoryCode: "MNSO-GD",
+  },
+  {
+    sevaNameIncludes: ["vastra", "alankara"],
+    sevaCategory: 24,
+    sevaSubCategory: 120,
+    sevaSubCategoryCode: "MNSO-V",
   },
 ];
 
