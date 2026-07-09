@@ -74,7 +74,7 @@ const sevaStatsController = {
   sqftCampaign: async (req, res) => {
     try {
       const PRICE_PER_SQFT = Number(process.env.SQFT_PRICE_PER_UNIT) || 6000;
-      const GOAL_SQFT = Number(process.env.SQFT_CAMPAIGN_GOAL) || 5000;
+      const GOAL_SQFT = Number(process.env.SQFT_CAMPAIGN_GOAL) || 67000;
 
       // Match the same donations the Square Foot Seva page records:
       // type "SQFT" or sevaName "Square Foot Seva" (covers both flows).
