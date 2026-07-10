@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const cookieParser = require("cookie-parser");
 const compression = require("compression");
+const helmet = require("helmet");
 const mongoose = require('mongoose');
 
 
@@ -27,6 +28,8 @@ const app = express();
 const allowedOrigins = new Set([
   process.env.FRONTEND_URL,
   'https://hkmsite2-0-client-9fyg.vercel.app',
+  'https://harekrishnavizag.org',
+  'https://www.harekrishnavizag.org',
   'http://localhost:3000',
   'http://localhost:8080',
 ].filter(Boolean));
@@ -41,6 +44,7 @@ app.use(
       try {
         const hostname = new URL(origin).hostname;
         if (hostname.endsWith('.vercel.app')) return callback(null, true);
+        if (hostname === 'harekrishnavizag.org' || hostname.endsWith('.harekrishnavizag.org')) return callback(null, true);
       } catch (e) {
 
       }
@@ -58,6 +62,10 @@ app.use(
 
 // gzip/brotli-compress responses (blog HTML, donor lists, etc.) — cheap
 // bandwidth/latency win, applied before routes so it covers everything.
+// Baseline security headers. crossOriginResourcePolicy is relaxed since
+// this API serves JSON/images to a different origin (the Vercel frontend) —
+// the strict default would block legitimate cross-origin fetches.
+app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 app.use(compression());
 
 app.use(cookieParser());

@@ -19,8 +19,14 @@ const userController = {
     register: async (req, res) => {
         try {
             const { name, email, password } = req.body;
-            if (!name || !email || !password) {
+            if (
+                typeof name !== "string" || typeof email !== "string" || typeof password !== "string" ||
+                !name || !email || !password
+            ) {
                 return res.status(400).json({ message: "All fields are required" });
+            }
+            if (password.length < 8) {
+                return res.status(400).json({ message: "Password must be at least 8 characters" });
             }
             const existing = await userModel.findOne({ email });
             if (existing) {
@@ -39,7 +45,10 @@ const userController = {
     login: async (req, res) => {
         try {
             const { email, password } = req.body;
-            if (!email || !password) {
+            // Reject non-string email/password outright — without this, a
+            // crafted payload like {"email": {"$ne": null}} would be passed
+            // straight into the Mongo query as an operator, not a value.
+            if (typeof email !== "string" || typeof password !== "string" || !email || !password) {
                 return res.status(400).json({ message: "Email and password required" });
             }
             const user = await userModel.findOne({ email });
@@ -90,7 +99,7 @@ const userController = {
 
             const updateData = {};
             if (name) updateData.name = name;
-            if (email && email !== user.email) {
+            if (email && typeof email === "string" && email !== user.email) {
                 const existing = await userModel.findOne({ email, _id: { $ne: user._id } });
                 if (existing) return res.status(400).json({ message: "Email already in use" });
                 updateData.email = email;
