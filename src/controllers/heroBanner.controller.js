@@ -1,6 +1,6 @@
 const fs = require("fs");
 const { heroBannerModel } = require("../models/heroBanner.model");
-const { uploadToCloudinary } = require("../utils/cloudinary");
+const { uploadToR2 } = require("../utils/r2");
 
 const heroBannerController = {
   // PUBLIC - active banners in display order
@@ -31,12 +31,12 @@ const heroBannerController = {
       let mobileImage = req.body.mobileImage;
 
       if (desktopFile) {
-        const up = await uploadToCloudinary(desktopFile.path, "hero-banners");
+        const up = await uploadToR2(desktopFile.path, "hero-banners");
         desktopImage = up.secure_url;
         try { fs.unlinkSync(desktopFile.path); } catch (_) {}
       }
       if (mobileFile) {
-        const up = await uploadToCloudinary(mobileFile.path, "hero-banners");
+        const up = await uploadToR2(mobileFile.path, "hero-banners");
         mobileImage = up.secure_url;
         try { fs.unlinkSync(mobileFile.path); } catch (_) {}
       }
@@ -78,12 +78,12 @@ const heroBannerController = {
       if (req.body.active !== undefined) patch.active = req.body.active === "true" || req.body.active === true;
 
       if (desktopFile) {
-        const up = await uploadToCloudinary(desktopFile.path, "hero-banners");
+        const up = await uploadToR2(desktopFile.path, "hero-banners");
         patch.desktopImage = up.secure_url;
         try { fs.unlinkSync(desktopFile.path); } catch (_) {}
       }
       if (mobileFile) {
-        const up = await uploadToCloudinary(mobileFile.path, "hero-banners");
+        const up = await uploadToR2(mobileFile.path, "hero-banners");
         patch.mobileImage = up.secure_url;
         try { fs.unlinkSync(mobileFile.path); } catch (_) {}
       }

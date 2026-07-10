@@ -3,7 +3,7 @@ const path = require("path");
 const { v4: uuidv4 } = require("uuid");
 const { registrationModel } = require("../models/registration.model");
 const { eventModel } = require("../models/event.model");
-const { uploadToCloudinary } = require("../utils/cloudinary");
+const { uploadToR2 } = require("../utils/r2");
 
 async function register(req, res) {
   try {
@@ -21,7 +21,7 @@ async function register(req, res) {
       const uploaded = [];
       const fileEntries = Array.isArray(req.files) ? req.files : Object.values(req.files).flat();
       for (const f of fileEntries) {
-  const uploadedRes = await uploadToCloudinary(f.path, `events/${eventId}/registrations`);
+  const uploadedRes = await uploadToR2(f.path, `events/${eventId}/registrations`);
   if (uploadedRes && uploadedRes.secure_url) uploaded.push(uploadedRes.secure_url);
         try { fs.unlinkSync(f.path); } catch (e) { 
  }

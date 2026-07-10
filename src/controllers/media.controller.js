@@ -1,6 +1,6 @@
 const fs = require("fs");
 const { mediaModel } = require("../models/media.model");
-const { cloudinary, uploadToCloudinary } = require("../utils/cloudinary");
+const { uploadToR2, deleteFromR2 } = require("../utils/r2");
 
 const mediaController = {
   // ADMIN — upload one or more images to the media library.
@@ -11,7 +11,7 @@ const mediaController = {
 
       const items = [];
       for (const file of files) {
-        const up = await uploadToCloudinary(file.path, "media-library");
+        const up = await uploadToR2(file.path, "media-library");
         try { fs.unlinkSync(file.path); } catch {}
         const doc = await mediaModel.create({
           name: (req.body.name || file.originalname || "Untitled").trim(),
@@ -79,9 +79,9 @@ const mediaController = {
       const item = await mediaModel.findById(req.params.id);
       if (!item) return res.status(404).json({ message: "Media not found" });
       try {
-        await cloudinary.uploader.destroy(item.publicId);
+        await deleteFromR2(item.publicId);
       } catch (e) {
-        console.warn("media.delete cloudinary destroy failed:", item.publicId, e?.message);
+        console.warn("media.delete R2 destroy failed:", item.publicId, e?.message);
       }
       await item.deleteOne();
       res.status(200).json({ message: "Deleted" });

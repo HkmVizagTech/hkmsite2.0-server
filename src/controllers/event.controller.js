@@ -1,5 +1,5 @@
 const { eventModel } = require("../models/event.model");
-const { uploadToCloudinary } = require("../utils/cloudinary");
+const { uploadToR2 } = require("../utils/r2");
 const fs = require("fs");
 
 const eventController = {
@@ -30,7 +30,7 @@ const eventController = {
       let imageUrls = [];
       if (req.files && req.files.length > 0) {
         for (const file of req.files) {
-          const result = await uploadToCloudinary(file.path, "events");
+          const result = await uploadToR2(file.path, "events");
           imageUrls.push(result.secure_url);
           fs.unlinkSync(file.path); // Remove temp file
         }

@@ -1,5 +1,5 @@
 const { blogModel, BLOG_CATEGORIES } = require("../models/blog.model");
-const { uploadToCloudinary } = require("../utils/cloudinary");
+const { uploadToR2 } = require("../utils/r2");
 const fs = require("fs");
 
 const slugify = (s) =>
@@ -246,7 +246,7 @@ const blogController = {
 
       if (req.files && req.files.length > 0) {
         for (const file of req.files) {
-          const result = await uploadToCloudinary(file.path, "blogs");
+          const result = await uploadToR2(file.path, "blogs");
           if (file.fieldname === "coverImage") coverImage = result.secure_url;
           else if (file.fieldname === "authorAvatar") authorAvatar = result.secure_url;
           else extraImages.push(result.secure_url);
@@ -294,7 +294,7 @@ const blogController = {
       let newExtras = [];
       if (req.files && req.files.length > 0) {
         for (const file of req.files) {
-          const result = await uploadToCloudinary(file.path, "blogs");
+          const result = await uploadToR2(file.path, "blogs");
           if (file.fieldname === "coverImage") coverImage = result.secure_url;
           else if (file.fieldname === "authorAvatar") authorAvatar = result.secure_url;
           else newExtras.push(result.secure_url);
@@ -351,7 +351,7 @@ const blogController = {
   uploadInline: async (req, res) => {
     try {
       if (!req.file) return res.status(400).json({ error: { message: "No file uploaded" } });
-      const result = await uploadToCloudinary(req.file.path, "blogs/inline");
+      const result = await uploadToR2(req.file.path, "blogs/inline");
       try { fs.unlinkSync(req.file.path); } catch (_) {}
       return res.status(200).json({ url: result.secure_url });
     } catch (err) {
