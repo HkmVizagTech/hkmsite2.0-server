@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const cookieParser = require("cookie-parser");
+const compression = require("compression");
 const mongoose = require('mongoose');
 
 
@@ -54,6 +55,10 @@ app.use(
   })
 );
 
+
+// gzip/brotli-compress responses (blog HTML, donor lists, etc.) — cheap
+// bandwidth/latency win, applied before routes so it covers everything.
+app.use(compression());
 
 app.use(cookieParser());
 
