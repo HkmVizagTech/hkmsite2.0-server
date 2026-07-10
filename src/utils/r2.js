@@ -13,9 +13,20 @@
 
 const fs = require("fs");
 const path = require("path");
-const sharp = require("sharp");
 const { PutObjectCommand, DeleteObjectCommand } = require("@aws-sdk/client-s3");
 const { r2Client, bucketName } = require("../config/R2.config");
+
+// sharp is optional — it compresses images before upload.
+// On Alpine Linux (Railway's Dockerfile base) sharp needs native vips libs;
+// if they're missing the module fails to load. We catch that here and fall
+// back to uploading the original buffer uncompressed. Vercel's next/image
+// optimizer handles client-side resize/compression anyway.
+let sharp = null;
+try {
+  sharp = require("sharp");
+} catch (e) {
+  console.warn("r2.js: sharp not available, uploads will skip compression:", e.message);
+}
 
 const MIME_BY_EXT = {
   ".jpg": "image/jpeg",
@@ -33,33 +44,31 @@ const uploadToR2 = async (filePath, folder = "media") => {
   let buffer = fs.readFileSync(filePath);
   let width, height, outFormat = ext.replace(".", "");
 
-  try {
-    if (mimetype === "image/jpeg") {
-      const img = sharp(buffer).jpeg({ quality: 85, mozjpeg: true });
-      const meta = await img.metadata();
-      width = meta.width;
-      height = meta.height;
-      buffer = await img.toBuffer();
-    } else if (mimetype === "image/png") {
-      const img = sharp(buffer).png({ compressionLevel: 8 });
-      const meta = await img.metadata();
-      width = meta.width;
-      height = meta.height;
-      buffer = await img.toBuffer();
-    } else if (mimetype === "image/webp") {
-      const img = sharp(buffer).webp({ quality: 85 });
-      const meta = await img.metadata();
-      width = meta.width;
-      height = meta.height;
-      buffer = await img.toBuffer();
+  if (sharp) {
+    try {
+      if (mimetype === "image/jpeg") {
+        const img = sharp(buffer).jpeg({ quality: 85, mozjpeg: true });
+        const meta = await img.metadata();
+        width = meta.width;
+        height = meta.height;
+        buffer = await img.toBuffer();
+      } else if (mimetype === "image/png") {
+        const img = sharp(buffer).png({ compressionLevel: 8 });
+        const meta = await img.metadata();
+        width = meta.width;
+        height = meta.height;
+        buffer = await img.toBuffer();
+      } else if (mimetype === "image/webp") {
+        const img = sharp(buffer).webp({ quality: 85 });
+        const meta = await img.metadata();
+        width = meta.width;
+        height = meta.height;
+        buffer = await img.toBuffer();
+      }
+    } catch (e) {
+      console.warn("r2.uploadToR2: sharp processing skipped:", e.message);
+      buffer = fs.readFileSync(filePath);
     }
-    // SVG and anything else: uploaded as-is, no sharp processing.
-  } catch (e) {
-    // If sharp can't process it (corrupt metadata, unsupported variant),
-    // fall back to the original untouched buffer rather than failing the
-    // whole upload.
-    console.warn("r2.uploadToR2: sharp processing skipped:", e.message);
-    buffer = fs.readFileSync(filePath);
   }
 
   const safeBase = path
