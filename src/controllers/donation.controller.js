@@ -146,6 +146,35 @@ const donationController = {
       console.error("Resend receipt error:", err);
       res.status(500).json({ message: "Server error", error: err.message });
     }
+  },
+
+  // ADMIN - manually re-trigger the WhatsApp receipt message, isolated from
+  // DCC so a WhatsApp-only failure (bad phone, template not approved yet)
+  // can be retried without re-running the DCC sync.
+  resendWhatsApp: async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { isWhatsAppConfigured } = require("../services/whatsapp.service");
+      const { sendDonationWhatsAppReceipt } = require("../services/paymentCompletion.service");
+      const donation = await donationModel.findById(id);
+      if (!donation) return res.status(404).json({ message: "Donation not found" });
+
+      if (!isWhatsAppConfigured()) {
+        return res.status(200).json({
+          message: "WAPI_TOKEN is not configured on this server, so WhatsApp isn't connected yet. Nothing was sent.",
+          skipped: true,
+        });
+      }
+
+      const result = await sendDonationWhatsAppReceipt(donation);
+      if (result.ok) {
+        return res.status(200).json({ message: "WhatsApp receipt sent successfully" });
+      }
+      return res.status(502).json({ message: result.reason || "WhatsApp send failed", error: result.error });
+    } catch (err) {
+      console.error("Resend WhatsApp error:", err);
+      res.status(500).json({ message: "Server error", error: err.message });
+    }
   }
 };
 

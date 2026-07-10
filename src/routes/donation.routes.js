@@ -9,6 +9,7 @@ donationRouter.post("/", donationController.create);
 donationRouter.get("/", authMiddleware, adminMiddleware, donationController.list);
 donationRouter.get("/:id", authMiddleware, adminMiddleware, donationController.get);
 donationRouter.post("/:id/resend-receipt", authMiddleware, adminMiddleware, donationController.resendReceipt);
+donationRouter.post("/:id/resend-whatsapp", authMiddleware, adminMiddleware, donationController.resendWhatsApp);
 donationRouter.put("/:id", authMiddleware, adminMiddleware, donationController.update);
 donationRouter.delete("/:id", authMiddleware, adminMiddleware, donationController.delete);
 

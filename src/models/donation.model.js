@@ -43,6 +43,8 @@ const donationSchema = new mongoose.Schema({
   dccSyncError: { type: String },
   dccPayload: { type: mongoose.Schema.Types.Mixed },
   dccResponse: { type: mongoose.Schema.Types.Mixed },
+  whatsappReceiptSentAt: { type: Date },
+  whatsappReceiptError: { type: String },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "user" }
 }, {
   timestamps: true,
