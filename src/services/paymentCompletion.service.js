@@ -10,17 +10,21 @@ const {
 } = require("./whatsapp.service");
 const { generateReceiptBuffer } = require("./receipt.service");
 
-// Approved Meta template names — set these once you've created/approved
-// them via Meta Business Manager (through Flaxxa). Until WAPI_TOKEN is set,
-// this whole step is skipped silently — never blocks or breaks the donation
-// flow either way.
+// Approved Meta template names — these are the SAME templates already
+// approved and in production use on the campaigner platform (Flaxxa
+// templates are tied to the WhatsApp Business number/account, not to a
+// specific codebase, so they're reusable here as long as it's the same
+// WhatsApp Business number).
 //  - RECEIPT template: has a document/media header placeholder, used once
 //    DCC has returned a receiptNumber and the PDF has been generated.
+//    Body expects 2 params: donor name, amount.
 //  - PENDING template: plain text only, used as an immediate fallback when
 //    DCC hasn't returned a receipt yet (or isn't configured at all) so the
 //    donor still gets a prompt thank-you instead of silence.
-const RECEIPT_TEMPLATE_NAME = process.env.WAPI_RECEIPT_TEMPLATE_NAME || "donation_receipt_pdf";
-const PENDING_TEMPLATE_NAME = process.env.WAPI_DONATION_TEMPLATE_NAME || "donation_receipt";
+//    Body expects 4 params: donor name, amount, seva name, seva name again
+//    (the approved template's copy references the seva twice in its text).
+const RECEIPT_TEMPLATE_NAME = process.env.WAPI_RECEIPT_TEMPLATE_NAME || "campaigns_donation_success_reciept";
+const PENDING_TEMPLATE_NAME = process.env.WAPI_DONATION_TEMPLATE_NAME || "regular_donation_success_message";
 
 // Isolated on purpose: a WhatsApp failure (bad template name, Meta outage,
 // invalid phone) must NEVER undo or break the donation record — the payment
@@ -75,8 +79,12 @@ async function sendDonationWhatsAppReceipt(donation) {
 
   // Path 2 (fallback): no receipt number yet, or the PDF path failed —
   // send a plain text thank-you so the donor isn't left with silence.
+  // Parameter structure must match the approved template exactly: donor
+  // name, amount, then the seva name TWICE (the approved template's copy
+  // references the seva in two separate sentences) — not a receipt number,
+  // which this template has no placeholder for.
   try {
-    const receiptText = donation.receiptNumber || "Processing";
+    const sevaText = donation.sevaName || donation.type || "Seva";
 
     await sendTemplateMessage(donation.donorMobile, PENDING_TEMPLATE_NAME, [
       {
@@ -84,8 +92,8 @@ async function sendDonationWhatsAppReceipt(donation) {
         parameters: [
           { type: "text", text: donation.donorName || "Devotee" },
           { type: "text", text: amountText },
-          { type: "text", text: donation.sevaName || "Seva" },
-          { type: "text", text: receiptText },
+          { type: "text", text: sevaText },
+          { type: "text", text: sevaText },
         ],
       },
     ]);
