@@ -1,6 +1,7 @@
 
 FROM node:18-alpine AS builder
 
+# cache-bust: 2026-07-10
 WORKDIR /usr/src/app
 
 # sharp requires these native libraries on Alpine
