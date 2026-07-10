@@ -18,9 +18,9 @@ const siteContentSchema = new mongoose.Schema(
       body: { type: String, default: "" },
     },
     contact: {
-      phone: { type: String, default: "+91 98765 43210" },
-      email: { type: String, default: "info@harekrishnavizag.org" },
-      address: { type: String, default: "Hare Krishna Marg, Visakhapatnam, Andhra Pradesh, India - 530003" },
+      phone: { type: String, default: "+91 96666 11108" },
+      email: { type: String, default: "info.vizag@hkm-group.org" },
+      address: { type: String, default: "Chaitanya Bhavan, Hare Krishna Vaikuntam Cultural Centre, IIM Rd, opp. Akshaya Patra Foundation, Gambhiram, Visakhapatnam, Andhra Pradesh 531163" },
       morningHours: { type: String, default: "4:30 AM - 1:00 PM" },
       eveningHours: { type: String, default: "4:00 PM - 8:30 PM" },
     },
