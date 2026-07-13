@@ -12,5 +12,6 @@ donationAdminRouter.get("/transactions", authMiddleware, adminMiddleware, donati
 donationAdminRouter.get("/transactions/:id", authMiddleware, adminMiddleware, donationAdminController.getTransactionById);
 donationAdminRouter.get("/utm-stats", authMiddleware, adminMiddleware, donationAdminController.getUtmStats);
 donationAdminRouter.get("/utm-transactions", authMiddleware, adminMiddleware, donationAdminController.getUtmTransactions);
+donationAdminRouter.get("/export", authMiddleware, adminMiddleware, donationAdminController.exportTransactions);
 
 module.exports = { donationAdminRouter };

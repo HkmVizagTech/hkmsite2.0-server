@@ -236,6 +236,70 @@ const donationAdminController = {
       res.status(500).json({ success: false, message: "Failed to fetch UTM transactions" });
     }
   },
+  // GET /donations-admin/export?startDate=&endDate=&status= — CSV download
+  exportTransactions: async (req, res) => {
+    try {
+      const { startDate, endDate, status = "all" } = req.query;
+      const query = { ...DONATIONS_PAGE_FILTER };
+
+      if (status !== "all") {
+        const statuses = String(status).split(",").map((s) => s.trim()).filter(Boolean);
+        query.status = statuses.length === 1 ? statuses[0] : { $in: statuses };
+      }
+      if (startDate || endDate) {
+        query.createdAt = {};
+        if (startDate) query.createdAt.$gte = new Date(startDate);
+        if (endDate) {
+          const end = new Date(endDate);
+          end.setHours(23, 59, 59, 999);
+          query.createdAt.$lte = end;
+        }
+      }
+
+      const transactions = await donationModel.find(query).sort({ createdAt: -1 }).lean();
+
+      const headers = [
+        "Transaction ID", "Donor Name", "Email", "Mobile", "Date", "Amount", "Status",
+        "Seva", "80G Certificate", "PAN Number", "Receipt Number", "WhatsApp Receipt Sent",
+        "Campaign", "UTM Source", "UTM Medium", "UTM Content", "Razorpay Order ID", "Razorpay Payment ID",
+      ];
+
+      const csvEscape = (val) => {
+        const str = val === null || val === undefined ? "" : String(val);
+        return /[",\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+      };
+
+      const rows = transactions.map((txn) => [
+        txn.razorpayPaymentId || `TXN${txn._id.toString().slice(-6).toUpperCase()}`,
+        txn.donorName || "",
+        txn.donorEmail || "",
+        txn.donorMobile || "",
+        txn.createdAt ? new Date(txn.createdAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) : "",
+        txn.amount,
+        txn.status,
+        txn.sevaName || txn.type || "",
+        txn.certificate ? "Yes" : "No",
+        txn.panNumber || "",
+        txn.receiptNumber || "",
+        txn.whatsappReceiptSentAt ? new Date(txn.whatsappReceiptSentAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) : "",
+        txn.utm?.campaign || "",
+        txn.utm?.source || "",
+        txn.utm?.medium || "",
+        txn.utm?.content || "",
+        txn.razorpayOrderId || "",
+        txn.razorpayPaymentId || "",
+      ]);
+
+      const csv = [headers.join(","), ...rows.map((row) => row.map(csvEscape).join(","))].join("\n");
+
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", `attachment; filename="donations-transactions-${Date.now()}.csv"`);
+      res.status(200).send(csv);
+    } catch (error) {
+      console.error("donationAdmin.exportTransactions error:", error);
+      res.status(500).json({ success: false, message: "Failed to export transactions" });
+    }
+  },
 };
 
 module.exports = { donationAdminController };
