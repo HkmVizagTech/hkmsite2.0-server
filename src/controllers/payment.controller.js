@@ -118,7 +118,14 @@ const paymentController = {
         campaignerSlug: req.body.campaignerSlug || undefined,
         festivalId: resolvedFestivalId,
         razorpayOrderId: order.id,
-        status: 'pending'
+        status: 'pending',
+        utm: req.body.utm && typeof req.body.utm === 'object' ? {
+          source: String(req.body.utm.source || '').slice(0, 100),
+          medium: String(req.body.utm.medium || '').slice(0, 100),
+          campaign: String(req.body.utm.campaign || '').slice(0, 100),
+          content: String(req.body.utm.content || '').slice(0, 100),
+          term: String(req.body.utm.term || '').slice(0, 100),
+        } : undefined,
       });
 
       return res.status(200).json({ orderId: order.id, key: account.key_id, donationId: donation._id });
