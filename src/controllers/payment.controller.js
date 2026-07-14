@@ -63,6 +63,7 @@ const paymentController = {
         sourcePage,
         sevaName,
         legacySevaId,
+        message,
       } = req.body;
 
       if (!amount || Number(amount) < 1) {
@@ -109,6 +110,7 @@ const paymentController = {
         sourcePage,
         sevaName,
         legacySevaId,
+        message: message || undefined,
         paymentAccount: account.name,
         panNumber: panNumber || req.body.panNumber,
         certificate: certificate || req.body.certificate,
