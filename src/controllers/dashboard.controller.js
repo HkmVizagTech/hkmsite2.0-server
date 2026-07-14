@@ -4,6 +4,14 @@ const { galleryModel } = require("../models/gallery.model");
 const { blogModel } = require("../models/blog.model");
 const { contactMessageModel } = require("../models/contactMessage.model");
 
+// The standalone /donations page is a fully separate donation flow with its
+// own dedicated admin (/donations/admin) -- it must never be blended into
+// these site-wide totals/charts. sourcePage === "donations" (exact, no
+// leading slash) is the reliable signal for it; every other donation flow
+// (seva pages, sqft campaign, janmashtami) uses a real path or a distinct
+// value, confirmed by sampling real records.
+const EXCLUDE_DONATIONS_PAGE = { sourcePage: { $ne: "donations" } };
+
 const timeAgo = (date) => {
   const diffMs = Date.now() - new Date(date).getTime();
   const mins = Math.floor(diffMs / 60000);
@@ -37,11 +45,11 @@ const dashboardController = {
         newMessagesCount,
       ] = await Promise.all([
         donationModel.aggregate([
-          { $match: { status: "completed" } },
+          { $match: { status: "completed", ...EXCLUDE_DONATIONS_PAGE } },
           { $group: { _id: null, total: { $sum: "$amount" }, count: { $sum: 1 } } },
         ]),
         donationModel.aggregate([
-          { $match: { status: "completed", date: { $gte: startOfLastMonth, $lt: startOfMonth } } },
+          { $match: { status: "completed", date: { $gte: startOfLastMonth, $lt: startOfMonth }, ...EXCLUDE_DONATIONS_PAGE } },
           { $group: { _id: null, total: { $sum: "$amount" } } },
         ]),
         eventModel.countDocuments({ date: { $gte: startOfMonth } }),
@@ -49,7 +57,7 @@ const dashboardController = {
         galleryModel.countDocuments({ createdAt: { $lt: startOfMonth } }),
         blogModel.countDocuments({ status: "published" }),
         donationModel.aggregate([
-          { $match: { status: "completed" } },
+          { $match: { status: "completed", ...EXCLUDE_DONATIONS_PAGE } },
           {
             $group: {
               _id: { $ifNull: ["$donorEmail", "$donorMobile"] },
@@ -76,7 +84,7 @@ const dashboardController = {
       sixMonthsAgo.setHours(0, 0, 0, 0);
 
       const monthlyDonations = await donationModel.aggregate([
-        { $match: { status: "completed", date: { $gte: sixMonthsAgo } } },
+        { $match: { status: "completed", date: { $gte: sixMonthsAgo }, ...EXCLUDE_DONATIONS_PAGE } },
         {
           $group: {
             _id: { year: { $year: "$date" }, month: { $month: "$date" } },
@@ -96,7 +104,7 @@ const dashboardController = {
 
       // Real seva-type breakdown (was a hardcoded pie chart before)
       const sevaAgg = await donationModel.aggregate([
-        { $match: { status: "completed" } },
+        { $match: { status: "completed", ...EXCLUDE_DONATIONS_PAGE } },
         {
           $group: {
             _id: { $ifNull: ["$sevaName", "$type"] },
@@ -110,6 +118,7 @@ const dashboardController = {
 
       // Status breakdown (completed / pending / failed) - real data for Analytics page
       const statusAgg = await donationModel.aggregate([
+        { $match: EXCLUDE_DONATIONS_PAGE },
         { $group: { _id: "$status", count: { $sum: 1 }, amount: { $sum: "$amount" } } },
       ]);
       const statusBreakdown = statusAgg.map((s) => ({ status: s._id, count: s.count, amount: s.amount }));
@@ -119,7 +128,7 @@ const dashboardController = {
       thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 29);
       thirtyDaysAgo.setHours(0, 0, 0, 0);
       const dailyAgg = await donationModel.aggregate([
-        { $match: { status: "completed", date: { $gte: thirtyDaysAgo } } },
+        { $match: { status: "completed", date: { $gte: thirtyDaysAgo }, ...EXCLUDE_DONATIONS_PAGE } },
         {
           $group: {
             _id: { $dateToString: { format: "%Y-%m-%d", date: "$date" } },
@@ -133,7 +142,7 @@ const dashboardController = {
 
       // Real recent-activity feed merged across collections (was hardcoded before)
       const [recentDonation, recentEvent, recentGallery, recentBlog, recentMessage] = await Promise.all([
-        donationModel.findOne({ status: "completed" }).sort({ createdAt: -1 }).select("amount sevaName type createdAt").lean(),
+        donationModel.findOne({ status: "completed", ...EXCLUDE_DONATIONS_PAGE }).sort({ createdAt: -1 }).select("amount sevaName type createdAt").lean(),
         eventModel.findOne().sort({ createdAt: -1 }).select("title createdAt").lean(),
         galleryModel.findOne().sort({ createdAt: -1 }).select("title images createdAt").lean(),
         blogModel.findOne({ status: "published" }).sort({ createdAt: -1 }).select("title createdAt").lean(),

@@ -1,10 +1,16 @@
 const { donationModel } = require("../models/donation.model");
 
+// The standalone /donations page is fully separate from the rest of the
+// site's donation flows (seva pages, sqft campaign, janmashtami) and has
+// its own dedicated admin at /donations/admin — it must never show up
+// blended into this main site-wide donations list/stats.
+const EXCLUDE_DONATIONS_PAGE = { sourcePage: { $ne: "donations" } };
+
 const donationController = {
   list: async (req, res) => {
     try {
       const { type, status, date, festivalId, festivalSlug, q, from, to, minAmount, maxAmount } = req.query;
-      let filter = {};
+      let filter = { ...EXCLUDE_DONATIONS_PAGE };
       if (type) filter.type = type;
       if (status && status !== 'all') filter.status = status;
       if (date) {
