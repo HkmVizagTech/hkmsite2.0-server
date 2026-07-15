@@ -1,6 +1,7 @@
 const express = require("express");
 const { donationAdminController } = require("../controllers/donationAdmin.controller");
 const { authMiddleware, donationsAdminMiddleware } = require("../middlewares/auth.middleware");
+const upload = require("../utils/multer");
 
 const donationAdminRouter = express.Router();
 
@@ -13,5 +14,6 @@ donationAdminRouter.get("/transactions/:id", authMiddleware, donationsAdminMiddl
 donationAdminRouter.get("/utm-stats", authMiddleware, donationsAdminMiddleware, donationAdminController.getUtmStats);
 donationAdminRouter.get("/utm-transactions", authMiddleware, donationsAdminMiddleware, donationAdminController.getUtmTransactions);
 donationAdminRouter.get("/export", authMiddleware, donationsAdminMiddleware, donationAdminController.exportTransactions);
+donationAdminRouter.post("/upload-image", authMiddleware, donationsAdminMiddleware, upload.single("file"), donationAdminController.uploadImage);
 
 module.exports = { donationAdminRouter };

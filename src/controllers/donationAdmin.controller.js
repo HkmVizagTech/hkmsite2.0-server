@@ -7,7 +7,9 @@
 // annadan.harekrishnavizag.org admin dashboard pattern), trimmed to what
 // this simpler one-time-donation page actually needs.
 
+const fs = require("fs");
 const { donationModel } = require("../models/donation.model");
+const { uploadToR2 } = require("../utils/r2");
 
 // Every query here is scoped to the /donations page's own donations only —
 // never mixes in seva-page or campaign donations from the rest of the site.
@@ -304,6 +306,21 @@ const donationAdminController = {
     } catch (error) {
       console.error("donationAdmin.exportTransactions error:", error);
       res.status(500).json({ success: false, message: "Failed to export transactions" });
+    }
+  },
+  // POST /donations-admin/upload-image — for the Page Content tab's image
+  // fields (hero banner, seva cards, etc). Uses R2 like the rest of the
+  // site instead of the old client-side unsigned Cloudinary upload, which
+  // depended on NEXT_PUBLIC_CLOUDINARY_* env vars that may not even be set.
+  uploadImage: async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+      const result = await uploadToR2(req.file.path, "donations-page");
+      fs.unlink(req.file.path, () => {});
+      res.status(200).json({ secure_url: result.secure_url });
+    } catch (error) {
+      console.error("donationAdmin.uploadImage error:", error);
+      res.status(500).json({ message: error.message || "Image upload failed" });
     }
   },
 };
