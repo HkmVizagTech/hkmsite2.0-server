@@ -33,4 +33,15 @@ const adminMiddleware = (req, res, next) => {
 	next();
 };
 
-module.exports = { authMiddleware, adminMiddleware };
+// Scoped access for /donations/admin only — a donations_admin account can
+// manage that page's content/transactions/UTM stats but must NOT be able
+// to reach the rest of the site's admin (banners, blogs, campaigners,
+// staff management, etc.). Full admins can still do everything.
+const donationsAdminMiddleware = (req, res, next) => {
+	if (req.user.role !== "admin" && req.user.role !== "donations_admin") {
+		return res.status(403).json({ message: "Admin access required" });
+	}
+	next();
+};
+
+module.exports = { authMiddleware, adminMiddleware, donationsAdminMiddleware };

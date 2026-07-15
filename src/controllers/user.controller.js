@@ -18,7 +18,7 @@ const userController = {
 
     register: async (req, res) => {
         try {
-            const { name, email, password } = req.body;
+            const { name, email, password, role } = req.body;
             if (
                 typeof name !== "string" || typeof email !== "string" || typeof password !== "string" ||
                 !name || !email || !password
@@ -28,12 +28,18 @@ const userController = {
             if (password.length < 8) {
                 return res.status(400).json({ message: "Password must be at least 8 characters" });
             }
+            // Only "user" (default/no admin access) or "donations_admin" (scoped
+            // to /donations/admin only) can be granted here — deliberately never
+            // "admin", so creating another full admin always stays a separate,
+            // more deliberate action rather than a dropdown on this form.
+            const allowedRoles = ["user", "donations_admin"];
+            const resolvedRole = allowedRoles.includes(role) ? role : "user";
             const existing = await userModel.findOne({ email });
             if (existing) {
                 return res.status(409).json({ message: "Email already registered" });
             }
             const hash = await bcrypt.hash(password, 10);
-            const user = await userModel.create({ name, email, password: hash });
+            const user = await userModel.create({ name, email, password: hash, role: resolvedRole });
             res.status(201).json({ message: "User registered successfully", user: { _id: user._id, name: user.name, email: user.email, role: user.role } });
         } catch (err) {
             console.error('user.login error', err);
