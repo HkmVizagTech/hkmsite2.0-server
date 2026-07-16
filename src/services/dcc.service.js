@@ -2,6 +2,19 @@ const { donationModel } = require("../models/donation.model");
 
 const DCC_API_URL = process.env.DCC_API_URL || "https://vhkmsurabhi.com/api/socialmedia/addDonation";
 
+// DCC strictly requires a bare 10-digit Indian mobile number and rejects
+// anything else with "Donor phone must be a valid 10-digit number." —
+// confirmed live: donors entering a leading 0 (e.g. "09989482904", 11
+// digits) or a +91/91 country code prefix were causing every one of their
+// syncs to fail silently (donation still completes fine, just no DCC
+// receipt or WhatsApp PDF for them). Strip those prefixes down to the
+// last 10 digits before sending.
+const normalizeDccPhone = (raw) => {
+  const digits = String(raw || "").replace(/\D/g, "");
+  if (digits.length <= 10) return digits;
+  return digits.slice(-10);
+};
+
 const DCC_PAYMENT_MODES = {
   online: Number(process.env.DCC_MODE_ONLINE || 3),
   cash: Number(process.env.DCC_MODE_CASH || 1),
@@ -201,7 +214,7 @@ const buildDccPayload = (donation, gatewayPaymentId) => {
 
   return {
     donorName: donation.donorName,
-    donorPhone: donation.donorMobile || "",
+    donorPhone: normalizeDccPhone(donation.donorMobile),
     donorEmail: donation.donorEmail || null,
     gender: null,
     address: {
