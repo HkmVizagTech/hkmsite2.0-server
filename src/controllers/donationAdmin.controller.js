@@ -355,6 +355,35 @@ const donationAdminController = {
     }
   },
 
+  // POST /donations-admin/manual-complete — for donations from before an
+  // API key rotation, where Razorpay's dashboard (login-based) still shows
+  // the truth but our API can no longer look the order up with the new
+  // keys. Admin manually confirms a real payment ID found in the
+  // dashboard, and this runs it through the exact same completion
+  // pipeline (DCC + WhatsApp) as a normal successful checkout — no
+  // Razorpay API call needed, since the admin has already verified it.
+  manualComplete: async (req, res) => {
+    try {
+      const { donationId, razorpayPaymentId } = req.body;
+      if (!donationId || !razorpayPaymentId) {
+        return res.status(400).json({ message: "donationId and razorpayPaymentId are required." });
+      }
+      const donation = await donationModel.findById(donationId);
+      if (!donation) return res.status(404).json({ message: "Donation not found" });
+      if (donation.status === "completed") {
+        return res.status(200).json({ message: "Already marked completed.", receiptNumber: donation.receiptNumber });
+      }
+      const completed = await completeDonation({ orderId: donation.razorpayOrderId, paymentId: razorpayPaymentId });
+      res.status(200).json({
+        message: `Marked completed using the payment ID you confirmed in the Razorpay dashboard. DCC/WhatsApp pipeline triggered.`,
+        donation: completed,
+      });
+    } catch (error) {
+      console.error("donationAdmin.manualComplete error:", error);
+      res.status(500).json({ message: error.message || "Manual complete failed" });
+    }
+  },
+
   reconcilePending: async (req, res) => {
     try {
       const pending = await donationModel

@@ -15,6 +15,7 @@ donationAdminRouter.get("/utm-stats", authMiddleware, donationsAdminMiddleware, 
 donationAdminRouter.get("/utm-transactions", authMiddleware, donationsAdminMiddleware, donationAdminController.getUtmTransactions);
 donationAdminRouter.get("/export", authMiddleware, donationsAdminMiddleware, donationAdminController.exportTransactions);
 donationAdminRouter.get("/diagnose-order", authMiddleware, donationsAdminMiddleware, donationAdminController.diagnoseOrder);
+donationAdminRouter.post("/manual-complete", authMiddleware, donationsAdminMiddleware, donationAdminController.manualComplete);
 donationAdminRouter.post("/reconcile-pending", authMiddleware, donationsAdminMiddleware, donationAdminController.reconcilePending);
 donationAdminRouter.post("/upload-image", authMiddleware, donationsAdminMiddleware, upload.single("file"), donationAdminController.uploadImage);
 
