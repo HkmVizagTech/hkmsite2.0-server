@@ -10,6 +10,8 @@
 const fs = require("fs");
 const { donationModel } = require("../models/donation.model");
 const { uploadToR2 } = require("../utils/r2");
+const { createRazorpayInstance } = require("./payment.controller");
+const { completeDonation } = require("../services/paymentCompletion.service");
 
 // Every query here is scoped to the /donations page's own donations only —
 // never mixes in seva-page or campaign donations from the rest of the site.
@@ -321,6 +323,64 @@ const donationAdminController = {
     } catch (error) {
       console.error("donationAdmin.uploadImage error:", error);
       res.status(500).json({ message: error.message || "Image upload failed" });
+    }
+  },
+
+  // POST /donations-admin/reconcile-pending — checks every pending
+  // /donations-page transaction against Razorpay's real payment records
+  // (never guesses) and properly completes any that were actually
+  // captured, same pipeline as a normal successful checkout (DCC +
+  // WhatsApp). Streams a small delay between Razorpay calls to stay well
+  // within rate limits over what can be a large batch.
+  reconcilePending: async (req, res) => {
+    try {
+      const pending = await donationModel
+        .find({ ...DONATIONS_PAGE_FILTER, status: "pending", razorpayOrderId: { $exists: true, $ne: null } })
+        .select("_id donorName amount razorpayOrderId paymentAccount")
+        .lean();
+
+      const results = { total: pending.length, completed: [], stillPending: [], noRazorpayRecord: [], errors: [] };
+
+      for (const donation of pending) {
+        try {
+          const created = createRazorpayInstance(donation.paymentAccount || "donations");
+          if (!created) {
+            results.errors.push({ id: donation._id, reason: "Razorpay not configured for this account" });
+            continue;
+          }
+
+          const payments = await created.instance.orders.fetchPayments(donation.razorpayOrderId);
+          const captured = (payments.items || []).find((p) => p.status === "captured");
+
+          if (captured) {
+            await completeDonation({ orderId: donation.razorpayOrderId, paymentId: captured.id });
+            results.completed.push({ id: donation._id, donorName: donation.donorName, amount: donation.amount, razorpayPaymentId: captured.id });
+          } else if ((payments.items || []).length === 0) {
+            results.noRazorpayRecord.push({ id: donation._id, donorName: donation.donorName, amount: donation.amount });
+          } else {
+            results.stillPending.push({ id: donation._id, donorName: donation.donorName, amount: donation.amount, statuses: payments.items.map((p) => p.status) });
+          }
+        } catch (err) {
+          results.errors.push({ id: donation._id, reason: err.message });
+        }
+        await new Promise((resolve) => setTimeout(resolve, 150)); // stay well within Razorpay's rate limits
+      }
+
+      res.status(200).json({
+        success: true,
+        summary: {
+          totalChecked: results.total,
+          completedCount: results.completed.length,
+          completedAmount: results.completed.reduce((s, d) => s + (d.amount || 0), 0),
+          genuinelyAbandoned: results.noRazorpayRecord.length,
+          stillPendingWithAttempt: results.stillPending.length,
+          errors: results.errors.length,
+        },
+        results,
+      });
+    } catch (error) {
+      console.error("donationAdmin.reconcilePending error:", error);
+      res.status(500).json({ success: false, message: error.message || "Reconcile failed" });
     }
   },
 };

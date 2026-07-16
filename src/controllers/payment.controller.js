@@ -289,4 +289,4 @@ const paymentController = {
   },
 };
 
-module.exports = { paymentController };
+module.exports = { paymentController, createRazorpayInstance };
