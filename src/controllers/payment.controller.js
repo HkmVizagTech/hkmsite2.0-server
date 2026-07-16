@@ -239,6 +239,54 @@ const paymentController = {
       return res.status(500).send('Webhook error');
     }
   },
+  // POST /payments/reconcile/:donationId — admin-only manual recovery for a
+  // donation stuck 'pending' when the payment actually succeeded on
+  // Razorpay's side (e.g. the browser closed before /verify ran, and the
+  // webhook either wasn't configured yet or also missed it). Queries
+  // Razorpay directly for the real payment status rather than guessing,
+  // and only marks it complete if Razorpay confirms a captured payment --
+  // runs through the exact same completeDonation() pipeline (DCC +
+  // WhatsApp) as a normal successful checkout.
+  reconcile: async (req, res) => {
+    try {
+      const donation = await donationModel.findById(req.params.donationId);
+      if (!donation) return res.status(404).json({ message: 'Donation not found' });
+      if (!donation.razorpayOrderId) {
+        return res.status(400).json({ message: 'This donation has no Razorpay order ID to check.' });
+      }
+      if (donation.status === 'completed') {
+        return res.status(200).json({ message: 'Already marked completed.', status: donation.status });
+      }
+
+      const created = createRazorpayInstance(donation.paymentAccount);
+      if (!created) {
+        return res.status(500).json({ message: `Razorpay is not configured for account "${donation.paymentAccount || 'default'}".` });
+      }
+
+      const payments = await created.instance.orders.fetchPayments(donation.razorpayOrderId);
+      const captured = (payments.items || []).find((p) => p.status === 'captured');
+
+      if (!captured) {
+        const statuses = (payments.items || []).map((p) => p.status);
+        return res.status(200).json({
+          message: statuses.length
+            ? `Razorpay shows no captured payment for this order (found: ${statuses.join(', ')}). Leaving as pending.`
+            : 'Razorpay has no payment attempts at all for this order — the donor likely never completed checkout. Leaving as pending.',
+          razorpayPayments: payments.items,
+        });
+      }
+
+      const completed = await completeDonation({ orderId: donation.razorpayOrderId, paymentId: captured.id });
+      return res.status(200).json({
+        message: `Razorpay confirms this payment was captured (₹${(captured.amount / 100).toLocaleString('en-IN')}). Donation marked completed and DCC/WhatsApp pipeline triggered.`,
+        razorpayPaymentId: captured.id,
+        donation: completed,
+      });
+    } catch (error) {
+      console.error('reconcile error', error && error.stack ? error.stack : error);
+      res.status(500).json({ message: error.message || 'Reconcile failed' });
+    }
+  },
 };
 
 module.exports = { paymentController };
