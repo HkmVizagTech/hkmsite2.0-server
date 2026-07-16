@@ -332,6 +332,29 @@ const donationAdminController = {
   // captured, same pipeline as a normal successful checkout (DCC +
   // WhatsApp). Streams a small delay between Razorpay calls to stay well
   // within rate limits over what can be a large batch.
+  // TEMPORARY diagnostic — checks whether Razorpay recognizes an order ID
+  // at all (not just whether it has payments), to distinguish "genuinely
+  // abandoned checkout" from "wrong Razorpay credentials/account mismatch".
+  diagnoseOrder: async (req, res) => {
+    try {
+      const { orderId, account } = req.query;
+      const created = createRazorpayInstance(account || "donations");
+      if (!created) return res.status(500).json({ message: `No Razorpay credentials configured for account "${account || "donations"}"` });
+      try {
+        const order = await created.instance.orders.fetch(orderId);
+        const payments = await created.instance.orders.fetchPayments(orderId);
+        return res.status(200).json({ keyIdPrefix: created.account.key_id?.slice(0, 8), order, payments: payments.items });
+      } catch (err) {
+        return res.status(200).json({
+          keyIdPrefix: created.account.key_id?.slice(0, 8),
+          orderFetchError: err.error || err.message || String(err),
+        });
+      }
+    } catch (error) {
+      res.status(500).json({ message: error.message });
+    }
+  },
+
   reconcilePending: async (req, res) => {
     try {
       const pending = await donationModel
