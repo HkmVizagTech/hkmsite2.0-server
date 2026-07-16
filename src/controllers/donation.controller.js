@@ -41,7 +41,13 @@ const donationController = {
       const limit = Math.min(200, Math.max(1, parseInt(req.query.limit || '20', 10)));
       const skip = (page - 1) * limit;
 
-      const projection = { donorName: 1, donorEmail: 1, donorMobile: 1, amount: 1, status: 1, date: 1, panNumber: 1, certificate: 1, wantPrasadam: 1, prasadamAddress: 1, transactionId: 1, razorpayOrderId: 1 };
+      const projection = {
+        donorName: 1, donorEmail: 1, donorMobile: 1, amount: 1, status: 1, date: 1,
+        panNumber: 1, certificate: 1, wantPrasadam: 1, prasadamAddress: 1,
+        transactionId: 1, razorpayOrderId: 1, razorpayPaymentId: 1,
+        receiptNumber: 1, dccSyncStatus: 1, whatsappReceiptSentAt: 1, whatsappReceiptError: 1,
+        sevaName: 1, type: 1,
+      };
 
       const [total, donations] = await Promise.all([
         donationModel.countDocuments(filter),
