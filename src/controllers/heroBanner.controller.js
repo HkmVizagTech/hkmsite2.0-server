@@ -19,7 +19,7 @@ const heroBannerController = {
   // ADMIN - create with desktop + mobile image upload
   create: async (req, res) => {
     try {
-      const { title, order } = req.body;
+      const { title, order, linkUrl } = req.body;
       const files = req.files || [];
       const desktopFile = files.find((f) => f.fieldname === "desktopImage");
       const mobileFile = files.find((f) => f.fieldname === "mobileImage");
@@ -50,6 +50,7 @@ const heroBannerController = {
         title: title || `Banner ${count + 1}`,
         desktopImage,
         mobileImage,
+        linkUrl: linkUrl ? String(linkUrl).trim() : "",
         order: order !== undefined ? Number(order) : count,
         createdBy: req.user ? req.user.userId : undefined,
       });
@@ -76,6 +77,7 @@ const heroBannerController = {
       if (req.body.title !== undefined) patch.title = req.body.title;
       if (req.body.order !== undefined) patch.order = Number(req.body.order);
       if (req.body.active !== undefined) patch.active = req.body.active === "true" || req.body.active === true;
+      if (req.body.linkUrl !== undefined) patch.linkUrl = String(req.body.linkUrl).trim();
 
       if (desktopFile) {
         const up = await uploadToR2(desktopFile.path, "hero-banners");
