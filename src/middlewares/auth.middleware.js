@@ -44,4 +44,15 @@ const donationsAdminMiddleware = (req, res, next) => {
 	next();
 };
 
-module.exports = { authMiddleware, adminMiddleware, donationsAdminMiddleware };
+// Scoped access for blog create/update/upload only — a blogs_admin account
+// can write and edit posts but cannot delete them outright (see blog
+// controller: a blogs_admin's delete call creates a pending deletion
+// request instead of deleting) and cannot reach any other admin area.
+const blogsAdminMiddleware = (req, res, next) => {
+	if (req.user.role !== "admin" && req.user.role !== "blogs_admin") {
+		return res.status(403).json({ message: "Admin access required" });
+	}
+	next();
+};
+
+module.exports = { authMiddleware, adminMiddleware, donationsAdminMiddleware, blogsAdminMiddleware };

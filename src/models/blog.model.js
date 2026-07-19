@@ -47,6 +47,14 @@ const blogSchema = new mongoose.Schema(
     views: { type: Number, default: 0 },
     featured: { type: Boolean, default: false, index: true },
 
+    // A blogs_admin account cannot delete a post outright - their delete
+    // call sets these instead, and an actual admin must approve (deletes
+    // for real) or reject (clears these back to false/null) via the
+    // dedicated endpoints below.
+    deletionRequested: { type: Boolean, default: false, index: true },
+    deletionRequestedBy: { type: mongoose.Schema.Types.ObjectId, ref: "user" },
+    deletionRequestedAt: { type: Date },
+
     metaTitle: { type: String, default: "" },
     metaDescription: { type: String, default: "" },
 

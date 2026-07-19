@@ -336,12 +336,76 @@ const blogController = {
     }
   },
 
+  // A full admin deletes immediately, as before. A blogs_admin's call here
+  // instead files a pending deletion request - the post stays live and
+  // untouched until an admin approves or rejects it via the endpoints below.
   delete: async (req, res) => {
     try {
       const { id } = req.params;
+
+      if (req.user.role === "blogs_admin") {
+        const blog = await blogModel.findByIdAndUpdate(
+          id,
+          {
+            deletionRequested: true,
+            deletionRequestedBy: req.user.userId,
+            deletionRequestedAt: new Date(),
+          },
+          { new: true }
+        );
+        if (!blog) return res.status(404).json({ message: "Blog not found" });
+        return res.status(200).json({
+          message: "Deletion requested — an admin needs to approve this before it's removed.",
+          blog,
+        });
+      }
+
       const blog = await blogModel.findByIdAndDelete(id);
       if (!blog) return res.status(404).json({ message: "Blog not found" });
       res.status(200).json({ message: "Blog deleted" });
+    } catch (err) {
+      res.status(500).json({ message: "Server error", error: err.message });
+    }
+  },
+
+  // ADMIN ONLY - list posts with a pending deletion request
+  deletionRequests: async (req, res) => {
+    try {
+      const blogs = await blogModel
+        .find({ deletionRequested: true })
+        .sort({ deletionRequestedAt: -1 })
+        .populate("deletionRequestedBy", "name email")
+        .select("title slug category coverImage deletionRequestedBy deletionRequestedAt");
+      res.status(200).json({ blogs });
+    } catch (err) {
+      res.status(500).json({ message: "Server error", error: err.message });
+    }
+  },
+
+  // ADMIN ONLY - approve a pending deletion request: actually deletes the post
+  approveDeletion: async (req, res) => {
+    try {
+      const { id } = req.params;
+      const blog = await blogModel.findOne({ _id: id, deletionRequested: true });
+      if (!blog) return res.status(404).json({ message: "No pending deletion request for this post" });
+      await blogModel.findByIdAndDelete(id);
+      res.status(200).json({ message: "Deletion approved — post removed" });
+    } catch (err) {
+      res.status(500).json({ message: "Server error", error: err.message });
+    }
+  },
+
+  // ADMIN ONLY - reject a pending deletion request: post stays, flag cleared
+  rejectDeletion: async (req, res) => {
+    try {
+      const { id } = req.params;
+      const blog = await blogModel.findByIdAndUpdate(
+        id,
+        { deletionRequested: false, deletionRequestedBy: null, deletionRequestedAt: null },
+        { new: true }
+      );
+      if (!blog) return res.status(404).json({ message: "Blog not found" });
+      res.status(200).json({ message: "Deletion request rejected — post kept", blog });
     } catch (err) {
       res.status(500).json({ message: "Server error", error: err.message });
     }

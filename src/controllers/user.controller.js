@@ -28,11 +28,13 @@ const userController = {
             if (password.length < 8) {
                 return res.status(400).json({ message: "Password must be at least 8 characters" });
             }
-            // Only "user" (default/no admin access) or "donations_admin" (scoped
-            // to /donations/admin only) can be granted here — deliberately never
-            // "admin", so creating another full admin always stays a separate,
-            // more deliberate action rather than a dropdown on this form.
-            const allowedRoles = ["user", "donations_admin"];
+            // Only "user" (default/no admin access), "donations_admin" (scoped
+            // to /donations/admin only), or "blogs_admin" (scoped to writing/
+            // editing blog posts, with deletion requiring admin approval) can
+            // be granted here — deliberately never "admin", so creating
+            // another full admin always stays a separate, more deliberate
+            // action rather than a dropdown on this form.
+            const allowedRoles = ["user", "donations_admin", "blogs_admin"];
             const resolvedRole = allowedRoles.includes(role) ? role : "user";
             const existing = await userModel.findOne({ email });
             if (existing) {

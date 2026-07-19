@@ -1,6 +1,6 @@
 const express = require("express");
 const { blogController } = require("../controllers/blog.controller");
-const { authMiddleware, adminMiddleware } = require("../middlewares/auth.middleware");
+const { authMiddleware, adminMiddleware, blogsAdminMiddleware } = require("../middlewares/auth.middleware");
 const { blogValidationRules } = require("../validators/blog.validator");
 const { validationResult } = require("express-validator");
 const upload = require("../utils/multer");
@@ -17,20 +17,25 @@ blogRouter.get("/categories", blogController.categories);
 // PUBLIC - paginated/filterable list
 blogRouter.get("/", blogController.list);
 
-// ADMIN - inline image upload for CKEditor (must come before :idOrSlug)
+// ADMIN (full admin or blogs_admin) - inline image upload for CKEditor
+// (must come before :idOrSlug)
 blogRouter.post(
   "/upload-inline",
   authMiddleware,
-  adminMiddleware,
+  blogsAdminMiddleware,
   upload.single("upload"),
   blogController.uploadInline
 );
 
-// ADMIN - create
+// ADMIN ONLY - list posts with a pending deletion request (must come before
+// :idOrSlug so "deletion-requests" isn't parsed as a post id/slug)
+blogRouter.get("/deletion-requests", authMiddleware, adminMiddleware, blogController.deletionRequests);
+
+// ADMIN (full admin or blogs_admin) - create
 blogRouter.post(
   "/",
   authMiddleware,
-  adminMiddleware,
+  blogsAdminMiddleware,
   upload.any(),
   blogValidationRules,
   (req, res, next) => {
@@ -47,11 +52,11 @@ blogRouter.get("/:idOrSlug", blogController.get);
 // PUBLIC - related
 blogRouter.get("/:id/related", blogController.related);
 
-// ADMIN - update
+// ADMIN (full admin or blogs_admin) - update
 blogRouter.put(
   "/:id",
   authMiddleware,
-  adminMiddleware,
+  blogsAdminMiddleware,
   upload.any(),
   blogValidationRules,
   (req, res, next) => {
@@ -62,7 +67,12 @@ blogRouter.put(
   blogController.update
 );
 
-// ADMIN - delete
-blogRouter.delete("/:id", authMiddleware, adminMiddleware, blogController.delete);
+// ADMIN (full admin deletes immediately; blogs_admin files a request instead
+// - see blogController.delete)
+blogRouter.delete("/:id", authMiddleware, blogsAdminMiddleware, blogController.delete);
+
+// ADMIN ONLY - approve/reject a pending deletion request
+blogRouter.post("/:id/approve-deletion", authMiddleware, adminMiddleware, blogController.approveDeletion);
+blogRouter.post("/:id/reject-deletion", authMiddleware, adminMiddleware, blogController.rejectDeletion);
 
 module.exports = { blogRouter };
