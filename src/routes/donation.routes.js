@@ -7,6 +7,7 @@ const donationRouter = express.Router();
 donationRouter.post("/", donationController.create);
 
 donationRouter.get("/", authMiddleware, adminMiddleware, donationController.list);
+donationRouter.get("/whatsapp-audit", authMiddleware, adminMiddleware, donationController.whatsappAudit);
 donationRouter.get("/:id", authMiddleware, adminMiddleware, donationController.get);
 donationRouter.post("/:id/resend-receipt", authMiddleware, adminMiddleware, donationController.resendReceipt);
 donationRouter.post("/:id/resend-whatsapp", authMiddleware, adminMiddleware, donationController.resendWhatsApp);

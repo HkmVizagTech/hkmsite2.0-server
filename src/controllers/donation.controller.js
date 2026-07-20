@@ -193,7 +193,40 @@ const donationController = {
       console.error("Resend WhatsApp error:", err);
       res.status(500).json({ message: "Server error", error: err.message });
     }
-  }
+  },
+
+  // GET /donations/whatsapp-audit — finds donations where whatsappReceiptSentAt
+  // is set but there's no receiptNumber. These are stale from before the
+  // no-receipt-no-WhatsApp policy: the old fallback behavior sent a plain
+  // text message even when DCC hadn't returned a receipt yet, so this field
+  // reflects a real send that happened, but under the current policy it's
+  // misleading in the admin UI (looks like "receipt sent" when no receipt
+  // ever existed). ?fix=true clears the field on all matches found.
+  whatsappAudit: async (req, res) => {
+    try {
+      const query = {
+        whatsappReceiptSentAt: { $ne: null },
+        $or: [{ receiptNumber: null }, { receiptNumber: { $exists: false } }, { receiptNumber: "" }],
+      };
+      const stale = await donationModel
+        .find(query)
+        .select("_id donorName donorMobile amount sourcePage sevaName whatsappReceiptSentAt dccSyncStatus")
+        .lean();
+
+      if (req.query.fix === "true" && stale.length > 0) {
+        await donationModel.updateMany(query, { $set: { whatsappReceiptSentAt: null } });
+      }
+
+      res.status(200).json({
+        found: stale.length,
+        fixed: req.query.fix === "true",
+        donations: stale,
+      });
+    } catch (err) {
+      console.error("WhatsApp audit error:", err);
+      res.status(500).json({ message: "Server error", error: err.message });
+    }
+  },
 };
 
 module.exports = { donationController };
