@@ -387,6 +387,18 @@ const donationAdminController = {
   reconcilePending: async (req, res) => {
     try {
       const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 25));
+
+      // When the Razorpay keys change again, everything marked "checked"
+      // under the OLD keys needs a fresh look under the NEW ones --
+      // resetChecked=true clears that marker for all still-pending
+      // donations-page transactions before this batch runs.
+      if (req.query.resetChecked === "true") {
+        await donationModel.updateMany(
+          { ...DONATIONS_PAGE_FILTER, status: "pending" },
+          { $set: { lastReconcileCheckAt: null } }
+        );
+      }
+
       const pending = await donationModel
         .find({
           ...DONATIONS_PAGE_FILTER,
