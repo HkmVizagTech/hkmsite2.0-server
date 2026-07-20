@@ -5,22 +5,17 @@ const { donationModel } = require("../models/donation.model");
 const { syncDonationToDcc } = require("./dcc.service");
 const {
   isWhatsAppConfigured,
-  sendTemplateMessage,
   sendTemplateMessageWithAttachment,
 } = require("./whatsapp.service");
 const { generateReceiptBuffer } = require("./receipt.service");
 
-// Approved Meta template names.
-//  - RECEIPT template: has a document/media header placeholder, used once
-//    DCC has returned a receiptNumber and the PDF has been generated.
-//    Confirmed from the real approved template: body expects 3 params —
-//    donor name ({{body_1}}), amount ({{body_2}}), seva/purpose ({{body_3}}).
-//  - PENDING template: plain text only, used as an immediate fallback when
-//    DCC hasn't returned a receipt yet (or isn't configured at all) so the
-//    donor still gets a prompt thank-you instead of silence — a PDF can't
-//    be attached without a receipt number to put on it.
+// Approved Meta template for the receipt-with-PDF message. Confirmed from
+// the real approved template: body expects 3 params — donor name
+// ({{body_1}}), amount ({{body_2}}), seva/purpose ({{body_3}}).
+// Per policy, this is the ONLY WhatsApp message this donation flow ever
+// sends — no plain-text fallback when there's no receipt yet (see
+// sendDonationWhatsAppReceipt below).
 const RECEIPT_TEMPLATE_NAME = process.env.WAPI_RECEIPT_TEMPLATE_NAME || "common_donation_success_reciept";
-const PENDING_TEMPLATE_NAME = process.env.WAPI_DONATION_TEMPLATE_NAME || "regular_donation_success_message";
 
 // Isolated on purpose: a WhatsApp failure (bad template name, Meta outage,
 // invalid phone) must NEVER undo or break the donation record — the payment
@@ -32,79 +27,53 @@ async function sendDonationWhatsAppReceipt(donation) {
   if (!isWhatsAppConfigured()) return { ok: false, skipped: true, reason: "whatsapp_not_configured" };
   if (!donation.donorMobile) return { ok: false, skipped: true, reason: "no_phone_number" };
 
-  const amountText = `Rs. ${Number(donation.amount || 0).toLocaleString("en-IN")}`;
-
-  // Path 1: DCC has already returned a receipt number — generate the PDF
-  // and send it as the template's attachment.
-  if (donation.receiptNumber) {
-    let tmpFile = null;
-    try {
-      const pdfBytes = await generateReceiptBuffer(donation._id);
-      tmpFile = path.join(os.tmpdir(), `receipt-${donation._id}-${Date.now()}.pdf`);
-      fs.writeFileSync(tmpFile, pdfBytes);
-
-      await sendTemplateMessageWithAttachment(
-        donation.donorMobile,
-        RECEIPT_TEMPLATE_NAME,
-        [
-          { type: "text", text: donation.donorName || "Devotee" },
-          { type: "text", text: amountText.replace(/^Rs\.\s*/, "") },
-          { type: "text", text: donation.sevaName || donation.type || "Seva" },
-        ],
-        tmpFile,
-        `Donation_Receipt_${String(donation.donorName || "Donor").replace(/\s+/g, "_")}.pdf`
-      );
-
-      await donationModel.findByIdAndUpdate(donation._id, {
-        whatsappReceiptSentAt: new Date(),
-        whatsappReceiptError: null,
-      });
-      return { ok: true, withPdf: true };
-    } catch (error) {
-      // PDF/attachment path failed — fall through to the plain text
-      // template below instead of giving up, so the donor still hears
-      // something. Log the specific PDF failure for diagnosis.
-      const message = error && error.message ? error.message : String(error);
-      console.error("WhatsApp PDF receipt failed for donation", donation._id.toString(), message);
-      await donationModel.findByIdAndUpdate(donation._id, { whatsappReceiptError: message });
-    } finally {
-      if (tmpFile) {
-        try { fs.unlinkSync(tmpFile); } catch {}
-      }
-    }
+  // No receipt number yet (DCC hasn't synced, or failed) -- per policy, no
+  // WhatsApp message goes out at all until there's a real receipt to send.
+  // This used to fall back to a plain "thank you" text template, but that
+  // meant donors could get a WhatsApp message implying their donation was
+  // fully processed even when DCC had actually failed (e.g. the DCC-side
+  // duplicate-donor / outage cases found while debugging real donations).
+  // The admin "Resend WhatsApp" action re-checks this same condition, so
+  // once DCC is manually resynced, sending the real receipt is one click.
+  if (!donation.receiptNumber) {
+    return { ok: false, skipped: true, reason: "no_receipt_yet" };
   }
 
-  // Path 2 (fallback): no receipt number yet, or the PDF path failed —
-  // send a plain text thank-you so the donor isn't left with silence.
-  // Parameter structure must match the approved template exactly: donor
-  // name, amount, then the seva name TWICE (the approved template's copy
-  // references the seva in two separate sentences) — not a receipt number,
-  // which this template has no placeholder for.
+  const amountText = `Rs. ${Number(donation.amount || 0).toLocaleString("en-IN")}`;
+  let tmpFile = null;
   try {
-    const sevaText = donation.sevaName || donation.type || "Seva";
+    const pdfBytes = await generateReceiptBuffer(donation._id);
+    tmpFile = path.join(os.tmpdir(), `receipt-${donation._id}-${Date.now()}.pdf`);
+    fs.writeFileSync(tmpFile, pdfBytes);
 
-    await sendTemplateMessage(donation.donorMobile, PENDING_TEMPLATE_NAME, [
-      {
-        type: "body",
-        parameters: [
-          { type: "text", text: donation.donorName || "Devotee" },
-          { type: "text", text: amountText },
-          { type: "text", text: sevaText },
-          { type: "text", text: sevaText },
-        ],
-      },
-    ]);
+    await sendTemplateMessageWithAttachment(
+      donation.donorMobile,
+      RECEIPT_TEMPLATE_NAME,
+      [
+        { type: "text", text: donation.donorName || "Devotee" },
+        { type: "text", text: amountText.replace(/^Rs\.\s*/, "") },
+        { type: "text", text: donation.sevaName || donation.type || "Seva" },
+      ],
+      tmpFile,
+      `Donation_Receipt_${String(donation.donorName || "Donor").replace(/\s+/g, "_")}.pdf`
+    );
 
     await donationModel.findByIdAndUpdate(donation._id, {
       whatsappReceiptSentAt: new Date(),
       whatsappReceiptError: null,
     });
-    return { ok: true, withPdf: false };
+    return { ok: true, withPdf: true };
   } catch (error) {
+    // PDF generation or the WhatsApp send itself failed -- still no
+    // message goes out (per policy), just record why for admin visibility.
     const message = error && error.message ? error.message : String(error);
-    console.error("WhatsApp receipt send failed for donation", donation._id.toString(), message);
+    console.error("WhatsApp PDF receipt failed for donation", donation._id.toString(), message);
     await donationModel.findByIdAndUpdate(donation._id, { whatsappReceiptError: message });
     return { ok: false, error: message };
+  } finally {
+    if (tmpFile) {
+      try { fs.unlinkSync(tmpFile); } catch {}
+    }
   }
 }
 

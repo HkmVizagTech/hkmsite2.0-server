@@ -182,6 +182,12 @@ const donationController = {
       if (result.ok) {
         return res.status(200).json({ message: "WhatsApp receipt sent successfully" });
       }
+      if (result.reason === "no_receipt_yet") {
+        return res.status(200).json({
+          message: "This donation doesn't have a DCC receipt number yet, so no WhatsApp message was sent (per policy, we never message a donor without the real receipt). Try 'Resend Receipt' first, then Resend WhatsApp again.",
+          skipped: true,
+        });
+      }
       return res.status(502).json({ message: result.reason || "WhatsApp send failed", error: result.error });
     } catch (err) {
       console.error("Resend WhatsApp error:", err);
