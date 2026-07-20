@@ -52,18 +52,41 @@ const DCC_SEVA_MAPPINGS = parseJsonEnv("DCC_SEVA_MAPPINGS", []);
 // best-guess placeholders following the existing MNSO-* numbering pattern
 // (118-120) — verify against the real DCC configuration and override via the
 // DCC_SEVA_MAPPINGS env var if they differ, no code deploy needed to fix.
+// Annadana and Gau Seva codes below are confirmed real DCC values. The
+// others (Square Foot/Brick/Gita Daan/Vastra) are still best-guess
+// placeholders following the old MNSO-* numbering pattern — verify against
+// the real DCC configuration and override via DCC_SEVA_MAPPINGS if they
+// differ, no code deploy needed to fix.
 const DEFAULT_NAME_BASED_SEVA_MAPPINGS = [
   {
     sevaNameIncludes: ["annadana", "anna daan", "anna-daan", "annadaan"],
-    sevaCategory: 24,
-    sevaSubCategory: 115,
-    sevaSubCategoryCode: "MNSO-A",
+    sevaCategory: 1,
+    sevaSubCategory: 1,
+    sevaSubCategoryCode: "ANGE",
+  },
+  // The standalone /donations page sets type:"ANNADAAN" exactly but never a
+  // matching sevaName (its sevaName is the specific tier text, e.g. "Feed
+  // 50 people") -- without this, those donations silently fell through to
+  // the generic DEFAULT_SEVA_MAPPING instead of the real Annadana code.
+  {
+    type: ["ANNADAAN"],
+    sevaCategory: 1,
+    sevaSubCategory: 1,
+    sevaSubCategoryCode: "ANGE",
   },
   {
     sevaNameIncludes: ["gau seva", "go seva", "cow", "goshala"],
-    sevaCategory: 24,
-    sevaSubCategory: 116,
-    sevaSubCategoryCode: "MNSO-G",
+    sevaCategory: 20,
+    sevaSubCategory: 76,
+    sevaSubCategoryCode: "GOSE",
+  },
+  // Same reasoning as ANNADAAN above -- /donations page sets type:"GO SEVA"
+  // exactly, with tier text (e.g. "Feed 10 Cows For A Day") as sevaName.
+  {
+    type: ["GO SEVA"],
+    sevaCategory: 20,
+    sevaSubCategory: 76,
+    sevaSubCategoryCode: "GOSE",
   },
   {
     sevaNameIncludes: ["square feet", "square foot", "sq ft", "mandir nirman"],
