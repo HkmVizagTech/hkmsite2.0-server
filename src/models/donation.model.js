@@ -45,6 +45,12 @@ const donationSchema = new mongoose.Schema({
   receiptNumber: { type: String },
   receiptGeneratedAt: { type: Date },
   dccSyncStatus: { type: String, enum: ["pending", "syncing", "synced", "failed"], default: "pending" },
+  // Set by the reconcile-pending admin tool each time a still-pending
+  // donation is checked against Razorpay and found NOT captured (genuinely
+  // abandoned, or some other non-success status) — without this, oldest-
+  // first batches would re-check the same already-confirmed-abandoned
+  // records forever instead of progressing through the backlog.
+  lastReconcileCheckAt: { type: Date, default: null },
   dccSyncedAt: { type: Date },
   dccLastAttemptAt: { type: Date },
   dccSyncError: { type: String },

@@ -388,7 +388,12 @@ const donationAdminController = {
     try {
       const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 25));
       const pending = await donationModel
-        .find({ ...DONATIONS_PAGE_FILTER, status: "pending", razorpayOrderId: { $exists: true, $ne: null } })
+        .find({
+          ...DONATIONS_PAGE_FILTER,
+          status: "pending",
+          razorpayOrderId: { $exists: true, $ne: null },
+          lastReconcileCheckAt: null, // skip anything already checked and confirmed not-captured
+        })
         .sort({ createdAt: 1 }) // oldest first — works through the backlog systematically
         .limit(limit)
         .select("_id donorName amount razorpayOrderId paymentAccount createdAt")
@@ -411,8 +416,10 @@ const donationAdminController = {
             await completeDonation({ orderId: donation.razorpayOrderId, paymentId: captured.id });
             results.completed.push({ id: donation._id, donorName: donation.donorName, amount: donation.amount, createdAt: donation.createdAt, razorpayPaymentId: captured.id });
           } else if ((payments.items || []).length === 0) {
+            await donationModel.findByIdAndUpdate(donation._id, { lastReconcileCheckAt: new Date() });
             results.noRazorpayRecord.push({ id: donation._id, donorName: donation.donorName, amount: donation.amount, createdAt: donation.createdAt });
           } else {
+            await donationModel.findByIdAndUpdate(donation._id, { lastReconcileCheckAt: new Date() });
             results.stillPending.push({ id: donation._id, donorName: donation.donorName, amount: donation.amount, createdAt: donation.createdAt, statuses: payments.items.map((p) => p.status) });
           }
         } catch (err) {
