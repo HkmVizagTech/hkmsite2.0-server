@@ -386,9 +386,12 @@ const donationAdminController = {
 
   reconcilePending: async (req, res) => {
     try {
+      const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 25));
       const pending = await donationModel
         .find({ ...DONATIONS_PAGE_FILTER, status: "pending", razorpayOrderId: { $exists: true, $ne: null } })
-        .select("_id donorName amount razorpayOrderId paymentAccount")
+        .sort({ createdAt: 1 }) // oldest first — works through the backlog systematically
+        .limit(limit)
+        .select("_id donorName amount razorpayOrderId paymentAccount createdAt")
         .lean();
 
       const results = { total: pending.length, completed: [], stillPending: [], noRazorpayRecord: [], errors: [] };
@@ -406,11 +409,11 @@ const donationAdminController = {
 
           if (captured) {
             await completeDonation({ orderId: donation.razorpayOrderId, paymentId: captured.id });
-            results.completed.push({ id: donation._id, donorName: donation.donorName, amount: donation.amount, razorpayPaymentId: captured.id });
+            results.completed.push({ id: donation._id, donorName: donation.donorName, amount: donation.amount, createdAt: donation.createdAt, razorpayPaymentId: captured.id });
           } else if ((payments.items || []).length === 0) {
-            results.noRazorpayRecord.push({ id: donation._id, donorName: donation.donorName, amount: donation.amount });
+            results.noRazorpayRecord.push({ id: donation._id, donorName: donation.donorName, amount: donation.amount, createdAt: donation.createdAt });
           } else {
-            results.stillPending.push({ id: donation._id, donorName: donation.donorName, amount: donation.amount, statuses: payments.items.map((p) => p.status) });
+            results.stillPending.push({ id: donation._id, donorName: donation.donorName, amount: donation.amount, createdAt: donation.createdAt, statuses: payments.items.map((p) => p.status) });
           }
         } catch (err) {
           results.errors.push({ id: donation._id, reason: err.message });
