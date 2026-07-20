@@ -270,13 +270,23 @@ const donationAdminController = {
 
       const headers = [
         "Transaction ID", "Donor Name", "Email", "Mobile", "Date", "Amount", "Status",
-        "Seva", "80G Certificate", "PAN Number", "Receipt Number", "WhatsApp Receipt Sent",
-        "Campaign", "UTM Source", "UTM Medium", "UTM Content", "Razorpay Order ID", "Razorpay Payment ID",
+        "Seva", "Occasion / Note", "80G Certificate", "PAN Number",
+        "Mahaprasadam Requested", "Prasadam Address",
+        "Receipt Number", "DCC Sync Status", "WhatsApp Receipt Sent", "WhatsApp Error",
+        "Campaign", "UTM Source", "UTM Medium", "UTM Content", "UTM Term",
+        "Razorpay Order ID", "Razorpay Payment ID",
       ];
 
       const csvEscape = (val) => {
         const str = val === null || val === undefined ? "" : String(val);
         return /[",\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+      };
+
+      const formatAddress = (addr) => {
+        if (!addr) return "";
+        return [addr.doorNo, addr.house, addr.street, addr.area, addr.city, addr.state, addr.pincode, addr.country]
+          .filter(Boolean)
+          .join(", ");
       };
 
       const rows = transactions.map((txn) => [
@@ -288,14 +298,20 @@ const donationAdminController = {
         txn.amount,
         txn.status,
         txn.sevaName || txn.type || "",
+        txn.message || "",
         txn.certificate ? "Yes" : "No",
         txn.panNumber || "",
+        txn.wantPrasadam ? "Yes" : "No",
+        formatAddress(txn.prasadamAddress),
         txn.receiptNumber || "",
+        txn.dccSyncStatus || "",
         txn.whatsappReceiptSentAt ? new Date(txn.whatsappReceiptSentAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) : "",
+        txn.whatsappReceiptError || "",
         txn.utm?.campaign || "",
         txn.utm?.source || "",
         txn.utm?.medium || "",
         txn.utm?.content || "",
+        txn.utm?.term || "",
         txn.razorpayOrderId || "",
         txn.razorpayPaymentId || "",
       ]);
