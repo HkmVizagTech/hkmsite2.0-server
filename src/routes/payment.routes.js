@@ -7,7 +7,10 @@ const paymentRouter = express.Router();
 paymentRouter.post('/order', express.json(), paymentController.createOrder);
 paymentRouter.post('/verify', express.json(), paymentController.verifyPayment);
 
-paymentRouter.post('/webhook', express.raw({ type: '*/*' }), paymentController.webhook);
+// Two distinct URLs, one per Razorpay account -- each account's own
+// dashboard gets its own webhook secret tied unambiguously to its URL.
+paymentRouter.post('/webhook', express.raw({ type: '*/*' }), paymentController.webhookFor('default'));
+paymentRouter.post('/webhook/donations', express.raw({ type: '*/*' }), paymentController.webhookFor('donations'));
 
 paymentRouter.post('/reconcile/:donationId', authMiddleware, adminMiddleware, express.json(), paymentController.reconcile);
 

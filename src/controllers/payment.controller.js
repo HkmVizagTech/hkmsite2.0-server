@@ -184,27 +184,30 @@ const paymentController = {
     }
   },
 
-  webhook: async (req, res) => {
+  // Separate, explicit webhook per Razorpay account (each account's own
+  // dashboard gets its own URL to paste in, tied to exactly one secret --
+  // no ambiguity about which secret belongs where, and no looping through
+  // every configured account trying to find a signature match).
+  webhookFor: (accountName) => async (req, res) => {
     try {
       const signature = req.headers['x-razorpay-signature'];
       if (!signature) return res.status(400).send('Signature missing');
 
+      const account = resolveAccount(accountName);
+      if (!account.webhook_secret) {
+        console.warn(`Webhook received for "${accountName}" but no webhook secret is configured for it.`);
+        return res.status(500).send(`No webhook secret configured for account "${accountName}"`);
+      }
+
       const body = (req.body && req.body.toString) ? req.body.toString() : JSON.stringify(req.body || {});
-      const webhookAccounts = Object.keys(RAZORPAY_ACCOUNTS)
-        .map(resolveAccount)
-        .filter((account) => account.webhook_secret);
-      const matchedAccount = webhookAccounts.find((account) => {
-        const expected = crypto.createHmac('sha256', account.webhook_secret).update(body).digest('hex');
-        return expected === signature;
-      });
-      if (!matchedAccount) {
-        console.warn('Invalid webhook signature');
-        console.log('Received signature:', signature);
+      const expected = crypto.createHmac('sha256', account.webhook_secret).update(body).digest('hex');
+      if (expected !== signature) {
+        console.warn(`Invalid webhook signature for account "${accountName}"`);
         return res.status(400).send('Invalid signature');
       }
 
       const event = JSON.parse(body);
-      console.log('Webhook Event:', event.event);
+      console.log(`Webhook Event [${accountName}]:`, event.event);
 
       try {
         await enqueueJob('payments:jobs', { event: event.event, payload: event.payload, receivedAt: Date.now() });
