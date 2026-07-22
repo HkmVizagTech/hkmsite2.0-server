@@ -15,6 +15,20 @@ const RAZORPAY_ACCOUNTS = {
     key_secret: () => process.env.RAZORPAY_DONATIONS_KEY_SECRET,
     webhook_secret: () => process.env.RAZORPAY_DONATIONS_WEBHOOK_SECRET || process.env.RAZORPAY_WEBHOOK_SECRET,
   },
+  // Subhojanam donations belong to Touchstone Charities, a separate trust
+  // from the main HKM Vizag account -- needs its own Razorpay account so
+  // funds settle to the correct entity. NOT YET LIVE: waiting on real
+  // RAZORPAY_TOUCHSTONE_KEY_ID/KEY_SECRET (and optionally
+  // RAZORPAY_TOUCHSTONE_WEBHOOK_SECRET) from Mukunda. Until those are set,
+  // createRazorpayInstance('touchstone') returns null and callers should
+  // surface a clear "not configured yet" error rather than silently
+  // falling back to the default account (which would send Touchstone's
+  // donations to the wrong trust).
+  touchstone: {
+    key_id: () => process.env.RAZORPAY_TOUCHSTONE_KEY_ID,
+    key_secret: () => process.env.RAZORPAY_TOUCHSTONE_KEY_SECRET,
+    webhook_secret: () => process.env.RAZORPAY_TOUCHSTONE_WEBHOOK_SECRET,
+  },
 };
 
 const normalizeAccount = (account) => (
