@@ -1,6 +1,24 @@
 const { galleryModel } = require("../models/gallery.model");
+const { uploadToR2 } = require("../utils/r2");
 
 const galleryController = {
+  // POST /gallery/upload-image — upload a single image to R2 and return
+  // its URL so the admin page can collect URLs before creating a gallery
+  // entry. Matches the same pattern as donations-admin/upload-image,
+  // media library, etc.
+  uploadImage: async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+      const result = await uploadToR2(req.file.path, "gallery");
+      const fs = require("fs");
+      fs.unlink(req.file.path, () => {});
+      res.status(200).json({ secure_url: result.secure_url });
+    } catch (error) {
+      console.error("gallery.uploadImage error:", error);
+      res.status(500).json({ message: error.message || "Image upload failed" });
+    }
+  },
+
   list: async (req, res) => {
     try {
       const { category, type, date } = req.query;
