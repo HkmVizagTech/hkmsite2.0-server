@@ -142,6 +142,14 @@ const paymentController = {
           content: String(req.body.utm.content || '').slice(0, 100),
           term: String(req.body.utm.term || '').slice(0, 100),
         } : undefined,
+        // Meta Pixel/CAPI: browser sends a shared event_id (for dedup) plus
+        // the _fbp/_fbc cookies. We also capture the real client IP + UA
+        // server-side for better CAPI match quality.
+        metaEventId: req.body.metaEventId ? String(req.body.metaEventId).slice(0, 100) : undefined,
+        metaFbp: req.body.metaFbp ? String(req.body.metaFbp).slice(0, 200) : undefined,
+        metaFbc: req.body.metaFbc ? String(req.body.metaFbc).slice(0, 200) : undefined,
+        metaClientIp: (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket?.remoteAddress || undefined,
+        metaUserAgent: req.headers['user-agent'] ? String(req.headers['user-agent']).slice(0, 400) : undefined,
       });
 
       return res.status(200).json({ orderId: order.id, key: account.key_id, donationId: donation._id });
