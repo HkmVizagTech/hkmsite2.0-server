@@ -15,6 +15,20 @@ const RAZORPAY_ACCOUNTS = {
     key_secret: () => process.env.RAZORPAY_DONATIONS_KEY_SECRET,
     webhook_secret: () => process.env.RAZORPAY_DONATIONS_WEBHOOK_SECRET || process.env.RAZORPAY_WEBHOOK_SECRET,
   },
+  // Subhojanam donations belong to Touchstone Charities, a separate trust
+  // from the main HKM Vizag account -- needs its own Razorpay account so
+  // funds settle to the correct entity. NOT YET LIVE: waiting on real
+  // RAZORPAY_TOUCHSTONE_KEY_ID/KEY_SECRET (and optionally
+  // RAZORPAY_TOUCHSTONE_WEBHOOK_SECRET) from Mukunda. Until those are set,
+  // createRazorpayInstance('touchstone') returns null and callers should
+  // surface a clear "not configured yet" error rather than silently
+  // falling back to the default account (which would send Touchstone's
+  // donations to the wrong trust).
+  touchstone: {
+    key_id: () => process.env.RAZORPAY_TOUCHSTONE_KEY_ID,
+    key_secret: () => process.env.RAZORPAY_TOUCHSTONE_KEY_SECRET,
+    webhook_secret: () => process.env.RAZORPAY_TOUCHSTONE_WEBHOOK_SECRET,
+  },
 };
 
 const normalizeAccount = (account) => (
@@ -128,6 +142,14 @@ const paymentController = {
           content: String(req.body.utm.content || '').slice(0, 100),
           term: String(req.body.utm.term || '').slice(0, 100),
         } : undefined,
+        // Meta Pixel/CAPI: browser sends a shared event_id (for dedup) plus
+        // the _fbp/_fbc cookies. We also capture the real client IP + UA
+        // server-side for better CAPI match quality.
+        metaEventId: req.body.metaEventId ? String(req.body.metaEventId).slice(0, 100) : undefined,
+        metaFbp: req.body.metaFbp ? String(req.body.metaFbp).slice(0, 200) : undefined,
+        metaFbc: req.body.metaFbc ? String(req.body.metaFbc).slice(0, 200) : undefined,
+        metaClientIp: (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket?.remoteAddress || undefined,
+        metaUserAgent: req.headers['user-agent'] ? String(req.headers['user-agent']).slice(0, 400) : undefined,
       });
 
       return res.status(200).json({ orderId: order.id, key: account.key_id, donationId: donation._id });

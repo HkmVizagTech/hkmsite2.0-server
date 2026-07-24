@@ -125,6 +125,15 @@ async function completeDonation({ donationId, orderId, paymentId }) {
   // returned to the caller (the webhook/verify response already succeeded).
   await sendDonationWhatsAppReceipt(donation);
 
+  // Meta Conversions API — server-side Purchase event. Best-effort and
+  // fully isolated: a failure here must never affect payment completion.
+  try {
+    const { sendPurchaseEvent } = require("./metaCapi.service");
+    await sendPurchaseEvent(donation);
+  } catch (e) {
+    console.warn("Meta CAPI purchase event failed (non-fatal):", e && e.message ? e.message : e);
+  }
+
   return donation;
 }
 

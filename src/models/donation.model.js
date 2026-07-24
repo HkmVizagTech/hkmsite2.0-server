@@ -58,6 +58,16 @@ const donationSchema = new mongoose.Schema({
   dccResponse: { type: mongoose.Schema.Types.Mixed },
   whatsappReceiptSentAt: { type: Date },
   whatsappReceiptError: { type: String },
+  // Meta (Facebook) Pixel + Conversions API. Captured at order-creation
+  // from the browser so the server-side Purchase event (fired on payment
+  // completion) can be deduplicated against the browser pixel event
+  // (same metaEventId) and attributed to the right ad click (fbc/fbp).
+  metaEventId: { type: String },
+  metaFbp: { type: String },
+  metaFbc: { type: String },
+  metaClientIp: { type: String },
+  metaUserAgent: { type: String },
+  metaPurchaseSentAt: { type: Date },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "user" }
 }, {
   timestamps: true,
