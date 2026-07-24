@@ -59,7 +59,7 @@ const DCC_SEVA_MAPPINGS = parseJsonEnv("DCC_SEVA_MAPPINGS", []);
 // differ, no code deploy needed to fix.
 const DEFAULT_NAME_BASED_SEVA_MAPPINGS = [
   {
-    sevaNameIncludes: ["annadana", "anna daan", "anna-daan", "annadaan"],
+    sevaNameIncludes: ["annadana", "anna daan", "anna-daan", "annadaan", "sadhu bhojan", "sadhu vaishnav bhojan"],
     sevaCategory: 1,
     sevaSubCategory: 1,
     sevaSubCategoryCode: "ANGE",
@@ -102,15 +102,29 @@ const DEFAULT_NAME_BASED_SEVA_MAPPINGS = [
   },
   {
     sevaNameIncludes: ["gita daan", "gita dan", "bhagavad gita"],
-    sevaCategory: 24,
-    sevaSubCategory: 119,
-    sevaSubCategoryCode: "MNSO-GD",
+    type: ["BD"],
+    sevaCategory: 4,
+    sevaSubCategory: 15,
+    sevaSubCategoryCode: "BD",
+  },
+  {
+    type: ["BD"],
+    sevaCategory: 4,
+    sevaSubCategory: 15,
+    sevaSubCategoryCode: "BD",
   },
   {
     sevaNameIncludes: ["vastra", "alankara"],
-    sevaCategory: 24,
-    sevaSubCategory: 120,
-    sevaSubCategoryCode: "MNSO-V",
+    type: ["GDGD"],
+    sevaCategory: 2,
+    sevaSubCategory: 3,
+    sevaSubCategoryCode: "GDGD",
+  },
+  {
+    type: ["GDGD"],
+    sevaCategory: 2,
+    sevaSubCategory: 3,
+    sevaSubCategoryCode: "GDGD",
   },
 ];
 
