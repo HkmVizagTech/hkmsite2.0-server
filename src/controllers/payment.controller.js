@@ -260,6 +260,45 @@ const paymentController = {
           }
           break;
         }
+        case 'payment.failed': {
+          const payment = event.payload && event.payload.payment && event.payload.payment.entity;
+          if (!payment) break;
+          const orderId = payment.order_id;
+          if (!orderId) break;
+          // Only mark as failed if there's no captured payment on this order
+          // (Razorpay can send payment.failed for one attempt while a retry
+          // succeeds — we don't want to overwrite a completed donation).
+          const donation = await donationModel.findOne({ razorpayOrderId: orderId });
+          if (donation && donation.status === 'pending') {
+            // Check if any other payment on this order was captured
+            try {
+              const created = createRazorpayInstance(donation.paymentAccount);
+              if (created) {
+                const payments = await created.instance.orders.fetchPayments(orderId);
+                const captured = (payments.items || []).find((p) => p.status === 'captured');
+                if (captured) {
+                  // A payment was actually captured — complete it instead of failing
+                  await completeDonation({ orderId, paymentId: captured.id });
+                  console.log('payment.failed webhook but found captured payment for order', orderId);
+                } else {
+                  await donationModel.findByIdAndUpdate(donation._id, {
+                    status: 'failed',
+                    razorpayPaymentId: payment.id,
+                  });
+                  console.log('Donation marked failed for order', orderId);
+                }
+              }
+            } catch (rzpErr) {
+              // If Razorpay check fails, still mark as failed based on the webhook event
+              await donationModel.findByIdAndUpdate(donation._id, {
+                status: 'failed',
+                razorpayPaymentId: payment.id,
+              });
+              console.log('Donation marked failed (Razorpay check failed) for order', orderId);
+            }
+          }
+          break;
+        }
         default:
           console.log('Unhandled event:', event.event);
       }

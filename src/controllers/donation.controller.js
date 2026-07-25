@@ -133,38 +133,49 @@ const donationController = {
     }
   },
 
-  // GET /donations/audit-pending — READ-ONLY reconciliation check.
-  // Fetches every pending seva donation that has a Razorpay order ID,
-  // queries Razorpay for the real payment status, and reports back
-  // WITHOUT modifying any records or triggering any receipts/WhatsApp.
+  // GET /donations/audit-pending — reconciliation check for pending donations.
+  //
+  // Query params:
+  //   ?fix=true    — actually update statuses (captured→completed w/ DCC pipeline,
+  //                  all_failed→failed). Without this, read-only.
+  //   ?scope=all   — include /donations page transactions too (default: exclude them)
+  //   ?limit=100   — max transactions to check (capped at 200)
   //
   // For each transaction reports:
   //   - razorpayStatus: what Razorpay says (captured/failed/created/etc)
   //   - hasReceiptInDB: whether this donation already has a receiptNumber
-  //   - dccSyncStatus: current DCC sync state
-  //   - recommendation: what action (if any) should be taken
+  //   - action: what was done (if fix=true) or what would be done (if read-only)
   auditPending: async (req, res) => {
     try {
       const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 100));
+      const fix = req.query.fix === "true";
+      const scope = req.query.scope || "seva"; // "seva" (default) or "all"
+
+      const baseFilter = {
+        status: "pending",
+        razorpayOrderId: { $exists: true, $ne: null },
+      };
+      // By default exclude /donations page (it has its own admin). scope=all includes everything.
+      if (scope !== "all") {
+        Object.assign(baseFilter, EXCLUDE_DONATIONS_PAGE);
+      }
 
       const pending = await donationModel
-        .find({
-          ...EXCLUDE_DONATIONS_PAGE,
-          status: "pending",
-          razorpayOrderId: { $exists: true, $ne: null },
-        })
+        .find(baseFilter)
         .sort({ createdAt: 1 })
         .limit(limit)
         .lean();
 
+      const { completeDonation } = require("../services/paymentCompletion.service");
+
       const results = [];
       const summary = {
         totalChecked: 0,
+        capturedAndCompleted: 0,
         capturedWithReceipt: 0,
-        capturedWithoutReceipt: 0,
-        genuinelyPending: 0,
+        markedFailed: 0,
         abandoned: 0,
-        failed: 0,
+        genuinelyPending: 0,
         errors: 0,
       };
 
@@ -177,19 +188,18 @@ const donationController = {
           donorMobile: donation.donorMobile,
           amount: donation.amount,
           sevaName: donation.sevaName || donation.type,
+          sourcePage: donation.sourcePage,
           createdAt: donation.createdAt,
           razorpayOrderId: donation.razorpayOrderId,
           paymentAccount: donation.paymentAccount || "default",
-          dbStatus: donation.status,
           hasReceiptInDB: !!(donation.receiptNumber),
           receiptNumber: donation.receiptNumber || null,
           dccSyncStatus: donation.dccSyncStatus || null,
           whatsappSent: !!donation.whatsappReceiptSentAt,
           razorpayPaymentId: donation.razorpayPaymentId || null,
-          // filled below
           razorpayStatus: null,
           razorpayPayments: [],
-          recommendation: null,
+          action: null,
           error: null,
         };
 
@@ -197,7 +207,7 @@ const donationController = {
           const created = createRazorpayInstance(donation.paymentAccount || "default");
           if (!created) {
             entry.error = `Razorpay not configured for account "${donation.paymentAccount || "default"}"`;
-            entry.recommendation = "MANUAL_CHECK — Razorpay keys not available for this account";
+            entry.action = "SKIPPED — no Razorpay keys for this account";
             summary.errors++;
             results.push(entry);
             continue;
@@ -208,7 +218,7 @@ const donationController = {
           entry.razorpayPayments = items.map((p) => ({
             id: p.id,
             status: p.status,
-            amount: p.amount / 100, // Razorpay returns paise
+            amount: p.amount / 100,
             method: p.method,
             captured: p.status === "captured",
             created_at: p.created_at,
@@ -220,43 +230,64 @@ const donationController = {
           if (captured) {
             entry.razorpayStatus = "captured";
             entry.razorpayPaymentId = captured.id;
-            if (entry.hasReceiptInDB) {
-              entry.recommendation = "ALREADY_HAS_RECEIPT — Payment captured, receipt exists. Just needs status update to completed (no new receipt needed).";
-              summary.capturedWithReceipt++;
+
+            if (fix) {
+              if (donation.receiptNumber) {
+                // Already has a receipt — just update status, don't re-run DCC
+                await donationModel.findByIdAndUpdate(donation._id, {
+                  status: "completed",
+                  razorpayPaymentId: captured.id,
+                  transactionId: captured.id,
+                });
+                entry.action = "COMPLETED (status only — receipt already existed)";
+                summary.capturedWithReceipt++;
+              } else {
+                // Full completion pipeline: status + DCC + WhatsApp
+                await completeDonation({ orderId: donation.razorpayOrderId, paymentId: captured.id });
+                entry.action = "COMPLETED (full pipeline — DCC + WhatsApp triggered)";
+                summary.capturedAndCompleted++;
+              }
             } else {
-              entry.recommendation = "NEEDS_COMPLETION — Payment captured but no receipt in DB. Needs completeDonation() to generate receipt + update status.";
-              summary.capturedWithoutReceipt++;
+              entry.action = donation.receiptNumber
+                ? "WOULD_COMPLETE (receipt exists, just needs status update)"
+                : "WOULD_COMPLETE (needs full DCC pipeline)";
+              donation.receiptNumber ? summary.capturedWithReceipt++ : summary.capturedAndCompleted++;
             }
           } else if (items.length === 0) {
             entry.razorpayStatus = "no_payments";
-            entry.recommendation = "ABANDONED — No payment attempts found in Razorpay. Donor likely abandoned checkout.";
+            entry.action = "ABANDONED — no payment attempts in Razorpay";
             summary.abandoned++;
           } else if (failedPayments.length === items.length) {
             entry.razorpayStatus = "all_failed";
-            entry.recommendation = "FAILED — All payment attempts failed. No money was collected.";
-            summary.failed++;
+            if (fix) {
+              await donationModel.findByIdAndUpdate(donation._id, {
+                status: "failed",
+                razorpayPaymentId: failedPayments[0].id,
+              });
+              entry.action = "MARKED_FAILED";
+            } else {
+              entry.action = "WOULD_MARK_FAILED";
+            }
+            summary.markedFailed++;
           } else {
-            // Some other state: authorized but not captured, or still processing
             const statuses = items.map((p) => p.status);
             entry.razorpayStatus = statuses.join(", ");
-            entry.recommendation = `PENDING — Payment attempts in mixed states: ${statuses.join(", ")}. May need manual review.`;
+            entry.action = `NEEDS_REVIEW — mixed states: ${statuses.join(", ")}`;
             summary.genuinelyPending++;
           }
         } catch (err) {
           entry.error = err.message || String(err);
-          entry.recommendation = "ERROR — Could not fetch from Razorpay. Check error details.";
+          entry.action = "ERROR — Razorpay API call failed";
           summary.errors++;
         }
 
         results.push(entry);
-
-        // Stay well within Razorpay rate limits
         await new Promise((resolve) => setTimeout(resolve, 200));
       }
 
       res.status(200).json({
         success: true,
-        message: "READ-ONLY AUDIT — no records were modified",
+        mode: fix ? "FIX — records were updated" : "READ-ONLY — no records modified",
         summary,
         results,
       });
