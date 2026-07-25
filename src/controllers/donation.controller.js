@@ -7,6 +7,131 @@ const { donationModel } = require("../models/donation.model");
 const EXCLUDE_DONATIONS_PAGE = { sourcePage: { $ne: "donations" } };
 
 const donationController = {
+  // GET /donations/stats — real aggregated analytics for the main admin
+  // donations dashboard. Every number comes from the database, nothing
+  // hardcoded. Scoped to seva/campaign donations only (EXCLUDE_DONATIONS_PAGE).
+  stats: async (req, res) => {
+    try {
+      const now = new Date();
+      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+      const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
+      // 12 months ago for the bar chart
+      const twelveMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 11, 1);
+
+      const completedBase = { ...EXCLUDE_DONATIONS_PAGE, status: "completed" };
+
+      const [
+        totalAgg,
+        thisMonthAgg,
+        lastMonthAgg,
+        totalTransactions,
+        donorIdentities,
+        monthlyAgg,
+        sevaAgg,
+      ] = await Promise.all([
+        // Total collected (completed only)
+        donationModel.aggregate([
+          { $match: completedBase },
+          { $group: { _id: null, total: { $sum: "$amount" }, count: { $sum: 1 } } },
+        ]),
+        // This month (completed)
+        donationModel.aggregate([
+          { $match: { ...completedBase, createdAt: { $gte: startOfMonth } } },
+          { $group: { _id: null, total: { $sum: "$amount" } } },
+        ]),
+        // Last month (for % change)
+        donationModel.aggregate([
+          { $match: { ...completedBase, createdAt: { $gte: startOfLastMonth, $lte: endOfLastMonth } } },
+          { $group: { _id: null, total: { $sum: "$amount" } } },
+        ]),
+        // Total transaction count (all statuses)
+        donationModel.countDocuments(EXCLUDE_DONATIONS_PAGE),
+        // Unique donors — union of email + mobile
+        donationModel.aggregate([
+          { $match: completedBase },
+          {
+            $group: {
+              _id: {
+                $cond: [
+                  { $and: [{ $ne: ["$donorEmail", null] }, { $ne: ["$donorEmail", ""] }] },
+                  { $toLower: "$donorEmail" },
+                  { $ifNull: ["$donorMobile", "$$REMOVE"] },
+                ],
+              },
+            },
+          },
+          { $count: "count" },
+        ]),
+        // Monthly donations (last 12 months, completed)
+        donationModel.aggregate([
+          { $match: { ...completedBase, createdAt: { $gte: twelveMonthsAgo } } },
+          {
+            $group: {
+              _id: { year: { $year: "$createdAt" }, month: { $month: "$createdAt" } },
+              amount: { $sum: "$amount" },
+              count: { $sum: 1 },
+            },
+          },
+          { $sort: { "_id.year": 1, "_id.month": 1 } },
+        ]),
+        // Seva-wise split (completed)
+        donationModel.aggregate([
+          { $match: completedBase },
+          {
+            $group: {
+              _id: { $ifNull: [{ $ifNull: ["$sevaName", "$type"] }, "General"] },
+              value: { $sum: "$amount" },
+              count: { $sum: 1 },
+            },
+          },
+          { $sort: { value: -1 } },
+        ]),
+      ]);
+
+      const totalCollected = totalAgg[0]?.total || 0;
+      const totalCount = totalAgg[0]?.count || 0;
+      const thisMonthTotal = thisMonthAgg[0]?.total || 0;
+      const lastMonthTotal = lastMonthAgg[0]?.total || 0;
+      const changePct = lastMonthTotal
+        ? Number((((thisMonthTotal - lastMonthTotal) / lastMonthTotal) * 100).toFixed(1))
+        : null;
+
+      // Format monthly data with readable labels
+      const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      const monthly = monthlyAgg.map((m) => ({
+        month: `${monthNames[m._id.month - 1]} ${m._id.year}`,
+        amount: m.amount,
+        count: m.count,
+      }));
+
+      const sevaWise = sevaAgg.map((s) => ({
+        name: s._id,
+        value: s.value,
+        count: s.count,
+      }));
+
+      // Current month label
+      const currentMonthLabel = `${monthNames[now.getMonth()]} ${now.getFullYear()}`;
+
+      res.status(200).json({
+        success: true,
+        stats: {
+          totalCollected,
+          totalCompletedCount: totalCount,
+          totalTransactions,
+          totalDonors: donorIdentities[0]?.count || 0,
+          thisMonth: { value: thisMonthTotal, changePct, label: currentMonthLabel },
+          monthly,
+          sevaWise,
+        },
+      });
+    } catch (err) {
+      console.error("donation stats error", err);
+      res.status(500).json({ success: false, message: "Failed to fetch stats" });
+    }
+  },
+
   list: async (req, res) => {
     try {
       const { type, status, date, festivalId, festivalSlug, q, from, to, minAmount, maxAmount } = req.query;
