@@ -139,6 +139,7 @@ async function generateReceiptBuffer(donationId) {
   setField("receiptNumber", receiptText);
   setField("amount", `${Number(donation.amount).toLocaleString("en-IN")}/-`);
   setField("transactionNumber", donation.razorpayPaymentId || donation.transactionId || "---");
+  setField("sevakName", donation.sevakName || "---");
 
   form.getFields().forEach((field) => {
     if (field.updateAppearances) field.updateAppearances(font);

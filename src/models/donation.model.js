@@ -27,6 +27,9 @@ const donationSchema = new mongoose.Schema({
   },
   panNumber: { type: String },
   certificate: { type: Boolean, default: false },
+  sevakName: { type: String },
+  sevaDate: { type: String },
+  dob: { type: String },
   wantPrasadam: { type: Boolean, default: false },
   prasadamAddress: {
     doorNo: String,
