@@ -8,6 +8,7 @@ donationRouter.post("/", donationController.create);
 
 donationRouter.get("/", authMiddleware, adminMiddleware, donationController.list);
 donationRouter.get("/stats", authMiddleware, adminMiddleware, donationController.stats);
+donationRouter.get("/audit-pending", authMiddleware, adminMiddleware, donationController.auditPending);
 donationRouter.get("/whatsapp-audit", authMiddleware, adminMiddleware, donationController.whatsappAudit);
 donationRouter.get("/:id", authMiddleware, adminMiddleware, donationController.get);
 donationRouter.post("/:id/resend-receipt", authMiddleware, adminMiddleware, donationController.resendReceipt);
