@@ -71,7 +71,24 @@ app.use(compression());
 
 app.use(cookieParser());
 
-app.use(express.json({ limit: '10mb' })); // increased for rich CKEditor HTML payloads
+// Razorpay webhooks MUST receive the raw request body so the route-level
+// express.raw() can hand the controller an untouched Buffer for HMAC
+// signature verification. If the global express.json() below runs first,
+// it consumes the stream and sets req.body to a parsed OBJECT — the
+// controller then hashes "[object Object]" instead of the real payload and
+// EVERY webhook fails signature validation (400 Invalid signature). That is
+// exactly what got the live webhook disabled by Razorpay. Skipping these
+// paths here lets the per-route express.raw() in payment.routes.js win.
+const WEBHOOK_PATHS = new Set([
+  "/payments/webhook",
+  "/payments/webhook/donations",
+  "/payments/webhook/touchstone",
+]);
+const globalJson = express.json({ limit: '10mb' }); // increased for rich CKEditor HTML payloads
+app.use((req, res, next) => {
+  if (WEBHOOK_PATHS.has(req.path)) return next();
+  return globalJson(req, res, next);
+});
 
 app.use("/payments", paymentRouter);
 app.use("/users", userRouter);
