@@ -297,6 +297,88 @@ const donationController = {
     }
   },
 
+  // GET /donations/utm-stats — sitewide campaign/source/medium metrics
+  // across ALL seva/campaign donation flows (excludes the standalone
+  // /donations page, which has its own dedicated stats at /donations-admin).
+  getUtmStats: async (req, res) => {
+    try {
+      const stats = await donationModel.aggregate([
+        { ...{ $match: { ...EXCLUDE_DONATIONS_PAGE, status: "completed" } } },
+        {
+          $group: {
+            _id: {
+              campaign: { $ifNull: ["$utm.campaign", ""] },
+              source: { $ifNull: ["$utm.source", ""] },
+              medium: { $ifNull: ["$utm.medium", ""] },
+            },
+            totalAmount: { $sum: "$amount" },
+            count: { $sum: 1 },
+          },
+        },
+        {
+          $project: {
+            _id: {
+              campaign: { $cond: [{ $eq: ["$_id.campaign", ""] }, "direct", "$_id.campaign"] },
+              source: { $cond: [{ $eq: ["$_id.source", ""] }, "direct", "$_id.source"] },
+              medium: { $cond: [{ $eq: ["$_id.medium", ""] }, "none", "$_id.medium"] },
+            },
+            totalAmount: 1,
+            count: 1,
+          },
+        },
+        { $sort: { totalAmount: -1 } },
+      ]);
+
+      // Also break down by sourcePage, since sitewide spans 9 different
+      // origin flows (unlike the single-page /donations-admin equivalent).
+      const bySourcePage = await donationModel.aggregate([
+        { $match: { ...EXCLUDE_DONATIONS_PAGE, status: "completed" } },
+        {
+          $group: {
+            _id: { $ifNull: ["$sourcePage", "unknown"] },
+            totalAmount: { $sum: "$amount" },
+            count: { $sum: 1 },
+          },
+        },
+        { $sort: { totalAmount: -1 } },
+      ]);
+
+      res.status(200).json({
+        success: true,
+        stats,
+        bySourcePage: bySourcePage.map((r) => ({ sourcePage: r._id, totalAmount: r.totalAmount, count: r.count })),
+      });
+    } catch (error) {
+      console.error("donation.getUtmStats error:", error);
+      res.status(500).json({ success: false, message: "Failed to fetch UTM stats" });
+    }
+  },
+
+  // GET /donations/utm-transactions?campaign=&source=&medium=&sourcePage=
+  // Drill-down: real transaction list for one specific campaign/page row.
+  getUtmTransactions: async (req, res) => {
+    try {
+      const { campaign, source, medium, sourcePage } = req.query;
+      const match = { ...EXCLUDE_DONATIONS_PAGE, status: "completed" };
+      if (campaign) match["utm.campaign"] = campaign === "direct" ? { $in: [null, ""] } : campaign;
+      if (source) match["utm.source"] = source === "direct" ? { $in: [null, ""] } : source;
+      if (medium) match["utm.medium"] = medium === "none" ? { $in: [null, ""] } : medium;
+      if (sourcePage) match["sourcePage"] = sourcePage === "unknown" ? { $in: [null, ""] } : sourcePage;
+
+      const transactions = await donationModel
+        .find(match)
+        .sort({ createdAt: -1 })
+        .limit(200)
+        .select("donorName donorEmail donorMobile amount status createdAt sourcePage utm receiptNumber razorpayPaymentId sevaName type")
+        .lean();
+
+      res.status(200).json({ success: true, count: transactions.length, transactions });
+    } catch (error) {
+      console.error("donation.getUtmTransactions error:", error);
+      res.status(500).json({ success: false, message: "Failed to fetch UTM transactions" });
+    }
+  },
+
   list: async (req, res) => {
     try {
       const { type, status, date, festivalId, festivalSlug, q, from, to, minAmount, maxAmount } = req.query;
