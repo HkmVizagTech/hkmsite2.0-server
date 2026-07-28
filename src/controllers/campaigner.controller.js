@@ -33,15 +33,19 @@ const slugify = (name) =>
     .slice(0, 60) || "campaigner";
 
 const campaignerController = {
-  // PUBLIC — register as a Square Foot Seva campaigner.
-  // Idempotent on email: registering again with the same email returns the
-  // existing campaign link instead of creating a duplicate.
+  // PUBLIC — register as a campaigner (SQFT or JANMASHTAMI).
+  // APPROVAL-FIRST: new registrations are created with status "pending";
+  // the campaign link only goes live after an admin approves. Idempotent
+  // on email+campaignType: re-registering returns the existing record's
+  // state (pending → "awaiting approval", active → the live link).
   register: async (req, res) => {
     try {
       const name = String(req.body.name || "").trim();
       const email = String(req.body.email || "").trim().toLowerCase();
       const mobile = String(req.body.mobile || "").trim();
       const message = String(req.body.message || "").trim().slice(0, 300);
+      const campaignType = req.body.campaignType === "JANMASHTAMI" ? "JANMASHTAMI" : "SQFT";
+      const devoteeId = String(req.body.devoteeId || "").trim();
       let goalSqft = Number(req.body.goalSqft) || 0;
       goalSqft = Math.max(0, Math.min(100000, Math.floor(goalSqft)));
 
@@ -51,11 +55,24 @@ const campaignerController = {
       if (!/^[0-9+\-\s]{8,15}$/.test(mobile))
         return res.status(400).json({ message: "Please provide a valid mobile number." });
 
-      const existing = await campaignerModel.findOne({ email }).lean();
+      // Validate the selected devotee (required for new registrations —
+      // it drives DCC receipt attribution).
+      let referredByDevotee = null;
+      if (devoteeId) {
+        const { templeDevoteeModel } = require("../models/templeDevotee.model");
+        const devotee = await templeDevoteeModel.findOne({ _id: devoteeId, status: "active" }).lean();
+        if (!devotee) return res.status(400).json({ message: "Please select a valid devotee from the list." });
+        referredByDevotee = devotee._id;
+      } else {
+        return res.status(400).json({ message: "Please select the devotee you know from the list." });
+      }
+
+      const existing = await campaignerModel.findOne({ email, campaignType }).lean();
       if (existing) {
         return res.status(200).json({
           existing: true,
-          campaigner: { name: existing.name, slug: existing.slug, goalSqft: existing.goalSqft },
+          status: existing.status,
+          campaigner: { name: existing.name, slug: existing.slug, goalSqft: existing.goalSqft, status: existing.status },
         });
       }
 
@@ -69,11 +86,15 @@ const campaignerController = {
         slug = `${base}-${n}`;
       }
 
-      const campaigner = await campaignerModel.create({ name, email, mobile, slug, goalSqft, message });
+      const campaigner = await campaignerModel.create({
+        name, email, mobile, slug, goalSqft, message, campaignType, referredByDevotee,
+        status: "pending",
+      });
 
       res.status(201).json({
         existing: false,
-        campaigner: { name: campaigner.name, slug: campaigner.slug, goalSqft: campaigner.goalSqft },
+        status: "pending",
+        campaigner: { name: campaigner.name, slug: campaigner.slug, goalSqft: campaigner.goalSqft, status: "pending" },
       });
     } catch (err) {
       console.error("campaigner.register error:", err);
@@ -127,7 +148,7 @@ const campaignerController = {
     try {
       const price = PRICE_PER_SQFT();
       const [campaigners, totals] = await Promise.all([
-        campaignerModel.find().sort({ createdAt: -1 }).lean(),
+        campaignerModel.find().sort({ createdAt: -1 }).populate("referredByDevotee", "name dccEnrolledById").lean(),
         donationModel.aggregate([
           { $match: { status: "completed", campaignerSlug: { $exists: true, $ne: null } } },
           {
@@ -149,6 +170,8 @@ const campaignerController = {
           email: c.email,
           mobile: c.mobile,
           slug: c.slug,
+          campaignType: c.campaignType || "SQFT",
+          referredByDevotee: c.referredByDevotee ? { _id: c.referredByDevotee._id, name: c.referredByDevotee.name } : null,
           goalSqft: c.goalSqft || 0,
           message: c.message || "",
           status: c.status,
@@ -164,10 +187,11 @@ const campaignerController = {
     }
   },
 
-  // ADMIN — show/hide a campaigner's public page.
+  // ADMIN — approve (pending→active), hide, or re-activate a campaigner.
   updateStatus: async (req, res) => {
     try {
-      const status = req.body.status === "hidden" ? "hidden" : "active";
+      const allowed = ["pending", "active", "hidden"];
+      const status = allowed.includes(req.body.status) ? req.body.status : "active";
       const campaigner = await campaignerModel.findByIdAndUpdate(
         req.params.id,
         { status },

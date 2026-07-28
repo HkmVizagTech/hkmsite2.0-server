@@ -203,6 +203,13 @@ const isSpecialEnrolledByDonation = (donation) => (
 );
 
 const resolveEnrolledBy = (donation) => {
+  // Campaigner-attributed donations carry a snapshot of the referring
+  // temple devotee's DCC ID — that wins over all env-based defaults so
+  // the receipt is raised under that devotee.
+  if (donation && Number.isFinite(Number(donation.dccEnrolledById)) && donation.dccEnrolledById != null) {
+    return Number(donation.dccEnrolledById);
+  }
+
   if (isSpecialEnrolledByDonation(donation)) {
     return Number(
       process.env.DCC_ENROLLED_BY_DONATIONS_AND_JANMASHTAMI ||

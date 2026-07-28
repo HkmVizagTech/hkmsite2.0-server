@@ -104,6 +104,7 @@ app.use("/devotees", devoteeRouter);
 app.use("/site-content", siteContentRouter);
 app.use("/hero-banners", heroBannerRouter);
 app.use("/campaigners", campaignerRouter);
+app.use("/temple-devotees", require("./src/routes/templeDevotee.routes").templeDevoteeRouter);
 app.use("/media", mediaRouter);
 app.use("/seva-stats", sevaStatsRouter);
 

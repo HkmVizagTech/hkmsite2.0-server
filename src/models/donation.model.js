@@ -17,7 +17,12 @@ const donationSchema = new mongoose.Schema({
   transactionId: { type: String },
   festivalId: { type: mongoose.Schema.Types.ObjectId, ref: "festivalDonation" },
   festivalSlug: { type: String },
-  campaignerSlug: { type: String, index: true }, // P2P Square Foot Seva attribution
+  campaignerSlug: { type: String, index: true }, // P2P campaign attribution (SQFT, Janmashtami, ...)
+  // Snapshot of the DCC enrolledBy ID for the temple devotee this donation
+  // is attributed to (via the campaigner's selected devotee), captured at
+  // order-creation time. When present, DCC sync uses this instead of the
+  // env-based defaults, so the receipt is raised under that devotee.
+  dccEnrolledById: { type: Number, default: null },
   utm: {
     source: { type: String, default: "" },
     medium: { type: String, default: "" },

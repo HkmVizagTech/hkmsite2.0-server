@@ -138,6 +138,24 @@ const paymentController = {
         prasadamAddress: prasadamAddress || req.body.prasadamAddress,
         festivalSlug: req.body.festivalSlug || undefined,
         campaignerSlug: req.body.campaignerSlug || undefined,
+        // Attribute the donation to the campaigner's selected temple devotee
+        // for DCC receipt purposes — snapshot the devotee's enrolledBy ID now
+        // so later devotee edits don't retroactively change attribution.
+        dccEnrolledById: await (async () => {
+          if (!req.body.campaignerSlug) return undefined;
+          try {
+            const { campaignerModel } = require('../models/campaigner.model');
+            const camp = await campaignerModel
+              .findOne({ slug: String(req.body.campaignerSlug), status: 'active' })
+              .populate('referredByDevotee', 'dccEnrolledById')
+              .lean();
+            const id = camp?.referredByDevotee?.dccEnrolledById;
+            return Number.isFinite(Number(id)) && id != null ? Number(id) : undefined;
+          } catch (e) {
+            console.warn('campaigner devotee lookup failed:', e.message);
+            return undefined;
+          }
+        })(),
         festivalId: resolvedFestivalId,
         razorpayOrderId: order.id,
         status: 'pending',
