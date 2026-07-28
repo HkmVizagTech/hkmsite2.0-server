@@ -126,6 +126,37 @@ const DEFAULT_NAME_BASED_SEVA_MAPPINGS = [
     sevaSubCategory: 3,
     sevaSubCategoryCode: "GDGD",
   },
+  // ---- Janmashtami festival sevas (PLACEHOLDER CODES) ----
+  // Annadana and Go Seva tiers on the Janmashtami page already match the
+  // real ANGE/GOSE mappings above via sevaNameIncludes. The four below have
+  // no confirmed DCC codes yet — these are clearly-marked placeholders so
+  // each seva is at least distinctly coded instead of falling through to
+  // the generic DEFAULT_SEVA_MAPPING. Replace with real codes via the
+  // DCC_SEVA_MAPPINGS env var (no deploy needed) once DCC confirms them.
+  {
+    sevaNameIncludes: ["makhan mishri", "makhan-mishri"],
+    sevaCategory: 2,
+    sevaSubCategory: 4,
+    sevaSubCategoryCode: "JNMM", // PLACEHOLDER — confirm with DCC
+  },
+  {
+    sevaNameIncludes: ["abhisheka", "abhishek"],
+    sevaCategory: 2,
+    sevaSubCategory: 5,
+    sevaSubCategoryCode: "JNAB", // PLACEHOLDER — confirm with DCC
+  },
+  {
+    sevaNameIncludes: ["tulasi archana", "tulasi-archana", "tulsi archana"],
+    sevaCategory: 2,
+    sevaSubCategory: 6,
+    sevaSubCategoryCode: "JNTA", // PLACEHOLDER — confirm with DCC
+  },
+  {
+    sevaNameIncludes: ["pushpalankara", "pushpa alankara", "pushpanjali"],
+    sevaCategory: 2,
+    sevaSubCategory: 7,
+    sevaSubCategoryCode: "JNPA", // PLACEHOLDER — confirm with DCC
+  },
 ];
 
 const formatDateForDcc = (value) => {
