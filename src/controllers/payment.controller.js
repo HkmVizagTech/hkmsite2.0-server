@@ -62,6 +62,65 @@ const verifySignature = ({ orderId, paymentId, signature, keySecret }) => {
   return expected === signature;
 };
 
+// Inline processor for webhook events, used when the Redis queue is
+// unavailable (unreachable, timing out, or not provisioned). Identical
+// semantics to worker/paymentWorker.js.
+async function processWebhookEventInline(event) {
+  switch (event.event) {
+    case 'payment.captured': {
+      const payment = event.payload && event.payload.payment && event.payload.payment.entity;
+      if (!payment) break;
+      const orderId = payment.order_id;
+      const completedDonation = await completeDonation({ orderId, paymentId: payment.id });
+      if (completedDonation) {
+        console.log('Donation marked completed for order', orderId);
+      } else {
+        console.warn('Donation not found for order:', orderId);
+      }
+      break;
+    }
+    case 'payment.failed': {
+      const payment = event.payload && event.payload.payment && event.payload.payment.entity;
+      if (!payment) break;
+      const orderId = payment.order_id;
+      if (!orderId) break;
+      // Only mark as failed if there's no captured payment on this order
+      // (Razorpay can send payment.failed for one attempt while a retry
+      // succeeds — we don't want to overwrite a completed donation).
+      const donation = await donationModel.findOne({ razorpayOrderId: orderId });
+      if (donation && donation.status === 'pending') {
+        try {
+          const created = createRazorpayInstance(donation.paymentAccount);
+          if (created) {
+            const payments = await created.instance.orders.fetchPayments(orderId);
+            const captured = (payments.items || []).find((p) => p.status === 'captured');
+            if (captured) {
+              await completeDonation({ orderId, paymentId: captured.id });
+              console.log('payment.failed webhook but found captured payment for order', orderId);
+            } else {
+              await donationModel.findByIdAndUpdate(donation._id, {
+                status: 'failed',
+                razorpayPaymentId: payment.id,
+              });
+              console.log('Donation marked failed for order', orderId);
+            }
+          }
+        } catch (rzpErr) {
+          // If Razorpay check fails, still mark as failed based on the webhook event
+          await donationModel.findByIdAndUpdate(donation._id, {
+            status: 'failed',
+            razorpayPaymentId: payment.id,
+          });
+          console.log('Donation marked failed (Razorpay check failed) for order', orderId);
+        }
+      }
+      break;
+    }
+    default:
+      console.log('Unhandled event:', event.event);
+  }
+}
+
 const paymentController = {
   createOrder: async (req, res) => {
     try {
@@ -255,76 +314,36 @@ const paymentController = {
       const event = JSON.parse(body);
       console.log(`Webhook Event [${accountName}]:`, event.event);
 
-      try {
-        await enqueueJob('payments:jobs', { event: event.event, payload: event.payload, receivedAt: Date.now() });
-        return res.status(200).send('Webhook enqueued');
-      } catch (enqueueErr) {
-        console.warn('Failed to enqueue webhook job, falling back to inline processing', enqueueErr && enqueueErr.message ? enqueueErr.message : enqueueErr);
-      }
+      // CRITICAL: respond to Razorpay IMMEDIATELY after signature
+      // verification. Razorpay's delivery timeout is short; any slow work
+      // here (Redis enqueue to an unreachable server hangs indefinitely
+      // with node-redis's default infinite reconnect) reads as delivery
+      // failure and gets the webhook auto-disabled after 24h of retries —
+      // which has now happened twice. All processing happens after the
+      // response; failures there are logged and recoverable via the
+      // /donations/audit-pending reconciliation endpoint.
+      res.status(200).send('Webhook received');
 
-      switch (event.event) {
-        case 'payment.captured': {
-          const payment = event.payload && event.payload.payment && event.payload.payment.entity;
-          if (!payment) break;
-          const orderId = payment.order_id;
-          const completedDonation = await completeDonation({
-            orderId,
-            paymentId: payment.id,
-          });
-          if (completedDonation) {
-            console.log('Donation marked completed for order', orderId);
-          } else {
-            console.warn('Donation not found for order:', orderId);
-          }
-          break;
+      setImmediate(async () => {
+        try {
+          // Bound the enqueue — never trust Redis to fail fast.
+          await Promise.race([
+            enqueueJob('payments:jobs', { event: event.event, payload: event.payload, receivedAt: Date.now() }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('enqueue timeout (2s)')), 2000)),
+          ]);
+          return; // worker will process it
+        } catch (enqueueErr) {
+          console.warn('Failed to enqueue webhook job, falling back to inline processing:', enqueueErr && enqueueErr.message ? enqueueErr.message : enqueueErr);
         }
-        case 'payment.failed': {
-          const payment = event.payload && event.payload.payment && event.payload.payment.entity;
-          if (!payment) break;
-          const orderId = payment.order_id;
-          if (!orderId) break;
-          // Only mark as failed if there's no captured payment on this order
-          // (Razorpay can send payment.failed for one attempt while a retry
-          // succeeds — we don't want to overwrite a completed donation).
-          const donation = await donationModel.findOne({ razorpayOrderId: orderId });
-          if (donation && donation.status === 'pending') {
-            // Check if any other payment on this order was captured
-            try {
-              const created = createRazorpayInstance(donation.paymentAccount);
-              if (created) {
-                const payments = await created.instance.orders.fetchPayments(orderId);
-                const captured = (payments.items || []).find((p) => p.status === 'captured');
-                if (captured) {
-                  // A payment was actually captured — complete it instead of failing
-                  await completeDonation({ orderId, paymentId: captured.id });
-                  console.log('payment.failed webhook but found captured payment for order', orderId);
-                } else {
-                  await donationModel.findByIdAndUpdate(donation._id, {
-                    status: 'failed',
-                    razorpayPaymentId: payment.id,
-                  });
-                  console.log('Donation marked failed for order', orderId);
-                }
-              }
-            } catch (rzpErr) {
-              // If Razorpay check fails, still mark as failed based on the webhook event
-              await donationModel.findByIdAndUpdate(donation._id, {
-                status: 'failed',
-                razorpayPaymentId: payment.id,
-              });
-              console.log('Donation marked failed (Razorpay check failed) for order', orderId);
-            }
-          }
-          break;
+        try {
+          await processWebhookEventInline(event);
+        } catch (procErr) {
+          console.error('Inline webhook processing error:', procErr && procErr.stack ? procErr.stack : procErr);
         }
-        default:
-          console.log('Unhandled event:', event.event);
-      }
-
-      return res.status(200).send('Webhook processed');
+      });
     } catch (error) {
       console.error('webhook error', error && error.stack ? error.stack : error);
-      return res.status(500).send('Webhook error');
+      if (!res.headersSent) return res.status(500).send('Webhook error');
     }
   },
   // POST /payments/reconcile/:donationId — admin-only manual recovery for a
