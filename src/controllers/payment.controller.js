@@ -1,6 +1,7 @@
 const Razorpay = require('razorpay');
 const crypto = require('crypto');
 const { donationModel } = require('../models/donation.model');
+const { planModel } = require('../models/plan.model');
 const { enqueueJob } = require('../redis/redisClient');
 const { completeDonation } = require('../services/paymentCompletion.service');
 
@@ -114,6 +115,21 @@ async function processWebhookEventInline(event) {
           console.log('Donation marked failed (Razorpay check failed) for order', orderId);
         }
       }
+      break;
+    }
+    case 'subscription.activated': {
+      const sub = event.payload && event.payload.subscription && event.payload.subscription.entity;
+      if (sub) await donationModel.findOneAndUpdate({ subscriptionId: sub.id }, { status: 'active' });
+      break;
+    }
+    case 'subscription.cancelled': {
+      const sub = event.payload && event.payload.subscription && event.payload.subscription.entity;
+      if (sub) await donationModel.updateMany({ subscriptionId: sub.id, isRecurring: true, status: { $nin: ['completed', 'cancelled'] } }, { status: 'cancelled' });
+      break;
+    }
+    case 'subscription.completed': {
+      const sub = event.payload && event.payload.subscription && event.payload.subscription.entity;
+      if (sub) await donationModel.findOneAndUpdate({ subscriptionId: sub.id, isRecurring: true, status: 'active' }, { status: 'completed' });
       break;
     }
     default:
@@ -251,34 +267,149 @@ const paymentController = {
     }
   },
 
+  // POST /payments/subscription — monthly autopay. Creates a Razorpay Plan
+  // for the chosen amount, then a Subscription the donor authorises once via
+  // checkout. Razorpay then auto-charges every month. The first charge is
+  // confirmed through verifyPayment (subscription-aware); subsequent monthly
+  // charges arrive as `subscription.charged` webhook events.
+  // NOTE: requires the Subscriptions feature to be enabled on the Razorpay
+  // account and API keys with subscription access.
+  createSubscription: async (req, res) => {
+    try {
+      const {
+        name, email, mobile, amount, certificate, panNumber,
+        sourcePage, sevaName, sevaUnitLabel,
+      } = req.body;
+
+      if (!amount || Number(amount) < 1) {
+        return res.status(400).send('Invalid amount');
+      }
+
+      const razorpay = createRazorpayInstance(req.body.account);
+      if (!razorpay) return res.status(500).json({ message: 'Razorpay keys not configured on server' });
+      const { account, instance } = razorpay;
+
+      const amountPaise = Math.round(Number(amount) * 100);
+      // Number of monthly billing cycles. Razorpay requires a finite count;
+      // 120 (10 years) is effectively "until the donor cancels". Override via
+      // SUBSCRIPTION_TOTAL_COUNT if a different horizon is desired.
+      const totalCount = Number(process.env.SUBSCRIPTION_TOTAL_COUNT || 120);
+
+      // 1) Reuse an existing Razorpay Plan for this amount+account, or create
+      // one. Creating a plan per subscription would accumulate thousands of
+      // duplicate plans on the Razorpay dashboard.
+      let planId;
+      const existingPlan = await planModel.findOne({ amount: Number(amount), account: account.name });
+      if (existingPlan) {
+        planId = existingPlan.planId;
+      } else {
+        const newPlan = await instance.plans.create({
+          period: 'monthly',
+          interval: 1,
+          item: {
+            name: String(sevaName || 'Monthly Seva').slice(0, 250),
+            amount: amountPaise,
+            currency: 'INR',
+          },
+          notes: { sevaName: sevaName || '', sourcePage: sourcePage || '' },
+        });
+        planId = newPlan.id;
+        await planModel.create({ amount: Number(amount), account: account.name, planId });
+      }
+
+      // 2) A subscription on that plan for the donor to authorise.
+      // customer_notify: 0 — we send our own WhatsApp receipt; Razorpay
+      // emails/SMS would double-notify the donor.
+      const subscription = await instance.subscriptions.create({
+        plan_id: planId,
+        total_count: totalCount,
+        quantity: 1,
+        customer_notify: 0,
+        notes: {
+          sourcePage: sourcePage || '',
+          sevaName: sevaName || '',
+          sevaUnitLabel: sevaUnitLabel || '',
+        },
+      });
+
+      // 3) A pending donation record for the first charge, flagged recurring.
+      const donation = await donationModel.create({
+        donorName: name || req.body.donorName || 'Anonymous',
+        donorEmail: email || req.body.donorEmail,
+        donorMobile: mobile || req.body.donorMobile,
+        amount,
+        type: req.body.type,
+        sourcePage,
+        sevaName,
+        paymentAccount: account.name,
+        panNumber: panNumber || req.body.panNumber,
+        certificate: certificate || req.body.certificate,
+        subscriptionId: subscription.id,
+        isRecurring: true,
+        status: 'pending',
+        campaignerSlug: req.body.campaignerSlug || undefined,
+        utm: req.body.utm && typeof req.body.utm === 'object' ? {
+          source: String(req.body.utm.source || '').slice(0, 100),
+          medium: String(req.body.utm.medium || '').slice(0, 100),
+          campaign: String(req.body.utm.campaign || '').slice(0, 100),
+          content: String(req.body.utm.content || '').slice(0, 100),
+          term: String(req.body.utm.term || '').slice(0, 100),
+        } : undefined,
+      });
+
+      return res.status(200).json({
+        subscriptionId: subscription.id,
+        key: account.key_id,
+        donationId: donation._id,
+      });
+    } catch (err) {
+      let errStr = '';
+      try { errStr = JSON.stringify(err, Object.getOwnPropertyNames(err)); } catch (e) { errStr = String(err); }
+      console.error('createSubscription error', errStr);
+      const razorpayStatus = err && err.statusCode ? err.statusCode : undefined;
+      const razorpayBody = err && err.error ? err.error : undefined;
+      return res.status(500).json({ message: 'Failed to create subscription', error: err && err.message ? err.message : errStr, razorpayStatus, razorpayBody });
+    }
+  },
+
   verifyPayment: async (req, res) => {
     try {
-      const { razorpay_order_id, razorpay_payment_id, razorpay_signature, donationId } = req.body;
-      if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+      const {
+        razorpay_order_id, razorpay_payment_id, razorpay_signature,
+        razorpay_subscription_id, donationId,
+      } = req.body;
+      if (!razorpay_payment_id || !razorpay_signature) {
+        return res.status(400).json({ message: 'Payment verification details missing' });
+      }
+      const isSubscription = !!razorpay_subscription_id;
+      if (!isSubscription && !razorpay_order_id) {
         return res.status(400).json({ message: 'Payment verification details missing' });
       }
 
       const query = donationId
-        ? { _id: donationId, razorpayOrderId: razorpay_order_id }
-        : { razorpayOrderId: razorpay_order_id };
+        ? { _id: donationId }
+        : isSubscription
+          ? { subscriptionId: razorpay_subscription_id }
+          : { razorpayOrderId: razorpay_order_id };
       const donation = await donationModel.findOne(query);
       if (!donation) return res.status(404).json({ message: 'Donation not found' });
 
       const account = resolveAccount(donation.paymentAccount);
       if (!account.key_secret) return res.status(500).json({ message: 'Razorpay keys not configured on server' });
 
-      const valid = verifySignature({
-        orderId: razorpay_order_id,
-        paymentId: razorpay_payment_id,
-        signature: razorpay_signature,
-        keySecret: account.key_secret,
-      });
-
-      if (!valid) return res.status(400).json({ message: 'Invalid payment signature' });
+      // Subscriptions sign as payment_id|subscription_id; one-time orders as
+      // order_id|payment_id.
+      const signedBody = isSubscription
+        ? `${razorpay_payment_id}|${razorpay_subscription_id}`
+        : `${razorpay_order_id}|${razorpay_payment_id}`;
+      const expected = crypto.createHmac('sha256', account.key_secret).update(signedBody).digest('hex');
+      if (expected !== razorpay_signature) {
+        return res.status(400).json({ message: 'Invalid payment signature' });
+      }
 
       const updated = await completeDonation({
         donationId: donation._id,
-        orderId: razorpay_order_id,
+        orderId: isSubscription ? undefined : razorpay_order_id,
         paymentId: razorpay_payment_id,
       });
 

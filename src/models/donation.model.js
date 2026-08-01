@@ -8,7 +8,7 @@ const donationSchema = new mongoose.Schema({
   amount: { type: Number, required: true },
   date: { type: Date, default: Date.now },
   type: { type: String, default: "General" }, // e.g., "Anna Daan", "Seva", etc.
-  status: { type: String, enum: ["pending", "completed", "failed"], default: "pending" },
+  status: { type: String, enum: ["pending", "active", "completed", "failed", "cancelled"], default: "pending" },
   message: { type: String },
   sourcePage: { type: String },
   sevaName: { type: String },
@@ -50,6 +50,7 @@ const donationSchema = new mongoose.Schema({
   razorpayPaymentId: { type: String },
   subscriptionId: { type: String },
   isRecurring: { type: Boolean, default: false },
+  lastPaymentDate: { type: Date },
   receiptNumber: { type: String },
   receiptGeneratedAt: { type: Date },
   dccSyncStatus: { type: String, enum: ["pending", "syncing", "synced", "failed"], default: "pending" },

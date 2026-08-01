@@ -5,6 +5,7 @@ const { authMiddleware, adminMiddleware } = require('../middlewares/auth.middlew
 const paymentRouter = express.Router();
 
 paymentRouter.post('/order', express.json(), paymentController.createOrder);
+paymentRouter.post('/subscription', express.json(), paymentController.createSubscription);
 paymentRouter.post('/verify', express.json(), paymentController.verifyPayment);
 
 // Three distinct URLs, one per Razorpay account -- each account's own
