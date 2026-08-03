@@ -1,3 +1,4 @@
+const { connectDb } = require('../src/config/db');
 const { popJob } = require('../src/redis/redisClient');
 const { completeDonation } = require('../src/services/paymentCompletion.service');
 const { donationModel } = require('../src/models/donation.model');
@@ -154,6 +155,7 @@ async function processJob(job) {
 }
 
 async function run() {
+  await connectDb();
   console.log('Payment worker started, listening to', QUEUE);
   while (true) {
     try {
