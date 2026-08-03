@@ -22,6 +22,17 @@ const donationController = {
 
       const completedBase = { ...EXCLUDE_DONATIONS_PAGE, status: "completed" };
 
+      // Completed donations where DCC sync failed or WhatsApp receipt wasn't sent
+      const needsAttentionFilter = {
+        ...EXCLUDE_DONATIONS_PAGE,
+        status: "completed",
+        $or: [
+          { dccSyncStatus: "failed" },
+          { whatsappReceiptSentAt: { $exists: false } },
+          { whatsappReceiptSentAt: null },
+        ],
+      };
+
       const [
         totalAgg,
         thisMonthAgg,
@@ -30,6 +41,7 @@ const donationController = {
         donorIdentities,
         monthlyAgg,
         sevaAgg,
+        needsAttentionCount,
       ] = await Promise.all([
         // Total collected (completed only)
         donationModel.aggregate([
@@ -88,6 +100,7 @@ const donationController = {
           },
           { $sort: { value: -1 } },
         ]),
+        donationModel.countDocuments(needsAttentionFilter),
       ]);
 
       const totalCollected = totalAgg[0]?.total || 0;
@@ -123,6 +136,7 @@ const donationController = {
           totalTransactions,
           totalDonors: donorIdentities[0]?.count || 0,
           thisMonth: { value: thisMonthTotal, changePct, label: currentMonthLabel },
+          needsAttentionCount,
           monthly,
           sevaWise,
         },
@@ -384,7 +398,16 @@ const donationController = {
       const { type, status, date, festivalId, festivalSlug, q, from, to, minAmount, maxAmount } = req.query;
       let filter = { ...EXCLUDE_DONATIONS_PAGE };
       if (type) filter.type = type;
-      if (status && status !== 'all') filter.status = status;
+      if (status === 'needs_attention') {
+        filter.status = 'completed';
+        filter.$or = [
+          { dccSyncStatus: 'failed' },
+          { whatsappReceiptSentAt: { $exists: false } },
+          { whatsappReceiptSentAt: null },
+        ];
+      } else if (status && status !== 'all') {
+        filter.status = status;
+      }
       if (date) {
         const start = new Date(date);
         const end = new Date(date);
@@ -406,7 +429,13 @@ const donationController = {
       if (maxAmount) filter.amount = Object.assign({}, filter.amount, { $lte: Number(maxAmount) });
       if (q) {
         const re = new RegExp(String(q), 'i');
-        filter.$or = [ { donorName: re }, { donorEmail: re }, { donorMobile: re }, { transactionId: re }, { razorpayOrderId: re } ];
+        const searchOr = [ { donorName: re }, { donorEmail: re }, { donorMobile: re }, { transactionId: re }, { razorpayOrderId: re } ];
+        if (filter.$or) {
+          filter.$and = [{ $or: filter.$or }, { $or: searchOr }];
+          delete filter.$or;
+        } else {
+          filter.$or = searchOr;
+        }
       }
 
       const page = Math.max(1, parseInt(req.query.page || '1', 10));

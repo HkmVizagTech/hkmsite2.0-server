@@ -33,7 +33,19 @@ const donationAdminController = {
 
       const baseMatch = { ...DONATIONS_PAGE_FILTER, status: { $in: SUCCESS_STATUSES } };
 
-      const [totalAgg, lastMonthAgg, thisMonthAgg, todayAgg, donorEmails] = await Promise.all([
+      const needsAttentionFilter = {
+        $and: [
+          DONATIONS_PAGE_FILTER,
+          { status: "completed" },
+          { $or: [
+            { dccSyncStatus: "failed" },
+            { whatsappReceiptSentAt: { $exists: false } },
+            { whatsappReceiptSentAt: null },
+          ]},
+        ],
+      };
+
+      const [totalAgg, lastMonthAgg, thisMonthAgg, todayAgg, donorEmails, needsAttentionCount] = await Promise.all([
         donationModel.aggregate([
           { $match: baseMatch },
           { $group: { _id: null, total: { $sum: "$amount" }, count: { $sum: 1 } } },
@@ -51,6 +63,7 @@ const donationAdminController = {
           { $group: { _id: null, total: { $sum: "$amount" } } },
         ]),
         donationModel.distinct("donorEmail", baseMatch),
+        donationModel.countDocuments(needsAttentionFilter),
       ]);
 
       const total = totalAgg[0]?.total || 0;
@@ -70,6 +83,7 @@ const donationAdminController = {
           totalDonors: { value: donorEmails.filter(Boolean).length },
           thisMonth: { value: thisMonthTotal, changePct: pctChange(thisMonthTotal, lastMonthTotal) },
           today: { value: todayTotal },
+          needsAttentionCount,
         },
       });
     } catch (error) {
@@ -88,24 +102,37 @@ const donationAdminController = {
 
       const query = { ...DONATIONS_PAGE_FILTER };
 
-      if (status !== "all") {
+      if (status === "needs_attention") {
+        query.status = "completed";
+        query.$and = [
+          { $or: query.$or },
+          { $or: [
+            { dccSyncStatus: "failed" },
+            { whatsappReceiptSentAt: { $exists: false } },
+            { whatsappReceiptSentAt: null },
+          ]},
+        ];
+        delete query.$or;
+      } else if (status !== "all") {
         const statuses = String(status).split(",").map((s) => s.trim()).filter(Boolean);
         query.status = statuses.length === 1 ? statuses[0] : { $in: statuses };
       }
 
       if (search) {
-        query.$and = [
-          { $or: query.$or }, // keep the page-scope filter
-          {
-            $or: [
-              { donorName: { $regex: search, $options: "i" } },
-              { donorEmail: { $regex: search, $options: "i" } },
-              { donorMobile: { $regex: search, $options: "i" } },
-              { razorpayPaymentId: { $regex: search, $options: "i" } },
-            ],
-          },
-        ];
-        delete query.$or; // superseded by $and above
+        const searchOr = {
+          $or: [
+            { donorName: { $regex: search, $options: "i" } },
+            { donorEmail: { $regex: search, $options: "i" } },
+            { donorMobile: { $regex: search, $options: "i" } },
+            { razorpayPaymentId: { $regex: search, $options: "i" } },
+          ],
+        };
+        if (query.$and) {
+          query.$and.push(searchOr);
+        } else {
+          query.$and = [{ $or: query.$or }, searchOr];
+          delete query.$or;
+        }
       }
 
       if (startDate || endDate) {

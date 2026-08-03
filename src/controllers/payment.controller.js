@@ -3,7 +3,7 @@ const crypto = require('crypto');
 const { donationModel } = require('../models/donation.model');
 const { planModel } = require('../models/plan.model');
 const { enqueueJob } = require('../redis/redisClient');
-const { completeDonation } = require('../services/paymentCompletion.service');
+const { completeDonation, markDonationCompleted, runPostCompletionPipeline } = require('../services/paymentCompletion.service');
 
 const RAZORPAY_ACCOUNTS = {
   default: {
@@ -407,13 +407,26 @@ const paymentController = {
         return res.status(400).json({ message: 'Invalid payment signature' });
       }
 
-      const updated = await completeDonation({
+      const updated = await markDonationCompleted({
         donationId: donation._id,
         orderId: isSubscription ? undefined : razorpay_order_id,
         paymentId: razorpay_payment_id,
       });
 
-      return res.status(200).json({ message: 'Payment verified', donation: updated });
+      res.status(200).json({ message: 'Payment verified', donation: updated });
+
+      // DCC sync, WhatsApp receipt, and Meta CAPI run in the background
+      // so the donor sees the thank-you page immediately. Errors are
+      // recorded per-donation for admin visibility (Resend Receipt /
+      // Resend WhatsApp actions).
+      if (updated) {
+        setImmediate(() => {
+          runPostCompletionPipeline(updated._id, razorpay_payment_id).catch((err) => {
+            console.error('Background pipeline error for donation', String(updated._id), err && err.message ? err.message : err);
+          });
+        });
+      }
+      return;
     } catch (err) {
       console.error('verifyPayment error', err && err.stack ? err.stack : err);
       return res.status(500).json({ message: 'Failed to verify payment' });

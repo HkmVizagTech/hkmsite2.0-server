@@ -77,7 +77,9 @@ async function sendDonationWhatsAppReceipt(donation) {
   }
 }
 
-async function completeDonation({ donationId, orderId, paymentId }) {
+// Fast path: marks the donation as completed and sets payment IDs.
+// Returns the donation document (or null if not found).
+async function markDonationCompleted({ donationId, orderId, paymentId }) {
   const query = donationId
     ? { _id: donationId }
     : { razorpayOrderId: orderId };
@@ -113,28 +115,42 @@ async function completeDonation({ donationId, orderId, paymentId }) {
     );
   }
 
-  await syncDonationToDcc(donation, paymentId);
-
-  // Re-fetch: syncDonationToDcc just updated receiptNumber/dccSyncStatus in
-  // the DB, but the in-memory `donation` object above is from before that
-  // — without this, the WhatsApp step below would never see a completed
-  // DCC sync and would always fall back to the "processing" text template.
-  donation = await donationModel.findById(donation._id);
-
-  // Isolated: WhatsApp failure must never throw here or alter what's
-  // returned to the caller (the webhook/verify response already succeeded).
-  await sendDonationWhatsAppReceipt(donation);
-
-  // Meta Conversions API — server-side Purchase event. Best-effort and
-  // fully isolated: a failure here must never affect payment completion.
-  try {
-    const { sendPurchaseEvent } = require("./metaCapi.service");
-    await sendPurchaseEvent(donation);
-  } catch (e) {
-    console.warn("Meta CAPI purchase event failed (non-fatal):", e && e.message ? e.message : e);
-  }
-
   return donation;
 }
 
-module.exports = { completeDonation, sendDonationWhatsAppReceipt };
+// Background pipeline: DCC sync, WhatsApp receipt, Meta CAPI.
+// Errors are recorded per-donation for admin visibility — never throws.
+async function runPostCompletionPipeline(donationId, paymentId) {
+  try {
+    let donation = await donationModel.findById(donationId);
+    if (!donation) return;
+
+    await syncDonationToDcc(donation, paymentId);
+
+    donation = await donationModel.findById(donationId);
+
+    await sendDonationWhatsAppReceipt(donation);
+
+    try {
+      const { sendPurchaseEvent } = require("./metaCapi.service");
+      await sendPurchaseEvent(donation);
+    } catch (e) {
+      console.warn("Meta CAPI purchase event failed (non-fatal):", e && e.message ? e.message : e);
+    }
+  } catch (err) {
+    console.error("Post-completion pipeline error for donation", String(donationId), err && err.stack ? err.stack : err);
+  }
+}
+
+// Full synchronous flow: mark completed + run pipeline.
+// Used by webhooks and reconciliation where no user is waiting.
+async function completeDonation({ donationId, orderId, paymentId }) {
+  const donation = await markDonationCompleted({ donationId, orderId, paymentId });
+  if (!donation) return null;
+
+  await runPostCompletionPipeline(donation._id, paymentId);
+
+  return donationModel.findById(donation._id);
+}
+
+module.exports = { completeDonation, markDonationCompleted, runPostCompletionPipeline, sendDonationWhatsAppReceipt };
