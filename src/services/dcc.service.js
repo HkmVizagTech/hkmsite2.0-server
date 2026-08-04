@@ -58,6 +58,82 @@ const DCC_SEVA_MAPPINGS = parseJsonEnv("DCC_SEVA_MAPPINGS", []);
 // the real DCC configuration and override via DCC_SEVA_MAPPINGS if they
 // differ, no code deploy needed to fix.
 const DEFAULT_NAME_BASED_SEVA_MAPPINGS = [
+  // ---- Janmashtami festival sevas (FIRST — must match before generic) ----
+  // Real DCC codes from SevaList2026.pdf. All SKJ sevas use
+  // Cultural Program (3) → Sri Krishna Janmashtami (10).
+  // Annadana/Gau Seva have festivalSlug filter so Janmashtami donations
+  // get SKJ codes instead of the generic ANGE/GOSE below.
+  {
+    sevaNameIncludes: ["annadana", "anna daan", "anna-daan", "annadaan"],
+    festivalSlug: "janmashtami",
+    sevaCategory: 3,
+    sevaSubCategory: 10,
+    sevaSubCategoryCode: 27,
+  },
+  {
+    sevaNameIncludes: ["gau seva", "go seva", "cow", "goshala"],
+    festivalSlug: "janmashtami",
+    sevaCategory: 3,
+    sevaSubCategory: 10,
+    sevaSubCategoryCode: 102,
+  },
+  {
+    sevaNameIncludes: ["makhan mishri", "makhan-mishri"],
+    sevaCategory: 3,
+    sevaSubCategory: 10,
+    sevaSubCategoryCode: 93,
+  },
+  {
+    sevaNameIncludes: ["abhisheka", "abhishek"],
+    sevaCategory: 3,
+    sevaSubCategory: 10,
+    sevaSubCategoryCode: 31,
+  },
+  {
+    sevaNameIncludes: ["tulasi archana", "tulasi-archana", "tulsi archana"],
+    sevaCategory: 3,
+    sevaSubCategory: 10,
+    sevaSubCategoryCode: 72,
+  },
+  {
+    sevaNameIncludes: ["pushpalankara", "pushpa alankara", "pushpanjali"],
+    sevaCategory: 3,
+    sevaSubCategory: 10,
+    sevaSubCategoryCode: 29,
+  },
+  {
+    sevaNameIncludes: ["naivedhya", "naivedya"],
+    sevaCategory: 3,
+    sevaSubCategory: 10,
+    sevaSubCategoryCode: 74,
+  },
+  {
+    sevaNameIncludes: ["vastrabharana", "vastra abharana", "vastra-abharana"],
+    sevaCategory: 3,
+    sevaSubCategory: 10,
+    sevaSubCategoryCode: 75,
+  },
+  {
+    sevaNameIncludes: ["mandapa", "mandap"],
+    sevaCategory: 3,
+    sevaSubCategory: 10,
+    sevaSubCategoryCode: 28,
+  },
+  {
+    // Chappan Bhog → uses Naivedya code (no separate DCC entry)
+    sevaNameIncludes: ["chappan bhog", "chappan-bhog", "56 bhog"],
+    sevaCategory: 3,
+    sevaSubCategory: 10,
+    sevaSubCategoryCode: 74,
+  },
+  {
+    // Japa Yagna → uses Annadana code (no separate DCC entry)
+    sevaNameIncludes: ["japa yagna", "japa-yagna", "japa yagya"],
+    sevaCategory: 3,
+    sevaSubCategory: 10,
+    sevaSubCategoryCode: 27,
+  },
+  // ---- Generic seva mappings (non-festival) ----
   {
     sevaNameIncludes: ["annadana", "anna daan", "anna-daan", "annadaan", "sadhu bhojan", "sadhu vaishnav bhojan"],
     sevaCategory: 1,
@@ -125,37 +201,6 @@ const DEFAULT_NAME_BASED_SEVA_MAPPINGS = [
     sevaCategory: 2,
     sevaSubCategory: 3,
     sevaSubCategoryCode: "GDGD",
-  },
-  // ---- Janmashtami festival sevas (PLACEHOLDER CODES) ----
-  // Annadana and Go Seva tiers on the Janmashtami page already match the
-  // real ANGE/GOSE mappings above via sevaNameIncludes. The four below have
-  // no confirmed DCC codes yet — these are clearly-marked placeholders so
-  // each seva is at least distinctly coded instead of falling through to
-  // the generic DEFAULT_SEVA_MAPPING. Replace with real codes via the
-  // DCC_SEVA_MAPPINGS env var (no deploy needed) once DCC confirms them.
-  {
-    sevaNameIncludes: ["makhan mishri", "makhan-mishri"],
-    sevaCategory: 2,
-    sevaSubCategory: 4,
-    sevaSubCategoryCode: "JNMM", // PLACEHOLDER — confirm with DCC
-  },
-  {
-    sevaNameIncludes: ["abhisheka", "abhishek"],
-    sevaCategory: 2,
-    sevaSubCategory: 5,
-    sevaSubCategoryCode: "JNAB", // PLACEHOLDER — confirm with DCC
-  },
-  {
-    sevaNameIncludes: ["tulasi archana", "tulasi-archana", "tulsi archana"],
-    sevaCategory: 2,
-    sevaSubCategory: 6,
-    sevaSubCategoryCode: "JNTA", // PLACEHOLDER — confirm with DCC
-  },
-  {
-    sevaNameIncludes: ["pushpalankara", "pushpa alankara", "pushpanjali"],
-    sevaCategory: 2,
-    sevaSubCategory: 7,
-    sevaSubCategoryCode: "JNPA", // PLACEHOLDER — confirm with DCC
   },
 ];
 
