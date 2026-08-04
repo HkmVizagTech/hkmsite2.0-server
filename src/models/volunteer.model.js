@@ -1,5 +1,21 @@
 const mongoose = require("mongoose");
 
+const formFieldSchema = new mongoose.Schema(
+  {
+    id: { type: String, required: true },
+    type: {
+      type: String,
+      enum: ["text", "email", "tel", "number", "textarea", "select", "checkbox", "date"],
+      default: "text",
+    },
+    label: { type: String, required: true },
+    placeholder: { type: String, default: "" },
+    required: { type: Boolean, default: false },
+    options: [{ type: String }],
+  },
+  { _id: false }
+);
+
 const volunteerEventSchema = new mongoose.Schema(
   {
     title: { type: String, required: true },
@@ -21,6 +37,7 @@ const volunteerEventSchema = new mongoose.Schema(
       enum: ["active", "closed", "completed"],
       default: "active",
     },
+    formFields: { type: [formFieldSchema], default: [] },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "user" },
   },
   { timestamps: true, versionKey: false }
@@ -35,10 +52,7 @@ const volunteerRegistrationSchema = new mongoose.Schema(
       ref: "volunteerEvent",
       required: true,
     },
-    name: { type: String, required: true },
-    email: { type: String, required: true },
-    phone: { type: String, required: true },
-    message: { type: String, default: "" },
+    responses: { type: mongoose.Schema.Types.Mixed, default: {} },
     status: {
       type: String,
       enum: ["pending", "approved", "rejected", "completed"],
@@ -49,7 +63,6 @@ const volunteerRegistrationSchema = new mongoose.Schema(
 );
 
 volunteerRegistrationSchema.index({ eventId: 1 });
-volunteerRegistrationSchema.index({ email: 1 });
 
 const volunteerEventModel = mongoose.model("volunteerEvent", volunteerEventSchema);
 const volunteerRegistrationModel = mongoose.model("volunteerRegistration", volunteerRegistrationSchema);

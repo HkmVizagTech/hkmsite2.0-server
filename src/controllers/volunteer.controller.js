@@ -35,7 +35,7 @@ const volunteerController = {
 
   create: async (req, res) => {
     try {
-      const { title, description, date, endDate, location, image, slots, category, requirements } = req.body;
+      const { title, description, date, endDate, location, image, slots, category, requirements, formFields } = req.body;
       if (!title || !description || !date) {
         return res.status(400).json({ message: "Title, description, and date are required" });
       }
@@ -49,6 +49,7 @@ const volunteerController = {
         slots: slots || 0,
         category: category || "festival",
         requirements: requirements || "",
+        formFields: formFields || [],
         createdBy: req.user.userId,
       });
       res.status(201).json({ message: "Volunteer event created", event });
@@ -87,9 +88,9 @@ const volunteerController = {
 
   register: async (req, res) => {
     try {
-      const { name, email, phone, message } = req.body;
-      if (!name || !email || !phone) {
-        return res.status(400).json({ message: "Name, email, and phone are required" });
+      const { responses } = req.body;
+      if (!responses || typeof responses !== "object") {
+        return res.status(400).json({ message: "Responses are required" });
       }
 
       const event = await volunteerEventModel.findById(req.params.id);
@@ -101,20 +102,35 @@ const volunteerController = {
         return res.status(400).json({ message: "All volunteer slots are filled" });
       }
 
-      const existing = await volunteerRegistrationModel.findOne({
-        eventId: req.params.id,
-        email: email.toLowerCase(),
-      });
-      if (existing) {
-        return res.status(400).json({ message: "You have already registered for this event" });
+      const missing = [];
+      for (const field of event.formFields) {
+        if (field.required) {
+          const val = responses[field.id];
+          if (val === undefined || val === null || val === "") {
+            missing.push(field.label);
+          }
+        }
+      }
+      if (missing.length > 0) {
+        return res.status(400).json({ message: `Required fields missing: ${missing.join(", ")}` });
+      }
+
+      const emailField = event.formFields.find((f) => f.type === "email");
+      if (emailField && responses[emailField.id]) {
+        const email = String(responses[emailField.id]).toLowerCase();
+        responses[emailField.id] = email;
+        const existing = await volunteerRegistrationModel.findOne({
+          eventId: req.params.id,
+          [`responses.${emailField.id}`]: email,
+        });
+        if (existing) {
+          return res.status(400).json({ message: "You have already registered for this event" });
+        }
       }
 
       const registration = await volunteerRegistrationModel.create({
         eventId: req.params.id,
-        name,
-        email: email.toLowerCase(),
-        phone,
-        message: message || "",
+        responses,
       });
 
       await volunteerEventModel.findByIdAndUpdate(req.params.id, {
