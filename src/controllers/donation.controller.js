@@ -7,6 +7,25 @@ const { createRazorpayInstance } = require("./payment.controller");
 // blended into this main site-wide donations list/stats.
 const EXCLUDE_DONATIONS_PAGE = { sourcePage: { $ne: "donations" } };
 
+// Shared helper: builds a { createdAt: {...} } match clause from optional
+// YYYY-MM-DD from/to query params. `to` is inclusive through end of day.
+function buildDateRangeMatch(from, to) {
+  if (!from && !to) return {};
+  const createdAt = {};
+  if (from) {
+    const d = new Date(from);
+    if (!isNaN(d.getTime())) createdAt.$gte = d;
+  }
+  if (to) {
+    const d = new Date(to);
+    if (!isNaN(d.getTime())) {
+      d.setHours(23, 59, 59, 999);
+      createdAt.$lte = d;
+    }
+  }
+  return Object.keys(createdAt).length ? { createdAt } : {};
+}
+
 const donationController = {
   // GET /donations/stats — real aggregated analytics for the main admin
   // donations dashboard. Every number comes from the database, nothing
@@ -311,13 +330,18 @@ const donationController = {
     }
   },
 
-  // GET /donations/utm-stats — sitewide campaign/source/medium metrics
-  // across ALL seva/campaign donation flows (excludes the standalone
-  // /donations page, which has its own dedicated stats at /donations-admin).
+  // GET /donations/utm-stats?from=&to= — sitewide campaign/source/medium
+  // metrics across ALL seva/campaign donation flows (excludes the
+  // standalone /donations page, which has its own dedicated stats at
+  // /donations-admin). Optional from/to (YYYY-MM-DD) filters by createdAt.
   getUtmStats: async (req, res) => {
     try {
+      const { from, to } = req.query;
+      const dateMatch = buildDateRangeMatch(from, to);
+      const baseMatch = { ...EXCLUDE_DONATIONS_PAGE, status: "completed", ...dateMatch };
+
       const stats = await donationModel.aggregate([
-        { ...{ $match: { ...EXCLUDE_DONATIONS_PAGE, status: "completed" } } },
+        { $match: baseMatch },
         {
           $group: {
             _id: {
@@ -346,7 +370,7 @@ const donationController = {
       // Also break down by sourcePage, since sitewide spans 9 different
       // origin flows (unlike the single-page /donations-admin equivalent).
       const bySourcePage = await donationModel.aggregate([
-        { $match: { ...EXCLUDE_DONATIONS_PAGE, status: "completed" } },
+        { $match: baseMatch },
         {
           $group: {
             _id: { $ifNull: ["$sourcePage", "unknown"] },
@@ -368,12 +392,12 @@ const donationController = {
     }
   },
 
-  // GET /donations/utm-transactions?campaign=&source=&medium=&sourcePage=
+  // GET /donations/utm-transactions?campaign=&source=&medium=&sourcePage=&from=&to=
   // Drill-down: real transaction list for one specific campaign/page row.
   getUtmTransactions: async (req, res) => {
     try {
-      const { campaign, source, medium, sourcePage } = req.query;
-      const match = { ...EXCLUDE_DONATIONS_PAGE, status: "completed" };
+      const { campaign, source, medium, sourcePage, from, to } = req.query;
+      const match = { ...EXCLUDE_DONATIONS_PAGE, status: "completed", ...buildDateRangeMatch(from, to) };
       if (campaign) match["utm.campaign"] = campaign === "direct" ? { $in: [null, ""] } : campaign;
       if (source) match["utm.source"] = source === "direct" ? { $in: [null, ""] } : source;
       if (medium) match["utm.medium"] = medium === "none" ? { $in: [null, ""] } : medium;

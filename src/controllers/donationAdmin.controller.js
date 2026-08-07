@@ -21,6 +21,25 @@ const DONATIONS_PAGE_FILTER = {
 
 const SUCCESS_STATUSES = ["completed"];
 
+// Builds a { createdAt: {...} } match clause from optional YYYY-MM-DD
+// startDate/endDate query params. endDate is inclusive through end of day.
+function buildDateRangeMatch(startDate, endDate) {
+  if (!startDate && !endDate) return {};
+  const createdAt = {};
+  if (startDate) {
+    const d = new Date(startDate);
+    if (!isNaN(d.getTime())) createdAt.$gte = d;
+  }
+  if (endDate) {
+    const d = new Date(endDate);
+    if (!isNaN(d.getTime())) {
+      d.setHours(23, 59, 59, 999);
+      createdAt.$lte = d;
+    }
+  }
+  return Object.keys(createdAt).length ? { createdAt } : {};
+}
+
 const donationAdminController = {
   // GET /donations-admin/dashboard-stats
   getDashboardStats: async (req, res) => {
@@ -217,8 +236,10 @@ const donationAdminController = {
   // GET /donations-admin/utm-stats — aggregated campaign/source/medium metrics
   getUtmStats: async (req, res) => {
     try {
+      const { startDate, endDate } = req.query;
+      const dateMatch = buildDateRangeMatch(startDate, endDate);
       const stats = await donationModel.aggregate([
-        { $match: { ...DONATIONS_PAGE_FILTER, status: { $in: SUCCESS_STATUSES } } },
+        { $match: { ...DONATIONS_PAGE_FILTER, status: { $in: SUCCESS_STATUSES }, ...dateMatch } },
         {
           $group: {
             _id: {
@@ -250,12 +271,12 @@ const donationAdminController = {
     }
   },
 
-  // GET /donations-admin/utm-transactions?campaign=&source=&medium= — the
-  // "View" drill-down: real transaction list for one specific campaign row.
+  // GET /donations-admin/utm-transactions?campaign=&source=&medium=&startDate=&endDate=
+  // — the "View" drill-down: real transaction list for one specific campaign row.
   getUtmTransactions: async (req, res) => {
     try {
-      const { campaign, source, medium } = req.query;
-      const match = { ...DONATIONS_PAGE_FILTER, status: { $in: SUCCESS_STATUSES } };
+      const { campaign, source, medium, startDate, endDate } = req.query;
+      const match = { ...DONATIONS_PAGE_FILTER, status: { $in: SUCCESS_STATUSES }, ...buildDateRangeMatch(startDate, endDate) };
       if (campaign) match["utm.campaign"] = campaign === "direct" ? { $in: [null, ""] } : campaign;
       if (source) match["utm.source"] = source === "direct" ? { $in: [null, ""] } : source;
       if (medium) match["utm.medium"] = medium === "none" ? { $in: [null, ""] } : medium;
