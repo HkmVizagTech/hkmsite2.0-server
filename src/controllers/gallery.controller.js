@@ -21,10 +21,11 @@ const galleryController = {
 
   list: async (req, res) => {
     try {
-      const { category, type, date } = req.query;
+      const { category, type, date, status } = req.query;
       let filter = {};
       if (category) filter.category = category;
       if (type) filter.type = type;
+      if (status) filter.status = status;
       if (date) {
         const start = new Date(date);
         const end = new Date(date);
