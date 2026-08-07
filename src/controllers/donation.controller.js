@@ -450,12 +450,13 @@ const donationController = {
         sevaName: 1, type: 1, sourcePage: 1, utm: 1, createdAt: 1,
       };
 
-      const [total, donations] = await Promise.all([
+      const [total, donations, totalAmountAgg] = await Promise.all([
         donationModel.countDocuments(filter),
-        donationModel.find(filter).sort({ date: -1 }).skip(skip).limit(limit).select(projection).lean()
+        donationModel.find(filter).sort({ date: -1 }).skip(skip).limit(limit).select(projection).lean(),
+        donationModel.aggregate([{ $match: filter }, { $group: { _id: null, sum: { $sum: "$amount" } } }]),
       ]);
 
-      res.status(200).json({ donations, total, page, limit });
+      res.status(200).json({ donations, total, page, limit, totalAmount: totalAmountAgg[0]?.sum || 0 });
     } catch (err) {
       console.error('donation list error', err);
       res.status(500).json({ message: "Server error" });
