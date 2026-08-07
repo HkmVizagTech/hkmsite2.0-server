@@ -4,7 +4,7 @@ const contactMessageController = {
   // PUBLIC - submit the contact form
   create: async (req, res) => {
     try {
-      const { name, email, phone, subject, message } = req.body;
+      const { name, email, phone, subject, message, authorization } = req.body;
       if (!name || !email || !message) {
         return res.status(400).json({ message: "Name, email, and message are required" });
       }
@@ -14,6 +14,7 @@ const contactMessageController = {
         phone: phone ? String(phone).trim() : "",
         subject: subject ? String(subject).trim() : "General Enquiry",
         message: String(message).trim(),
+        authorization: authorization === true || authorization === "true",
       });
       res.status(201).json({ message: "Message received", id: doc._id });
     } catch (err) {
