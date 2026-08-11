@@ -349,8 +349,10 @@ const buildDccPayload = (donation, gatewayPaymentId) => {
     sevaCategory: sevaMapping.sevaCategory,
     sevaSubCategory: sevaMapping.sevaSubCategory,
     sevaSubCategoryCode: sevaMapping.sevaSubCategoryCode,
-    modeOfPayment: DCC_PAYMENT_MODES.online,
-    gatewayPaymentId: gatewayPaymentId || donation.razorpayPaymentId || donation.transactionId || null,
+    modeOfPayment: donation.manualPaymentMode
+      ? (DCC_PAYMENT_MODES[donation.manualPaymentMode] ?? DCC_PAYMENT_MODES.online)
+      : DCC_PAYMENT_MODES.online,
+    gatewayPaymentId: gatewayPaymentId || donation.utrNumber || donation.razorpayPaymentId || donation.transactionId || null,
     transactionDate: formatDateForDcc(donation.date || donation.createdAt || new Date()),
     enrolledBy: resolveEnrolledBy(donation),
   };

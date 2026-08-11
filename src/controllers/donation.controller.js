@@ -417,6 +417,154 @@ const donationController = {
     }
   },
 
+  // POST /donations/manual — ADMIN ONLY. Records a donation that arrived
+  // OUTSIDE the website checkout entirely (direct bank transfer, UPI paid
+  // straight to the temple's VPA, cash, cheque) using the bank/UPI
+  // reference (UTR) to identify the payment instead of a Razorpay ID.
+  // Creates the record already completed (admin is confirming money has
+  // actually arrived) and runs the SAME DCC + WhatsApp receipt pipeline as
+  // any other completed donation — deliberately skips the Meta CAPI
+  // purchase event since this was never an on-site/ad-attributed
+  // conversion and sending it would inflate ad performance data.
+  createManual: async (req, res) => {
+    try {
+      const {
+        donorName, donorEmail, donorMobile, amount, type, sevaName,
+        utrNumber, manualPaymentMode, paymentDate, manualEntryNote,
+        panNumber, certificate, wantPrasadam, prasadamAddress,
+        sevakName, dob,
+      } = req.body;
+
+      const name = String(donorName || "").trim();
+      const amt = Number(amount);
+      const utr = String(utrNumber || "").trim();
+
+      if (!name) return res.status(400).json({ success: false, message: "Donor name is required." });
+      if (!Number.isFinite(amt) || amt <= 0) return res.status(400).json({ success: false, message: "A valid amount is required." });
+      if (!utr) return res.status(400).json({ success: false, message: "UTR / reference number is required to record a manual payment." });
+      if (!donorEmail && !donorMobile) return res.status(400).json({ success: false, message: "Please provide at least an email or mobile number for the receipt." });
+
+      const validModes = ["upi", "bank", "cash", "cheque"];
+      const mode = validModes.includes(manualPaymentMode) ? manualPaymentMode : "bank";
+
+      // Duplicate-UTR guard — the same bank reference should never be
+      // entered twice (classic double-entry mistake).
+      const existingWithUtr = await donationModel.findOne({ utrNumber: utr }).lean();
+      if (existingWithUtr) {
+        return res.status(409).json({
+          success: false,
+          message: `This UTR is already recorded against a donation from ${existingWithUtr.donorName} (₹${existingWithUtr.amount}, ${new Date(existingWithUtr.createdAt).toLocaleDateString("en-IN")}).`,
+        });
+      }
+
+      const donation = await donationModel.create({
+        donorName: name,
+        donorEmail: donorEmail ? String(donorEmail).trim().toLowerCase() : undefined,
+        donorMobile: donorMobile ? String(donorMobile).trim() : undefined,
+        amount: amt,
+        type: type || "Manual Entry",
+        sevaName: sevaName || undefined,
+        sourcePage: "admin-manual",
+        status: "pending", // completeDonation flow below transitions this properly
+        date: paymentDate ? new Date(paymentDate) : new Date(),
+        manualEntry: true,
+        utrNumber: utr,
+        manualPaymentMode: mode,
+        manualEntryNote: manualEntryNote || undefined,
+        manualEnteredBy: req.user?.userId || undefined,
+        panNumber: panNumber || undefined,
+        certificate: !!certificate,
+        wantPrasadam: !!wantPrasadam,
+        prasadamAddress: wantPrasadam ? prasadamAddress : undefined,
+        sevakName: sevakName || undefined,
+        dob: dob || undefined,
+      });
+
+      const { markDonationCompleted, sendDonationWhatsAppReceipt } = require("../services/paymentCompletion.service");
+      await markDonationCompleted({ donationId: donation._id });
+
+      // DCC sync + WhatsApp — same pipeline as automated completions,
+      // Meta CAPI deliberately excluded (see comment above).
+      try {
+        const { syncDonationToDcc: dccSync } = require("../services/dcc.service");
+        await dccSync(await donationModel.findById(donation._id), utr);
+      } catch (e) {
+        console.error("Manual entry DCC sync failed:", e && e.message ? e.message : e);
+      }
+      try {
+        await sendDonationWhatsAppReceipt(await donationModel.findById(donation._id));
+      } catch (e) {
+        console.error("Manual entry WhatsApp receipt failed:", e && e.message ? e.message : e);
+      }
+
+      const final = await donationModel.findById(donation._id);
+      res.status(201).json({ success: true, donation: final });
+    } catch (error) {
+      console.error("donation.createManual error:", error);
+      res.status(500).json({ success: false, message: error.message || "Failed to record manual donation" });
+    }
+  },
+
+  // PUT /donations/:id/manual-complete — ADMIN ONLY. For a donation that
+  // ALREADY exists (donor attempted on-site and got stuck pending) but
+  // where the payment actually arrived via a channel with no Razorpay
+  // order to reconcile against (e.g. they abandoned checkout, then paid
+  // by scanning the UPI QR directly). Attaches a UTR and completes it
+  // through the same pipeline — avoids creating a duplicate record.
+  completeManualPending: async (req, res) => {
+    try {
+      const { utrNumber, manualPaymentMode, manualEntryNote } = req.body;
+      const utr = String(utrNumber || "").trim();
+      if (!utr) return res.status(400).json({ success: false, message: "UTR / reference number is required." });
+
+      const donation = await donationModel.findById(req.params.id);
+      if (!donation) return res.status(404).json({ success: false, message: "Donation not found" });
+      if (donation.status === "completed") {
+        return res.status(409).json({ success: false, message: "This donation is already completed." });
+      }
+
+      const existingWithUtr = await donationModel.findOne({ utrNumber: utr, _id: { $ne: donation._id } }).lean();
+      if (existingWithUtr) {
+        return res.status(409).json({
+          success: false,
+          message: `This UTR is already recorded against another donation (${existingWithUtr.donorName}, ₹${existingWithUtr.amount}).`,
+        });
+      }
+
+      const validModes = ["upi", "bank", "cash", "cheque"];
+      const mode = validModes.includes(manualPaymentMode) ? manualPaymentMode : "upi";
+
+      await donationModel.findByIdAndUpdate(donation._id, {
+        manualEntry: true,
+        utrNumber: utr,
+        manualPaymentMode: mode,
+        manualEntryNote: manualEntryNote || undefined,
+        manualEnteredBy: req.user?.userId || undefined,
+      });
+
+      const { markDonationCompleted, sendDonationWhatsAppReceipt } = require("../services/paymentCompletion.service");
+      await markDonationCompleted({ donationId: donation._id });
+
+      try {
+        const { syncDonationToDcc: dccSync } = require("../services/dcc.service");
+        await dccSync(await donationModel.findById(donation._id), utr);
+      } catch (e) {
+        console.error("Manual completion DCC sync failed:", e && e.message ? e.message : e);
+      }
+      try {
+        await sendDonationWhatsAppReceipt(await donationModel.findById(donation._id));
+      } catch (e) {
+        console.error("Manual completion WhatsApp receipt failed:", e && e.message ? e.message : e);
+      }
+
+      const final = await donationModel.findById(donation._id);
+      res.status(200).json({ success: true, donation: final });
+    } catch (error) {
+      console.error("donation.completeManualPending error:", error);
+      res.status(500).json({ success: false, message: error.message || "Failed to complete donation" });
+    }
+  },
+
   list: async (req, res) => {
     try {
       const { type, status, date, festivalId, festivalSlug, q, from, to, minAmount, maxAmount } = req.query;
@@ -472,6 +620,7 @@ const donationController = {
         transactionId: 1, razorpayOrderId: 1, razorpayPaymentId: 1,
         receiptNumber: 1, dccSyncStatus: 1, whatsappReceiptSentAt: 1, whatsappReceiptError: 1,
         sevaName: 1, type: 1, sourcePage: 1, utm: 1, createdAt: 1,
+        manualEntry: 1, utrNumber: 1, manualPaymentMode: 1, manualEntryNote: 1,
       };
 
       const [total, donations, totalAmountAgg] = await Promise.all([
