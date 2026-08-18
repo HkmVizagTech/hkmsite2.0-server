@@ -432,7 +432,7 @@ const donationController = {
         donorName, donorEmail, donorMobile, amount, type, sevaName,
         utrNumber, manualPaymentMode, paymentDate, manualEntryNote,
         panNumber, certificate, wantPrasadam, prasadamAddress,
-        sevakName, dob,
+        sevakName, dob, devoteeId,
       } = req.body;
 
       const name = String(donorName || "").trim();
@@ -446,6 +446,16 @@ const donationController = {
 
       const validModes = ["upi", "bank", "cash", "cheque"];
       const mode = validModes.includes(manualPaymentMode) ? manualPaymentMode : "bank";
+
+      // Optional "Enrolled By" devotee — same mechanism as campaigner
+      // attribution. If selected, the DCC receipt is credited to that
+      // devotee instead of the generic default (36 for most flows).
+      let dccEnrolledById;
+      if (devoteeId) {
+        const { templeDevoteeModel } = require("../models/templeDevotee.model");
+        const devotee = await templeDevoteeModel.findById(devoteeId).lean();
+        if (devotee?.dccEnrolledById != null) dccEnrolledById = devotee.dccEnrolledById;
+      }
 
       // Duplicate-UTR guard — the same bank reference should never be
       // entered twice (classic double-entry mistake).
@@ -472,6 +482,7 @@ const donationController = {
         manualPaymentMode: mode,
         manualEntryNote: manualEntryNote || undefined,
         manualEnteredBy: req.user?.userId || undefined,
+        dccEnrolledById,
         panNumber: panNumber || undefined,
         certificate: !!certificate,
         wantPrasadam: !!wantPrasadam,
@@ -625,7 +636,7 @@ const donationController = {
 
       const [total, donations, totalAmountAgg] = await Promise.all([
         donationModel.countDocuments(filter),
-        donationModel.find(filter).sort({ date: -1 }).skip(skip).limit(limit).select(projection).lean(),
+        donationModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).select(projection).lean(),
         donationModel.aggregate([{ $match: filter }, { $group: { _id: null, sum: { $sum: "$amount" } } }]),
       ]);
 
