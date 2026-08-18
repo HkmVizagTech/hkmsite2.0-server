@@ -382,6 +382,24 @@ async function postToDcc(payload) {
     const message = parsed && typeof parsed === "object" && parsed.Message
       ? parsed.Message
       : raw || `DCC request failed with status ${response.status}`;
+
+    // DCC returns this when the transaction is already in their system
+    // (from a prior sync attempt) but we don't have the receipt number.
+    // It's not a true error — DCC has the donation — but we can't
+    // auto-fetch the receipt from this endpoint. Surface a clear message
+    // so admin knows to check DCC directly and enter the receipt manually.
+    if (typeof message === "string" && message.toLowerCase().includes("transaction details exist")) {
+      const err = new Error(
+        "DCC already has this donation on record (a previous sync attempt succeeded on their side). " +
+        "Please log into DCC (vhkmsurabhi.com), find this transaction by the donor name/amount/date, " +
+        "and enter the receipt number manually — or contact DCC support to share it with you."
+      );
+      err.status = response.status;
+      err.response = parsed;
+      err.dccAlreadyExists = true;
+      throw err;
+    }
+
     const err = new Error(message);
     err.status = response.status;
     err.response = parsed;

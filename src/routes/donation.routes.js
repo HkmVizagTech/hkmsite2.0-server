@@ -15,6 +15,7 @@ donationRouter.get("/utm-transactions", authMiddleware, adminMiddleware, donatio
 donationRouter.get("/whatsapp-audit", authMiddleware, adminMiddleware, donationController.whatsappAudit);
 donationRouter.get("/:id", authMiddleware, adminMiddleware, donationController.get);
 donationRouter.post("/:id/resend-receipt", authMiddleware, adminMiddleware, donationController.resendReceipt);
+donationRouter.put("/:id/receipt-number", authMiddleware, adminMiddleware, donationController.patchReceiptNumber);
 donationRouter.post("/:id/resend-whatsapp", authMiddleware, adminMiddleware, donationController.resendWhatsApp);
 donationRouter.put("/:id/manual-complete", authMiddleware, adminMiddleware, donationController.completeManualPending);
 donationRouter.put("/:id", authMiddleware, adminMiddleware, donationController.update);

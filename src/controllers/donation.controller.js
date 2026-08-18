@@ -746,6 +746,34 @@ const donationController = {
     }
   },
 
+  // ADMIN - manually set the DCC receipt number on a donation when DCC
+  // already has it in their system but the sync was never linked back
+  // (e.g. the "Transaction details exist" error from DCC). Useful when
+  // you log into DCC directly and find the receipt number there.
+  patchReceiptNumber: async (req, res) => {
+    try {
+      const { receiptNumber } = req.body;
+      const clean = String(receiptNumber || "").trim();
+      if (!clean) return res.status(400).json({ success: false, message: "receiptNumber is required." });
+
+      const donation = await donationModel.findByIdAndUpdate(
+        req.params.id,
+        {
+          receiptNumber: clean,
+          dccSyncStatus: "synced",
+          dccSyncedAt: new Date(),
+          dccSyncError: null,
+        },
+        { new: true }
+      );
+      if (!donation) return res.status(404).json({ success: false, message: "Donation not found." });
+      res.status(200).json({ success: true, message: `Receipt number set to ${clean}`, donation });
+    } catch (err) {
+      console.error("patchReceiptNumber error:", err);
+      res.status(500).json({ success: false, message: err.message || "Server error" });
+    }
+  },
+
   // ADMIN - manually re-trigger the WhatsApp receipt message, isolated from
   // DCC so a WhatsApp-only failure (bad phone, template not approved yet)
   // can be retried without re-running the DCC sync.
