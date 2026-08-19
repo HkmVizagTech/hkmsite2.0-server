@@ -41,7 +41,7 @@ const userController = {
                 return res.status(409).json({ message: "Email already registered" });
             }
             const hash = await bcrypt.hash(password, 10);
-            const user = await userModel.create({ name, email, password: hash, role: resolvedRole });
+            const user = await userModel.create({ name, email, password: hash, role: resolvedRole, mustChangePassword: true });
             res.status(201).json({ message: "User registered successfully", user: { _id: user._id, name: user.name, email: user.email, role: user.role } });
         } catch (err) {
             console.error('user.login error', err);
@@ -76,7 +76,7 @@ const userController = {
                 return res.status(409).json({ message: "Email already registered" });
             }
             const hash = await bcrypt.hash(password, 10);
-            const user = await userModel.create({ name, email, password: hash, role: "admin" });
+            const user = await userModel.create({ name, email, password: hash, role: "admin", mustChangePassword: true });
             console.log(`[SECURITY] New full admin created: ${user.email} (${user._id}) by ${req.user?.userId || "unknown"}`);
             res.status(201).json({ message: "Admin account created successfully", user: { _id: user._id, name: user.name, email: user.email, role: user.role } });
         } catch (err) {
@@ -112,7 +112,10 @@ const userController = {
                 maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
             });
             // Also return the token so clients can use Authorization header if needed
-            res.status(200).json({ user: { _id: user._id, name: user.name, email: user.email, role: user.role }, token });
+            res.status(200).json({
+                user: { _id: user._id, name: user.name, email: user.email, role: user.role, mustChangePassword: !!user.mustChangePassword },
+                token,
+            });
         } catch (err) {
             console.error('user.profile error', err);
             res.status(500).json({ message: "Server error" });
@@ -122,6 +125,37 @@ const userController = {
     logout: (req, res) => {
         res.clearCookie("token");
         res.status(200).json({ message: "Logged out" });
+    },
+
+    // Any authenticated user can change their own password. Requires the
+    // CURRENT password (even for a forced first-login change — they were
+    // just given it, so they have it) to prevent a hijacked/left-open
+    // session from silently taking over the account by changing the
+    // password without re-proving identity.
+    changePassword: async (req, res) => {
+        try {
+            const { currentPassword, newPassword } = req.body;
+            if (typeof currentPassword !== "string" || typeof newPassword !== "string" || !currentPassword || !newPassword) {
+                return res.status(400).json({ message: "Current and new password are required." });
+            }
+            if (newPassword.length < 8) {
+                return res.status(400).json({ message: "New password must be at least 8 characters." });
+            }
+            const user = await userModel.findById(req.user.userId);
+            if (!user) return res.status(404).json({ message: "User not found." });
+
+            const match = await bcrypt.compare(currentPassword, user.password);
+            if (!match) return res.status(401).json({ message: "Current password is incorrect." });
+
+            user.password = await bcrypt.hash(newPassword, 10);
+            user.mustChangePassword = false;
+            await user.save();
+
+            res.status(200).json({ message: "Password updated successfully." });
+        } catch (err) {
+            console.error('user.changePassword error', err);
+            res.status(500).json({ message: "Server error" });
+        }
     },
 
     profile: async (req, res) => {

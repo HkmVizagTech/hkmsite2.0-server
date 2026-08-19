@@ -26,6 +26,7 @@ userRouter.post("/register", authMiddleware, adminMiddleware, userController.reg
 userRouter.post("/register-admin", authMiddleware, adminMiddleware, userController.registerAdmin);
 userRouter.post("/login", loginLimiter, userController.login);
 userRouter.post("/logout", userController.logout);
+userRouter.put("/change-password", authMiddleware, userController.changePassword);
 
 userRouter.get("/profile", authMiddleware, userController.profile);
 userRouter.put("/update", authMiddleware, userController.update);
