@@ -49,6 +49,42 @@ const userController = {
         }
     },
 
+    // ADMIN ONLY, and deliberately separate from register() above. Creates
+    // another full admin (same access level as the caller). Kept as its
+    // own endpoint — rather than adding "admin" to register()'s allowed
+    // roles — so granting the highest access level always requires this
+    // specific, harder-to-misclick action, plus a typed confirmation on
+    // the client, instead of being one dropdown option away from a
+    // routine "add a blog manager" click.
+    registerAdmin: async (req, res) => {
+        try {
+            const { name, email, password, confirm } = req.body;
+            if (
+                typeof name !== "string" || typeof email !== "string" || typeof password !== "string" ||
+                !name || !email || !password
+            ) {
+                return res.status(400).json({ message: "All fields are required" });
+            }
+            if (password.length < 8) {
+                return res.status(400).json({ message: "Password must be at least 8 characters" });
+            }
+            if (confirm !== "CREATE ADMIN") {
+                return res.status(400).json({ message: "Confirmation text did not match. Please type CREATE ADMIN exactly." });
+            }
+            const existing = await userModel.findOne({ email });
+            if (existing) {
+                return res.status(409).json({ message: "Email already registered" });
+            }
+            const hash = await bcrypt.hash(password, 10);
+            const user = await userModel.create({ name, email, password: hash, role: "admin" });
+            console.log(`[SECURITY] New full admin created: ${user.email} (${user._id}) by ${req.user?.userId || "unknown"}`);
+            res.status(201).json({ message: "Admin account created successfully", user: { _id: user._id, name: user.name, email: user.email, role: user.role } });
+        } catch (err) {
+            console.error('user.registerAdmin error', err);
+            res.status(500).json({ message: "Server error" });
+        }
+    },
+
    
     login: async (req, res) => {
         try {

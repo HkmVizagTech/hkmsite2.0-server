@@ -23,6 +23,7 @@ const loginLimiter = rateLimit({
 // be public on a live site. Only an already-authenticated admin can invite
 // a new user. (Public donor/campaigner flows are separate: /campaigners/register.)
 userRouter.post("/register", authMiddleware, adminMiddleware, userController.register);
+userRouter.post("/register-admin", authMiddleware, adminMiddleware, userController.registerAdmin);
 userRouter.post("/login", loginLimiter, userController.login);
 userRouter.post("/logout", userController.logout);
 
