@@ -15,8 +15,10 @@ const { completeDonation } = require("../services/paymentCompletion.service");
 
 // Every query here is scoped to the /donations page's own donations only —
 // never mixes in seva-page or campaign donations from the rest of the site.
+// donations/janmashtami2 is included by explicit request — it's treated
+// as part of the /donations page's own accounting scope.
 const DONATIONS_PAGE_FILTER = {
-  $or: [{ sourcePage: "donations" }, { sourcePage: "/donations" }, { type: "Donation" }],
+  $or: [{ sourcePage: "donations" }, { sourcePage: "/donations" }, { sourcePage: "donations/janmashtami2" }, { type: "Donation" }],
 };
 
 const SUCCESS_STATUSES = ["completed"];

@@ -5,7 +5,11 @@ const { createRazorpayInstance } = require("./payment.controller");
 // site's donation flows (seva pages, sqft campaign, janmashtami) and has
 // its own dedicated admin at /donations/admin — it must never show up
 // blended into this main site-wide donations list/stats.
-const EXCLUDE_DONATIONS_PAGE = { sourcePage: { $ne: "donations" } };
+// /donations/janmashtami2 is treated the same way by explicit request —
+// it lives under the /donations path and its donations should follow
+// the same DCC/accounting treatment (enrolledBy default, excluded here,
+// shown only in /donations/admin) as the /donations page itself.
+const EXCLUDE_DONATIONS_PAGE = { sourcePage: { $nin: ["donations", "donations/janmashtami2"] } };
 
 // Shared helper: builds a { createdAt: {...} } match clause from optional
 // YYYY-MM-DD from/to query params. `to` is inclusive through end of day.

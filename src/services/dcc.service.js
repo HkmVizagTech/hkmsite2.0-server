@@ -242,7 +242,8 @@ const buildFullAddress = (prasadamAddress) => {
 };
 
 const isSpecialEnrolledByDonation = (donation) => (
-  normalizeString(donation.sourcePage) === "donations"
+  normalizeString(donation.sourcePage) === "donations" ||
+  normalizeString(donation.sourcePage) === "donations/janmashtami2"
 );
 
 const resolveEnrolledBy = (donation) => {
