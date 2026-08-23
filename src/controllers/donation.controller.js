@@ -421,6 +421,122 @@ const donationController = {
     }
   },
 
+  // GET /donations/report?period=today|yesterday|week|month|year|custom&from=&to=
+  // One endpoint backing all the report views in the admin Reports tab.
+  // Returns total/count/average for the period, a comparison against the
+  // equivalent previous period, seva-wise and status breakdowns, and a
+  // day-by-day (or month-by-month for "year") series for charting.
+  getReport: async (req, res) => {
+    try {
+      const { period = "today", from, to } = req.query;
+      const now = new Date();
+
+      const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+      const endOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
+
+      let start, end, prevStart, prevEnd, granularity = "day";
+
+      if (period === "today") {
+        start = startOfDay(now); end = endOfDay(now);
+        const yest = new Date(now); yest.setDate(yest.getDate() - 1);
+        prevStart = startOfDay(yest); prevEnd = endOfDay(yest);
+      } else if (period === "yesterday") {
+        const yest = new Date(now); yest.setDate(yest.getDate() - 1);
+        start = startOfDay(yest); end = endOfDay(yest);
+        const dayBefore = new Date(yest); dayBefore.setDate(dayBefore.getDate() - 1);
+        prevStart = startOfDay(dayBefore); prevEnd = endOfDay(dayBefore);
+      } else if (period === "week") {
+        const dow = now.getDay(); // 0 = Sunday
+        const monday = new Date(now); monday.setDate(now.getDate() - ((dow + 6) % 7));
+        start = startOfDay(monday); end = endOfDay(now);
+        const prevMonday = new Date(monday); prevMonday.setDate(prevMonday.getDate() - 7);
+        const prevSunday = new Date(monday); prevSunday.setDate(prevSunday.getDate() - 1);
+        prevStart = startOfDay(prevMonday); prevEnd = endOfDay(prevSunday);
+      } else if (period === "month") {
+        start = new Date(now.getFullYear(), now.getMonth(), 1);
+        end = endOfDay(now);
+        prevStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        prevEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
+      } else if (period === "year") {
+        start = new Date(now.getFullYear(), 0, 1);
+        end = endOfDay(now);
+        prevStart = new Date(now.getFullYear() - 1, 0, 1);
+        prevEnd = new Date(now.getFullYear() - 1, 11, 31, 23, 59, 59, 999);
+        granularity = "month";
+      } else if (period === "custom") {
+        if (!from || !to) return res.status(400).json({ success: false, message: "from and to are required for a custom period." });
+        start = startOfDay(new Date(from));
+        end = endOfDay(new Date(to));
+        const spanMs = end.getTime() - start.getTime();
+        prevEnd = new Date(start.getTime() - 1);
+        prevStart = new Date(prevEnd.getTime() - spanMs);
+        granularity = spanMs > 45 * 24 * 60 * 60 * 1000 ? "month" : "day";
+      } else {
+        return res.status(400).json({ success: false, message: "Invalid period." });
+      }
+
+      const baseMatch = { ...EXCLUDE_DONATIONS_PAGE, createdAt: { $gte: start, $lte: end } };
+      const completedMatch = { ...baseMatch, status: "completed" };
+      const prevCompletedMatch = { ...EXCLUDE_DONATIONS_PAGE, status: "completed", createdAt: { $gte: prevStart, $lte: prevEnd } };
+
+      const dateTrunc = granularity === "month"
+        ? { $dateToString: { format: "%Y-%m", date: "$createdAt" } }
+        : { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } };
+
+      const [summaryAgg, prevSummaryAgg, sevaAgg, statusAgg, seriesAgg] = await Promise.all([
+        donationModel.aggregate([
+          { $match: completedMatch },
+          { $group: { _id: null, total: { $sum: "$amount" }, count: { $sum: 1 } } },
+        ]),
+        donationModel.aggregate([
+          { $match: prevCompletedMatch },
+          { $group: { _id: null, total: { $sum: "$amount" }, count: { $sum: 1 } } },
+        ]),
+        donationModel.aggregate([
+          { $match: completedMatch },
+          { $group: { _id: { $ifNull: ["$sevaName", { $ifNull: ["$type", "General"] }] }, amount: { $sum: "$amount" }, count: { $sum: 1 } } },
+          { $sort: { amount: -1 } },
+          { $limit: 15 },
+        ]),
+        donationModel.aggregate([
+          { $match: baseMatch },
+          { $group: { _id: "$status", amount: { $sum: "$amount" }, count: { $sum: 1 } } },
+        ]),
+        donationModel.aggregate([
+          { $match: completedMatch },
+          { $group: { _id: dateTrunc, amount: { $sum: "$amount" }, count: { $sum: 1 } } },
+          { $sort: { _id: 1 } },
+        ]),
+      ]);
+
+      const total = summaryAgg[0]?.total || 0;
+      const count = summaryAgg[0]?.count || 0;
+      const prevTotal = prevSummaryAgg[0]?.total || 0;
+      const prevCount = prevSummaryAgg[0]?.count || 0;
+      const percentChange = prevTotal > 0 ? Number((((total - prevTotal) / prevTotal) * 100).toFixed(1)) : null;
+
+      res.status(200).json({
+        success: true,
+        period,
+        range: { start, end },
+        summary: {
+          totalAmount: total,
+          count,
+          avgDonation: count > 0 ? Math.round(total / count) : 0,
+          previousPeriod: { totalAmount: prevTotal, count: prevCount },
+          percentChange,
+        },
+        sevaBreakdown: sevaAgg.map((s) => ({ name: s._id, amount: s.amount, count: s.count })),
+        statusBreakdown: statusAgg.map((s) => ({ status: s._id, amount: s.amount, count: s.count })),
+        series: seriesAgg.map((s) => ({ date: s._id, amount: s.amount, count: s.count })),
+        granularity,
+      });
+    } catch (error) {
+      console.error("donation.getReport error:", error);
+      res.status(500).json({ success: false, message: "Failed to generate report" });
+    }
+  },
+
   // POST /donations/manual — ADMIN ONLY. Records a donation that arrived
   // OUTSIDE the website checkout entirely (direct bank transfer, UPI paid
   // straight to the temple's VPA, cash, cheque) using the bank/UPI
