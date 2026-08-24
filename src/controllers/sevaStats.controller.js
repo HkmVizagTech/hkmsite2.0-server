@@ -27,7 +27,7 @@ const sevaStatsController = {
   // Returns only first-name + last-initial, never email/phone.
   get: async (req, res) => {
     try {
-      const { sevaName, category, limit = 12 } = req.query;
+      const { sevaName, category, limit = 5 } = req.query;
       if (!sevaName && !category) {
         return res.status(400).json({ message: "sevaName or category is required" });
       }
@@ -42,7 +42,7 @@ const sevaStatsController = {
         donationModel
           .find(filter)
           .sort({ date: -1 })
-          .limit(Math.min(50, Math.max(1, parseInt(limit, 10) || 12)))
+          .limit(Math.min(50, Math.max(1, parseInt(limit, 10) || 5)))
           .select("donorName amount date")
           .lean(),
         donationModel.aggregate([
@@ -93,11 +93,13 @@ const sevaStatsController = {
         };
       };
 
+      // "Latest" wall shows only the 5 most recent donations — older ones
+      // drop off as new donations arrive. "Largest" is not recency-based.
       const [latest, largest, agg] = await Promise.all([
         donationModel
           .find(filter)
           .sort({ date: -1 })
-          .limit(20)
+          .limit(5)
           .select("donorName amount date")
           .lean(),
         donationModel
