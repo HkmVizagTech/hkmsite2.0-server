@@ -93,8 +93,8 @@ const sevaStatsController = {
         };
       };
 
-      // "Latest" wall shows only the 5 most recent donations — older ones
-      // drop off as new donations arrive. "Largest" is not recency-based.
+      // Both walls show exactly 5 entries: "Latest" = 5 most recent (older
+      // ones drop off as new donations arrive), "Largest" = top 5 amounts.
       const [latest, largest, agg] = await Promise.all([
         donationModel
           .find(filter)
@@ -105,7 +105,7 @@ const sevaStatsController = {
         donationModel
           .find(filter)
           .sort({ amount: -1, date: -1 })
-          .limit(20)
+          .limit(5)
           .select("donorName amount date")
           .lean(),
         donationModel.aggregate([
