@@ -5,7 +5,11 @@ const { createRazorpayInstance } = require("./payment.controller");
 // site's donation flows (seva pages, sqft campaign, janmashtami) and has
 // its own dedicated admin at /donations/admin — it must never show up
 // blended into this main site-wide donations list/stats.
-const EXCLUDE_DONATIONS_PAGE = { sourcePage: { $ne: "donations" } };
+// /donations/janmashtami2 is treated the same way by explicit request —
+// it lives under the /donations path and its donations should follow
+// the same DCC/accounting treatment (enrolledBy default, excluded here,
+// shown only in /donations/admin) as the /donations page itself.
+const EXCLUDE_DONATIONS_PAGE = { sourcePage: { $nin: ["donations", "donations/janmashtami2"] } };
 
 // Shared helper: builds a { createdAt: {...} } match clause from optional
 // YYYY-MM-DD from/to query params. `to` is inclusive through end of day.
@@ -417,6 +421,281 @@ const donationController = {
     }
   },
 
+  // GET /donations/report?period=today|yesterday|week|month|year|custom&from=&to=
+  // One endpoint backing all the report views in the admin Reports tab.
+  // Returns total/count/average for the period, a comparison against the
+  // equivalent previous period, seva-wise and status breakdowns, and a
+  // day-by-day (or month-by-month for "year") series for charting.
+  getReport: async (req, res) => {
+    try {
+      const { period = "today", from, to } = req.query;
+      const now = new Date();
+
+      const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+      const endOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
+
+      let start, end, prevStart, prevEnd, granularity = "day";
+
+      if (period === "today") {
+        start = startOfDay(now); end = endOfDay(now);
+        const yest = new Date(now); yest.setDate(yest.getDate() - 1);
+        prevStart = startOfDay(yest); prevEnd = endOfDay(yest);
+      } else if (period === "yesterday") {
+        const yest = new Date(now); yest.setDate(yest.getDate() - 1);
+        start = startOfDay(yest); end = endOfDay(yest);
+        const dayBefore = new Date(yest); dayBefore.setDate(dayBefore.getDate() - 1);
+        prevStart = startOfDay(dayBefore); prevEnd = endOfDay(dayBefore);
+      } else if (period === "week") {
+        const dow = now.getDay(); // 0 = Sunday
+        const monday = new Date(now); monday.setDate(now.getDate() - ((dow + 6) % 7));
+        start = startOfDay(monday); end = endOfDay(now);
+        const prevMonday = new Date(monday); prevMonday.setDate(prevMonday.getDate() - 7);
+        const prevSunday = new Date(monday); prevSunday.setDate(prevSunday.getDate() - 1);
+        prevStart = startOfDay(prevMonday); prevEnd = endOfDay(prevSunday);
+      } else if (period === "month") {
+        start = new Date(now.getFullYear(), now.getMonth(), 1);
+        end = endOfDay(now);
+        prevStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        prevEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
+      } else if (period === "year") {
+        start = new Date(now.getFullYear(), 0, 1);
+        end = endOfDay(now);
+        prevStart = new Date(now.getFullYear() - 1, 0, 1);
+        prevEnd = new Date(now.getFullYear() - 1, 11, 31, 23, 59, 59, 999);
+        granularity = "month";
+      } else if (period === "custom") {
+        if (!from || !to) return res.status(400).json({ success: false, message: "from and to are required for a custom period." });
+        start = startOfDay(new Date(from));
+        end = endOfDay(new Date(to));
+        const spanMs = end.getTime() - start.getTime();
+        prevEnd = new Date(start.getTime() - 1);
+        prevStart = new Date(prevEnd.getTime() - spanMs);
+        granularity = spanMs > 45 * 24 * 60 * 60 * 1000 ? "month" : "day";
+      } else {
+        return res.status(400).json({ success: false, message: "Invalid period." });
+      }
+
+      const baseMatch = { ...EXCLUDE_DONATIONS_PAGE, createdAt: { $gte: start, $lte: end } };
+      const completedMatch = { ...baseMatch, status: "completed" };
+      const prevCompletedMatch = { ...EXCLUDE_DONATIONS_PAGE, status: "completed", createdAt: { $gte: prevStart, $lte: prevEnd } };
+
+      const dateTrunc = granularity === "month"
+        ? { $dateToString: { format: "%Y-%m", date: "$createdAt" } }
+        : { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } };
+
+      const [summaryAgg, prevSummaryAgg, sevaAgg, statusAgg, seriesAgg] = await Promise.all([
+        donationModel.aggregate([
+          { $match: completedMatch },
+          { $group: { _id: null, total: { $sum: "$amount" }, count: { $sum: 1 } } },
+        ]),
+        donationModel.aggregate([
+          { $match: prevCompletedMatch },
+          { $group: { _id: null, total: { $sum: "$amount" }, count: { $sum: 1 } } },
+        ]),
+        donationModel.aggregate([
+          { $match: completedMatch },
+          { $group: { _id: { $ifNull: ["$sevaName", { $ifNull: ["$type", "General"] }] }, amount: { $sum: "$amount" }, count: { $sum: 1 } } },
+          { $sort: { amount: -1 } },
+          { $limit: 15 },
+        ]),
+        donationModel.aggregate([
+          { $match: baseMatch },
+          { $group: { _id: "$status", amount: { $sum: "$amount" }, count: { $sum: 1 } } },
+        ]),
+        donationModel.aggregate([
+          { $match: completedMatch },
+          { $group: { _id: dateTrunc, amount: { $sum: "$amount" }, count: { $sum: 1 } } },
+          { $sort: { _id: 1 } },
+        ]),
+      ]);
+
+      const total = summaryAgg[0]?.total || 0;
+      const count = summaryAgg[0]?.count || 0;
+      const prevTotal = prevSummaryAgg[0]?.total || 0;
+      const prevCount = prevSummaryAgg[0]?.count || 0;
+      const percentChange = prevTotal > 0 ? Number((((total - prevTotal) / prevTotal) * 100).toFixed(1)) : null;
+
+      res.status(200).json({
+        success: true,
+        period,
+        range: { start, end },
+        summary: {
+          totalAmount: total,
+          count,
+          avgDonation: count > 0 ? Math.round(total / count) : 0,
+          previousPeriod: { totalAmount: prevTotal, count: prevCount },
+          percentChange,
+        },
+        sevaBreakdown: sevaAgg.map((s) => ({ name: s._id, amount: s.amount, count: s.count })),
+        statusBreakdown: statusAgg.map((s) => ({ status: s._id, amount: s.amount, count: s.count })),
+        series: seriesAgg.map((s) => ({ date: s._id, amount: s.amount, count: s.count })),
+        granularity,
+      });
+    } catch (error) {
+      console.error("donation.getReport error:", error);
+      res.status(500).json({ success: false, message: "Failed to generate report" });
+    }
+  },
+
+  // POST /donations/manual — ADMIN ONLY. Records a donation that arrived
+  // OUTSIDE the website checkout entirely (direct bank transfer, UPI paid
+  // straight to the temple's VPA, cash, cheque) using the bank/UPI
+  // reference (UTR) to identify the payment instead of a Razorpay ID.
+  // Creates the record already completed (admin is confirming money has
+  // actually arrived) and runs the SAME DCC + WhatsApp receipt pipeline as
+  // any other completed donation — deliberately skips the Meta CAPI
+  // purchase event since this was never an on-site/ad-attributed
+  // conversion and sending it would inflate ad performance data.
+  createManual: async (req, res) => {
+    try {
+      const {
+        donorName, donorEmail, donorMobile, amount, type, sevaName,
+        utrNumber, manualPaymentMode, paymentDate, manualEntryNote,
+        panNumber, certificate, wantPrasadam, prasadamAddress,
+        sevakName, dob, devoteeId,
+      } = req.body;
+
+      const name = String(donorName || "").trim();
+      const amt = Number(amount);
+      const utr = String(utrNumber || "").trim();
+
+      if (!name) return res.status(400).json({ success: false, message: "Donor name is required." });
+      if (!Number.isFinite(amt) || amt <= 0) return res.status(400).json({ success: false, message: "A valid amount is required." });
+      if (!utr) return res.status(400).json({ success: false, message: "UTR / reference number is required to record a manual payment." });
+      if (!donorEmail && !donorMobile) return res.status(400).json({ success: false, message: "Please provide at least an email or mobile number for the receipt." });
+
+      const validModes = ["upi", "bank", "cash", "cheque"];
+      const mode = validModes.includes(manualPaymentMode) ? manualPaymentMode : "bank";
+
+      // Optional "Enrolled By" devotee — same mechanism as campaigner
+      // attribution. If selected, the DCC receipt is credited to that
+      // devotee instead of the generic default (36 for most flows).
+      let dccEnrolledById;
+      if (devoteeId) {
+        const { templeDevoteeModel } = require("../models/templeDevotee.model");
+        const devotee = await templeDevoteeModel.findById(devoteeId).lean();
+        if (devotee?.dccEnrolledById != null) dccEnrolledById = devotee.dccEnrolledById;
+      }
+
+      // Duplicate-UTR guard — the same bank reference should never be
+      // entered twice (classic double-entry mistake).
+      const existingWithUtr = await donationModel.findOne({ utrNumber: utr }).lean();
+      if (existingWithUtr) {
+        return res.status(409).json({
+          success: false,
+          message: `This UTR is already recorded against a donation from ${existingWithUtr.donorName} (₹${existingWithUtr.amount}, ${new Date(existingWithUtr.createdAt).toLocaleDateString("en-IN")}).`,
+        });
+      }
+
+      const donation = await donationModel.create({
+        donorName: name,
+        donorEmail: donorEmail ? String(donorEmail).trim().toLowerCase() : undefined,
+        donorMobile: donorMobile ? String(donorMobile).trim() : undefined,
+        amount: amt,
+        type: type || "Manual Entry",
+        sevaName: sevaName || undefined,
+        sourcePage: "admin-manual",
+        status: "pending", // completeDonation flow below transitions this properly
+        date: paymentDate ? new Date(paymentDate) : new Date(),
+        manualEntry: true,
+        utrNumber: utr,
+        manualPaymentMode: mode,
+        manualEntryNote: manualEntryNote || undefined,
+        manualEnteredBy: req.user?.userId || undefined,
+        dccEnrolledById,
+        panNumber: panNumber || undefined,
+        certificate: !!certificate,
+        wantPrasadam: !!wantPrasadam,
+        prasadamAddress: wantPrasadam ? prasadamAddress : undefined,
+        sevakName: sevakName || undefined,
+        dob: dob || undefined,
+      });
+
+      const { markDonationCompleted, sendDonationWhatsAppReceipt } = require("../services/paymentCompletion.service");
+      await markDonationCompleted({ donationId: donation._id });
+
+      // DCC sync + WhatsApp — same pipeline as automated completions,
+      // Meta CAPI deliberately excluded (see comment above).
+      try {
+        const { syncDonationToDcc: dccSync } = require("../services/dcc.service");
+        await dccSync(await donationModel.findById(donation._id), utr);
+      } catch (e) {
+        console.error("Manual entry DCC sync failed:", e && e.message ? e.message : e);
+      }
+      try {
+        await sendDonationWhatsAppReceipt(await donationModel.findById(donation._id));
+      } catch (e) {
+        console.error("Manual entry WhatsApp receipt failed:", e && e.message ? e.message : e);
+      }
+
+      const final = await donationModel.findById(donation._id);
+      res.status(201).json({ success: true, donation: final });
+    } catch (error) {
+      console.error("donation.createManual error:", error);
+      res.status(500).json({ success: false, message: error.message || "Failed to record manual donation" });
+    }
+  },
+
+  // PUT /donations/:id/manual-complete — ADMIN ONLY. For a donation that
+  // ALREADY exists (donor attempted on-site and got stuck pending) but
+  // where the payment actually arrived via a channel with no Razorpay
+  // order to reconcile against (e.g. they abandoned checkout, then paid
+  // by scanning the UPI QR directly). Attaches a UTR and completes it
+  // through the same pipeline — avoids creating a duplicate record.
+  completeManualPending: async (req, res) => {
+    try {
+      const { utrNumber, manualPaymentMode, manualEntryNote } = req.body;
+      const utr = String(utrNumber || "").trim();
+      if (!utr) return res.status(400).json({ success: false, message: "UTR / reference number is required." });
+
+      const donation = await donationModel.findById(req.params.id);
+      if (!donation) return res.status(404).json({ success: false, message: "Donation not found" });
+      if (donation.status === "completed") {
+        return res.status(409).json({ success: false, message: "This donation is already completed." });
+      }
+
+      const existingWithUtr = await donationModel.findOne({ utrNumber: utr, _id: { $ne: donation._id } }).lean();
+      if (existingWithUtr) {
+        return res.status(409).json({
+          success: false,
+          message: `This UTR is already recorded against another donation (${existingWithUtr.donorName}, ₹${existingWithUtr.amount}).`,
+        });
+      }
+
+      const validModes = ["upi", "bank", "cash", "cheque"];
+      const mode = validModes.includes(manualPaymentMode) ? manualPaymentMode : "upi";
+
+      await donationModel.findByIdAndUpdate(donation._id, {
+        manualEntry: true,
+        utrNumber: utr,
+        manualPaymentMode: mode,
+        manualEntryNote: manualEntryNote || undefined,
+        manualEnteredBy: req.user?.userId || undefined,
+      });
+
+      const { markDonationCompleted, sendDonationWhatsAppReceipt } = require("../services/paymentCompletion.service");
+      await markDonationCompleted({ donationId: donation._id });
+
+      try {
+        const { syncDonationToDcc: dccSync } = require("../services/dcc.service");
+        await dccSync(await donationModel.findById(donation._id), utr);
+      } catch (e) {
+        console.error("Manual completion DCC sync failed:", e && e.message ? e.message : e);
+      }
+      try {
+        await sendDonationWhatsAppReceipt(await donationModel.findById(donation._id));
+      } catch (e) {
+        console.error("Manual completion WhatsApp receipt failed:", e && e.message ? e.message : e);
+      }
+
+      const final = await donationModel.findById(donation._id);
+      res.status(200).json({ success: true, donation: final });
+    } catch (error) {
+      console.error("donation.completeManualPending error:", error);
+      res.status(500).json({ success: false, message: error.message || "Failed to complete donation" });
+    }
+  },
+
   list: async (req, res) => {
     try {
       const { type, status, date, festivalId, festivalSlug, q, from, to, minAmount, maxAmount } = req.query;
@@ -472,11 +751,12 @@ const donationController = {
         transactionId: 1, razorpayOrderId: 1, razorpayPaymentId: 1,
         receiptNumber: 1, dccSyncStatus: 1, whatsappReceiptSentAt: 1, whatsappReceiptError: 1,
         sevaName: 1, type: 1, sourcePage: 1, utm: 1, createdAt: 1,
+        manualEntry: 1, utrNumber: 1, manualPaymentMode: 1, manualEntryNote: 1,
       };
 
       const [total, donations, totalAmountAgg] = await Promise.all([
         donationModel.countDocuments(filter),
-        donationModel.find(filter).sort({ date: -1 }).skip(skip).limit(limit).select(projection).lean(),
+        donationModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).select(projection).lean(),
         donationModel.aggregate([{ $match: filter }, { $group: { _id: null, sum: { $sum: "$amount" } } }]),
       ]);
 
@@ -583,6 +863,34 @@ const donationController = {
     } catch (err) {
       console.error("Resend receipt error:", err);
       res.status(500).json({ message: "Server error", error: err.message });
+    }
+  },
+
+  // ADMIN - manually set the DCC receipt number on a donation when DCC
+  // already has it in their system but the sync was never linked back
+  // (e.g. the "Transaction details exist" error from DCC). Useful when
+  // you log into DCC directly and find the receipt number there.
+  patchReceiptNumber: async (req, res) => {
+    try {
+      const { receiptNumber } = req.body;
+      const clean = String(receiptNumber || "").trim();
+      if (!clean) return res.status(400).json({ success: false, message: "receiptNumber is required." });
+
+      const donation = await donationModel.findByIdAndUpdate(
+        req.params.id,
+        {
+          receiptNumber: clean,
+          dccSyncStatus: "synced",
+          dccSyncedAt: new Date(),
+          dccSyncError: null,
+        },
+        { new: true }
+      );
+      if (!donation) return res.status(404).json({ success: false, message: "Donation not found." });
+      res.status(200).json({ success: true, message: `Receipt number set to ${clean}`, donation });
+    } catch (err) {
+      console.error("patchReceiptNumber error:", err);
+      res.status(500).json({ success: false, message: err.message || "Server error" });
     }
   },
 

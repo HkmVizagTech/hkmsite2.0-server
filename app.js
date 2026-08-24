@@ -123,4 +123,41 @@ app.get('/health', (req, res) => {
   res.status(ok ? 200 : 503).json({ server: 'ok', db: { state: states[dbState] || dbState } });
 });
 
+// 404 fallback — any unmatched route gets a clean JSON response instead of
+// falling through to Express's default HTML "Cannot GET /..." page.
+app.use((req, res) => {
+  res.status(404).json({ message: `Not found: ${req.method} ${req.originalUrl}` });
+});
+
+// GLOBAL ERROR HANDLER — must be last, and must have all 4 params for
+// Express to recognize it as an error handler. Without this, ANY thrown
+// error or next(err) call anywhere in the app (a multer file-type
+// rejection, an uncaught exception, a bad JSON body, etc.) falls through
+// to Express's built-in default handler, which returns an HTML page —
+// causing the client's `res.json()` to throw a confusing
+// "Unexpected token '<' ... is not valid JSON" instead of a real error
+// message. This guarantees every response from this server is JSON.
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', err && err.stack ? err.stack : err);
+
+  // Multer-specific errors get clearer messages.
+  if (err && err.name === 'MulterError') {
+    const message = err.code === 'LIMIT_FILE_SIZE'
+      ? 'File is too large. Please use an image under 10MB.'
+      : `Upload error: ${err.message}`;
+    return res.status(400).json({ message });
+  }
+
+  // express.json() body-parser errors (malformed/oversized JSON body).
+  if (err && err.type === 'entity.parse.failed') {
+    return res.status(400).json({ message: 'Malformed request body.' });
+  }
+  if (err && err.type === 'entity.too.large') {
+    return res.status(413).json({ message: 'Request body too large.' });
+  }
+
+  const status = err && err.status ? err.status : 500;
+  res.status(status).json({ message: (err && err.message) || 'Server error' });
+});
+
 module.exports = { app };

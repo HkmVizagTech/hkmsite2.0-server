@@ -243,8 +243,7 @@ const buildFullAddress = (prasadamAddress) => {
 
 const isSpecialEnrolledByDonation = (donation) => (
   normalizeString(donation.sourcePage) === "donations" ||
-  normalizeString(donation.sourcePage) === "janmashtami" ||
-  normalizeString(donation.festivalSlug) === "janmashtami"
+  normalizeString(donation.sourcePage) === "donations/janmashtami2"
 );
 
 const resolveEnrolledBy = (donation) => {
@@ -349,8 +348,10 @@ const buildDccPayload = (donation, gatewayPaymentId) => {
     sevaCategory: sevaMapping.sevaCategory,
     sevaSubCategory: sevaMapping.sevaSubCategory,
     sevaSubCategoryCode: sevaMapping.sevaSubCategoryCode,
-    modeOfPayment: DCC_PAYMENT_MODES.online,
-    gatewayPaymentId: gatewayPaymentId || donation.razorpayPaymentId || donation.transactionId || null,
+    modeOfPayment: donation.manualPaymentMode
+      ? (DCC_PAYMENT_MODES[donation.manualPaymentMode] ?? DCC_PAYMENT_MODES.online)
+      : DCC_PAYMENT_MODES.online,
+    gatewayPaymentId: gatewayPaymentId || donation.utrNumber || donation.razorpayPaymentId || donation.transactionId || null,
     transactionDate: formatDateForDcc(donation.date || donation.createdAt || new Date()),
     enrolledBy: resolveEnrolledBy(donation),
   };
@@ -380,6 +381,24 @@ async function postToDcc(payload) {
     const message = parsed && typeof parsed === "object" && parsed.Message
       ? parsed.Message
       : raw || `DCC request failed with status ${response.status}`;
+
+    // DCC returns this when the transaction is already in their system
+    // (from a prior sync attempt) but we don't have the receipt number.
+    // It's not a true error — DCC has the donation — but we can't
+    // auto-fetch the receipt from this endpoint. Surface a clear message
+    // so admin knows to check DCC directly and enter the receipt manually.
+    if (typeof message === "string" && message.toLowerCase().includes("transaction details exist")) {
+      const err = new Error(
+        "DCC already has this donation on record (a previous sync attempt succeeded on their side). " +
+        "Please log into DCC (vhkmsurabhi.com), find this transaction by the donor name/amount/date, " +
+        "and enter the receipt number manually — or contact DCC support to share it with you."
+      );
+      err.status = response.status;
+      err.response = parsed;
+      err.dccAlreadyExists = true;
+      throw err;
+    }
+
     const err = new Error(message);
     err.status = response.status;
     err.response = parsed;

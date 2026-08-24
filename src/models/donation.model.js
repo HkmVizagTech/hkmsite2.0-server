@@ -48,6 +48,17 @@ const donationSchema = new mongoose.Schema({
   },
   razorpayOrderId: { type: String },
   razorpayPaymentId: { type: String },
+  // Manual entry support — for donations that arrived OUTSIDE the website
+  // checkout flow entirely (direct bank transfer, UPI paid straight to the
+  // temple's VPA, cash/cheque) or for stuck on-site attempts where the
+  // donor paid but couldn't complete the flow. Admin enters these by hand
+  // in /admin/donations → Manual Entry, using the bank/UPI reference (UTR)
+  // to identify the payment instead of a Razorpay ID.
+  manualEntry: { type: Boolean, default: false },
+  utrNumber: { type: String, trim: true },
+  manualPaymentMode: { type: String, enum: ["upi", "bank", "cash", "cheque"], default: undefined },
+  manualEntryNote: { type: String, trim: true },
+  manualEnteredBy: { type: mongoose.Schema.Types.ObjectId, ref: "user" },
   subscriptionId: { type: String },
   isRecurring: { type: Boolean, default: false },
   lastPaymentDate: { type: Date },
@@ -88,6 +99,7 @@ donationSchema.index({ date: -1 });
 donationSchema.index({ status: 1 });
 donationSchema.index({ razorpayOrderId: 1 });
 donationSchema.index({ donorMobile: 1 });
+donationSchema.index({ utrNumber: 1 });
 
 const donationModel = mongoose.model("donation", donationSchema);
 

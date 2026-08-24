@@ -7,14 +7,18 @@ const donationRouter = express.Router();
 donationRouter.post("/", donationController.create);
 
 donationRouter.get("/", authMiddleware, adminMiddleware, donationController.list);
+donationRouter.post("/manual", authMiddleware, adminMiddleware, donationController.createManual);
 donationRouter.get("/stats", authMiddleware, adminMiddleware, donationController.stats);
 donationRouter.get("/audit-pending", authMiddleware, adminMiddleware, donationController.auditPending);
 donationRouter.get("/utm-stats", authMiddleware, adminMiddleware, donationController.getUtmStats);
 donationRouter.get("/utm-transactions", authMiddleware, adminMiddleware, donationController.getUtmTransactions);
+donationRouter.get("/report", authMiddleware, adminMiddleware, donationController.getReport);
 donationRouter.get("/whatsapp-audit", authMiddleware, adminMiddleware, donationController.whatsappAudit);
 donationRouter.get("/:id", authMiddleware, adminMiddleware, donationController.get);
 donationRouter.post("/:id/resend-receipt", authMiddleware, adminMiddleware, donationController.resendReceipt);
+donationRouter.put("/:id/receipt-number", authMiddleware, adminMiddleware, donationController.patchReceiptNumber);
 donationRouter.post("/:id/resend-whatsapp", authMiddleware, adminMiddleware, donationController.resendWhatsApp);
+donationRouter.put("/:id/manual-complete", authMiddleware, adminMiddleware, donationController.completeManualPending);
 donationRouter.put("/:id", authMiddleware, adminMiddleware, donationController.update);
 donationRouter.delete("/:id", authMiddleware, adminMiddleware, donationController.delete);
 
