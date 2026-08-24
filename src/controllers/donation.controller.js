@@ -763,6 +763,38 @@ const donationController = {
     }
   },
 
+  // GET /donations/needs-manual-receipt — completed donations where DCC
+  // already has the transaction on record (from a prior sync attempt that
+  // succeeded on their side without the response reaching us) but we never
+  // captured a receipt number, so it's stuck needing a human to look it up
+  // in DCC directly. DCC's addDonation API is create-only and doesn't
+  // return the receipt number in this "already exists" response, and there
+  // is no lookup/search endpoint in their API to query it back — this list
+  // is the practical way to see and clear the backlog quickly instead of
+  // discovering these one at a time.
+  needsManualReceipt: async (req, res) => {
+    try {
+      const donations = await donationModel
+        .find({
+          status: "completed",
+          receiptNumber: { $in: [null, ""] },
+          $or: [
+            { dccSyncStatus: "failed" },
+            { dccSyncError: { $regex: "transaction details exist", $options: "i" } },
+          ],
+        })
+        .sort({ createdAt: -1 })
+        .limit(200)
+        .select("donorName donorEmail donorMobile amount sevaName type createdAt dccSyncStatus dccSyncError razorpayPaymentId utrNumber")
+        .lean();
+
+      res.status(200).json({ success: true, count: donations.length, donations });
+    } catch (err) {
+      console.error("needsManualReceipt error:", err);
+      res.status(500).json({ success: false, message: err.message || "Server error" });
+    }
+  },
+
   // ADMIN - manually re-trigger the WhatsApp receipt message, isolated from
   // DCC so a WhatsApp-only failure (bad phone, template not approved yet)
   // can be retried without re-running the DCC sync.
