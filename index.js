@@ -2,6 +2,7 @@
 require("dotenv").config();
 const { app } = require("./app");
 const { connectDb } = require("./src/config/db");
+const { startReconciliationJob } = require("./src/jobs/reconcilePendingDonations");
 const PORT = process.env.PORT || 8080;
 
 const startServer =async()=>{
@@ -11,6 +12,8 @@ const startServer =async()=>{
         app.listen( PORT,()=>{
             console.log(`server connected on port ${PORT}`);
         })
+
+        startReconciliationJob();
 
     } catch (error) {
         console.log("server failed to start", error);
