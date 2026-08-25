@@ -795,6 +795,33 @@ const donationController = {
     }
   },
 
+  // GET /donations/needs-whatsapp — completed donations that HAVE a real
+  // DCC receipt number but never got a WhatsApp receipt delivered (no
+  // phone number, WhatsApp not configured at the time, API/template
+  // error, or the donor's number bounced). Flagged here specifically so
+  // admin can review and send manually — separate from Needs Manual
+  // Receipt, which is about missing receipt NUMBERS, not missing
+  // deliveries of a receipt that already exists.
+  needsWhatsApp: async (req, res) => {
+    try {
+      const donations = await donationModel
+        .find({
+          status: "completed",
+          receiptNumber: { $nin: [null, ""] },
+          whatsappReceiptSentAt: { $in: [null, undefined] },
+        })
+        .sort({ createdAt: -1 })
+        .limit(200)
+        .select("donorName donorEmail donorMobile amount sevaName type createdAt receiptNumber whatsappReceiptError")
+        .lean();
+
+      res.status(200).json({ success: true, count: donations.length, donations });
+    } catch (err) {
+      console.error("needsWhatsApp error:", err);
+      res.status(500).json({ success: false, message: err.message || "Server error" });
+    }
+  },
+
   // ADMIN - manually re-trigger the WhatsApp receipt message, isolated from
   // DCC so a WhatsApp-only failure (bad phone, template not approved yet)
   // can be retried without re-running the DCC sync.
@@ -813,13 +840,23 @@ const donationController = {
         });
       }
 
-      const result = await sendDonationWhatsAppReceipt(donation);
+      // force:true — this is a deliberate, human-initiated resend (admin
+      // clicked the button), so it's allowed to send again even if a
+      // receipt was already sent before. The atomic lock inside still
+      // prevents a genuine double-click from sending twice.
+      const result = await sendDonationWhatsAppReceipt(donation, { force: true });
       if (result.ok) {
         return res.status(200).json({ message: "WhatsApp receipt sent successfully" });
       }
       if (result.reason === "no_receipt_yet") {
         return res.status(200).json({
           message: "This donation doesn't have a DCC receipt number yet, so no WhatsApp message was sent (per policy, we never message a donor without the real receipt). Try 'Resend Receipt' first, then Resend WhatsApp again.",
+          skipped: true,
+        });
+      }
+      if (result.reason === "send_in_progress") {
+        return res.status(200).json({
+          message: "A WhatsApp send for this donation is already in progress (possibly from double-clicking). Please wait a moment and check whether it went through before resending.",
           skipped: true,
         });
       }

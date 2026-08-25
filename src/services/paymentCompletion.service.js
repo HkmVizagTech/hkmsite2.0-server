@@ -23,7 +23,7 @@ const RECEIPT_TEMPLATE_NAME = process.env.WAPI_RECEIPT_TEMPLATE_NAME || "common_
 // This mirrors the fix applied in subhojanam-server, where DCC, receipt
 // generation, and WhatsApp send are each wrapped separately so one failing
 // doesn't cascade into losing the others.
-async function sendDonationWhatsAppReceipt(donation) {
+async function sendDonationWhatsAppReceipt(donation, { force = false } = {}) {
   if (!isWhatsAppConfigured()) return { ok: false, skipped: true, reason: "whatsapp_not_configured" };
   if (!donation.donorMobile) return { ok: false, skipped: true, reason: "no_phone_number" };
 
@@ -37,6 +37,41 @@ async function sendDonationWhatsAppReceipt(donation) {
   // once DCC is manually resynced, sending the real receipt is one click.
   if (!donation.receiptNumber) {
     return { ok: false, skipped: true, reason: "no_receipt_yet" };
+  }
+
+  // HARD IDEMPOTENCY GUARD — a donor must NEVER receive two receipts for
+  // the same transaction, "at any cost". This matters because
+  // runPostCompletionPipeline (and therefore this function) can genuinely
+  // be invoked more than once for the same already-completed donation —
+  // Razorpay itself can and does deliver the same webhook event twice
+  // (documented behavior; merchants are expected to handle it
+  // idempotently), and completeDonation() previously re-ran the full
+  // pipeline even when the donation was already completed before this fix.
+  //
+  // force=true is the ONLY way past this — reserved for the explicit
+  // admin "Resend WhatsApp" action, a deliberate, human-initiated resend
+  // (e.g. donor says they never received it), never for anything automatic.
+  if (!force && donation.whatsappReceiptSentAt) {
+    return { ok: true, skipped: true, reason: "already_sent" };
+  }
+
+  // Atomic lock — prevents a genuine concurrent double-send even under
+  // force (e.g. an admin double-clicking "Resend" quickly, or an
+  // automatic pipeline call racing a manual resend at the same instant).
+  const lockQuery = { _id: donation._id, whatsappSendStatus: { $ne: "sending" } };
+  if (!force) lockQuery.whatsappReceiptSentAt = { $in: [null, undefined] };
+
+  const lock = await donationModel.findOneAndUpdate(
+    lockQuery,
+    { whatsappSendStatus: "sending" },
+    { new: true }
+  );
+  if (!lock) {
+    if (!force) {
+      const latest = await donationModel.findById(donation._id);
+      if (latest?.whatsappReceiptSentAt) return { ok: true, skipped: true, reason: "already_sent" };
+    }
+    return { ok: false, skipped: true, reason: "send_in_progress" };
   }
 
   const amountText = `Rs. ${Number(donation.amount || 0).toLocaleString("en-IN")}`;
@@ -61,6 +96,7 @@ async function sendDonationWhatsAppReceipt(donation) {
     await donationModel.findByIdAndUpdate(donation._id, {
       whatsappReceiptSentAt: new Date(),
       whatsappReceiptError: null,
+      whatsappSendStatus: null,
     });
     return { ok: true, withPdf: true };
   } catch (error) {
@@ -68,7 +104,7 @@ async function sendDonationWhatsAppReceipt(donation) {
     // message goes out (per policy), just record why for admin visibility.
     const message = error && error.message ? error.message : String(error);
     console.error("WhatsApp PDF receipt failed for donation", donation._id.toString(), message);
-    await donationModel.findByIdAndUpdate(donation._id, { whatsappReceiptError: message });
+    await donationModel.findByIdAndUpdate(donation._id, { whatsappReceiptError: message, whatsappSendStatus: null });
     return { ok: false, error: message };
   } finally {
     if (tmpFile) {

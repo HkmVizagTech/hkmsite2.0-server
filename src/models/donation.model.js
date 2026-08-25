@@ -77,6 +77,11 @@ const donationSchema = new mongoose.Schema({
   dccPayload: { type: mongoose.Schema.Types.Mixed },
   dccResponse: { type: mongoose.Schema.Types.Mixed },
   whatsappReceiptSentAt: { type: Date },
+  // Atomic lock to guarantee a donor never receives two WhatsApp receipts
+  // for the same transaction — set to "sending" for the duration of an
+  // in-flight send attempt, cleared after (success or failure). See
+  // sendDonationWhatsAppReceipt in paymentCompletion.service.js.
+  whatsappSendStatus: { type: String, enum: ["sending"], default: undefined },
   whatsappReceiptError: { type: String },
   // Meta (Facebook) Pixel + Conversions API. Captured at order-creation
   // from the browser so the server-side Purchase event (fired on payment
