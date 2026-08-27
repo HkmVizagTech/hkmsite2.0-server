@@ -83,6 +83,10 @@ const donationSchema = new mongoose.Schema({
   // sendDonationWhatsAppReceipt in paymentCompletion.service.js.
   whatsappSendStatus: { type: String, enum: ["sending"], default: undefined },
   whatsappReceiptError: { type: String },
+  // Set once the "pending transaction" WhatsApp reminder has been sent for a
+  // still-pending donation, so the reminder job never messages the same
+  // donor twice about the same donation.
+  whatsappPendingReminderSent: { type: Boolean, default: false },
   // Meta (Facebook) Pixel + Conversions API. Captured at order-creation
   // from the browser so the server-side Purchase event (fired on payment
   // completion) can be deduplicated against the browser pixel event
