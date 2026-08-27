@@ -115,6 +115,25 @@ app.use("/volunteers", volunteerRouter);
 
 // dev routes removed for production safety
 
+// Internal endpoint for pending-transaction WhatsApp reminders — same pattern
+// as the Annadana/Subhojanam site. Intended to be hit by an external cron
+// (cron-job.org, UptimeRobot, etc.) with the x-internal-secret header; the
+// in-process scheduler in index.js also calls the same logic, and the
+// whatsappPendingReminderSent flag keeps both safe from double-sending.
+app.get("/api/internal/send-pending-reminders", async (req, res) => {
+  if (req.headers["x-internal-secret"] !== process.env.INTERNAL_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  try {
+    const { runPendingReminders } = require("./src/services/pendingReminder.service");
+    const result = await runPendingReminders();
+    return res.json({ success: true, ...result });
+  } catch (err) {
+    console.error("Pending reminders job error:", err && err.stack ? err.stack : err);
+    return res.status(500).json({ error: err && err.message ? err.message : String(err) });
+  }
+});
 
 app.get('/health', (req, res) => {
   const states = ['disconnected', 'connected', 'connecting', 'disconnecting'];

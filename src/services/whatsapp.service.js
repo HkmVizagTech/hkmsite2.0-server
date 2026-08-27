@@ -142,10 +142,69 @@ async function sendTemplateMessageWithAttachment(phone, templateName, bodyParame
   return response.data;
 }
 
+// ---------------------------------------------------------------------------
+// Pending-transaction ("donation recorded, payment not yet confirmed")
+// reminder — the same flow used by the Annadana/Subhojanam site, adapted so a
+// single approved template works across every seva on this site.
+//
+// The template body has placeholders we fill per-donation, so one template
+// covers all sevas: {{1}} = donor name, {{2}} = amount, {{3}} = seva name
+// (e.g. "Square Foot Seva", "Gau Seva" — passed dynamically from each
+// donation), {{4}} = clickable payment/seva page link for that specific seva.
+// The template is a text-only template (no header).
+// The template must be approved (via Flaxxa/Meta Business Manager) on the
+// same WhatsApp Business number used by WAPI_TOKEN; override the name with
+// WAPI_PENDING_TEMPLATE_NAME if a different template gets approved.
+// ---------------------------------------------------------------------------
+
+const PENDING_TEMPLATE_NAME =
+  process.env.WAPI_PENDING_TEMPLATE_NAME || "hkmv_pending_transaction";
+
+const SITE_URL =
+  process.env.FRONTEND_URL || "https://www.harekrishnavizag.org";
+
+/**
+ * Sends the approved "pending transaction" WhatsApp template to a donor
+ * whose donation was recorded but whose payment is not yet confirmed.
+ *
+ * The approved template (hkmv_pending_transaction) is text-only with 4 body
+ * placeholders: {{1}} name, {{2}} amount, {{3}} seva name, {{4}} payment link.
+ *
+ * @param {string} phone - raw donor mobile (normalized here)
+ * @param {string} donorName - donor name ({{1}})
+ * @param {number|string} amount - donation amount in rupees ({{2}})
+ * @param {string} [sevaName] - seva/programme name ({{3}}), falls back to
+ *   "your seva" so the same template reads correctly for every seva
+ * @param {string} [sourcePage] - path of the seva page ({{4}}), used to
+ *   build a clickable payment link so the donor can complete their payment
+ */
+async function sendPendingWhatsapp(phone, donorName, amount, sevaName, sourcePage) {
+  const normalizedPhone = normalizePhone(phone);
+  if (!normalizedPhone) throw new Error("Invalid or missing phone number");
+
+  // Build the full payment link from the sourcePage path
+  const paymentLink = sourcePage
+    ? `${SITE_URL}${sourcePage.startsWith("/") ? "" : "/"}${sourcePage}`
+    : `${SITE_URL}/donate`;
+
+  return sendTemplateMessage(normalizedPhone, PENDING_TEMPLATE_NAME, [
+    {
+      type: "body",
+      parameters: [
+        { type: "text", text: String(donorName || "Devotee") },
+        { type: "text", text: String(amount) },
+        { type: "text", text: sevaName || "your seva" },
+        { type: "text", text: paymentLink },
+      ],
+    },
+  ]);
+}
+
 module.exports = {
   isWhatsAppConfigured,
   sendTemplateMessage,
   sendTemplateMessageWithAttachment,
   sendTextMessage,
+  sendPendingWhatsapp,
   normalizePhone,
 };
