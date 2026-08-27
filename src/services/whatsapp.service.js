@@ -147,18 +147,20 @@ async function sendTemplateMessageWithAttachment(phone, templateName, bodyParame
 // reminder — the same flow used by the Annadana/Subhojanam site, adapted so a
 // single approved template works across every seva on this site.
 //
-// The template body has placeholders we fill per-donation, so one template
-// covers all sevas: {{1}} = donor name, {{2}} = amount, {{3}} = seva name
-// (e.g. "Square Foot Seva", "Gau Seva" — passed dynamically from each
-// donation), {{4}} = clickable payment/seva page link for that specific seva.
-// The template is a text-only template (no header).
-// The template must be approved (via Flaxxa/Meta Business Manager) on the
-// same WhatsApp Business number used by WAPI_TOKEN; override the name with
-// WAPI_PENDING_TEMPLATE_NAME if a different template gets approved.
+// The approved template (pending_seva_notice) is a media template:
+//   1 header image placeholder (the seva's desktop banner),
+//   4 body variables: {{body_1}} name, {{body_2}} amount, {{body_3}} seva name,
+//     {{body_4}} "once payment is completed, the amount will be allocated
+//           towards <seva name>" sentence (the seva name is baked in),
+//   1 footer URL button ("Transaction Link") whose link is
+//     https://www.harekrishnavizag.org/{{1}} where {{1}} is the seva page path
+//     suffix (e.g. "brick-seva-campaign", "donations").
+// Override the template name with WAPI_PENDING_TEMPLATE_NAME if a different
+// template gets approved.
 // ---------------------------------------------------------------------------
 
 const PENDING_TEMPLATE_NAME =
-  process.env.WAPI_PENDING_TEMPLATE_NAME || "hkmv_pending_transaction";
+  process.env.WAPI_PENDING_TEMPLATE_NAME || "pending_seva_notice";
 
 const SITE_URL =
   process.env.FRONTEND_URL || "https://www.harekrishnavizag.org";
@@ -167,37 +169,61 @@ const SITE_URL =
  * Sends the approved "pending transaction" WhatsApp template to a donor
  * whose donation was recorded but whose payment is not yet confirmed.
  *
- * The approved template (hkmv_pending_transaction) is text-only with 4 body
- * placeholders: {{1}} name, {{2}} amount, {{3}} seva name, {{4}} payment link.
- *
  * @param {string} phone - raw donor mobile (normalized here)
  * @param {string} donorName - donor name ({{1}})
  * @param {number|string} amount - donation amount in rupees ({{2}})
- * @param {string} [sevaName] - seva/programme name ({{3}}), falls back to
- *   "your seva" so the same template reads correctly for every seva
- * @param {string} [sourcePage] - path of the seva page ({{4}}), used to
- *   build a clickable payment link so the donor can complete their payment
+ * @param {string} [sevaName] - seva/programme name ({{3}} and embedded in {{4}}),
+ *   falls back to "your seva" so the message reads correctly for every seva
+ * @param {object} [options]
+ * @param {string} [options.linkSuffix] - footer URL button suffix ({{1}} of the
+ *   button link), e.g. "brick-seva-campaign". Preferred over sourcePage.
+ * @param {string} [options.sourcePage] - fallback for linkSuffix when not given
+ * @param {string} [options.sevaImage] - header image URL for this seva
  */
-async function sendPendingWhatsapp(phone, donorName, amount, sevaName, sourcePage) {
+async function sendPendingWhatsapp(phone, donorName, amount, sevaName, options = {}) {
   const normalizedPhone = normalizePhone(phone);
   if (!normalizedPhone) throw new Error("Invalid or missing phone number");
 
-  // Build the full payment link from the sourcePage path
-  const paymentLink = sourcePage
-    ? `${SITE_URL}${sourcePage.startsWith("/") ? "" : "/"}${sourcePage}`
-    : `${SITE_URL}/donate`;
+  const { linkSuffix, sourcePage, sevaImage } = options;
 
-  return sendTemplateMessage(normalizedPhone, PENDING_TEMPLATE_NAME, [
-    {
-      type: "body",
-      parameters: [
-        { type: "text", text: String(donorName || "Devotee") },
-        { type: "text", text: String(amount) },
-        { type: "text", text: sevaName || "your seva" },
-        { type: "text", text: paymentLink },
-      ],
-    },
-  ]);
+  // {4} sentence — the seva name is baked into the value so the same template
+  // reads correctly for every seva.
+  const allocationText = `Once payment is completed, the amount will be allocated towards ${sevaName || "your seva"}`;
+
+  // Footer URL button suffix. The template's button link is
+  // "https://www.harekrishnavizag.org/{{1}}" so we send just the path
+  // (no leading slash).
+  const suffix = (linkSuffix || sourcePage)
+    ? String(linkSuffix || sourcePage).replace(/^\/+/, "")
+    : "donate";
+
+  const components = [];
+
+  if (sevaImage) {
+    components.push({
+      type: "header",
+      parameters: [{ type: "image", image: { link: sevaImage } }],
+    });
+  }
+
+  components.push({
+    type: "body",
+    parameters: [
+      { type: "text", text: String(donorName || "Devotee") },
+      { type: "text", text: String(amount) },
+      { type: "text", text: sevaName || "your seva" },
+      { type: "text", text: allocationText },
+    ],
+  });
+
+  components.push({
+    type: "button",
+    sub_type: "url",
+    index: "0",
+    parameters: [{ type: "text", text: suffix }],
+  });
+
+  return sendTemplateMessage(normalizedPhone, PENDING_TEMPLATE_NAME, components);
 }
 
 module.exports = {
