@@ -30,6 +30,13 @@ paymentRouter.post('/order', orderRateLimit, express.json(), paymentController.c
 paymentRouter.post('/subscription', express.json(), paymentController.createSubscription);
 paymentRouter.post('/verify', express.json(), paymentController.verifyPayment);
 
+// Public status-check endpoint — called by the frontend to poll for
+// webhook-triggered completion after a donor navigates away from the
+// Razorpay checkout widget (e.g. pays in their UPI app and goes back).
+// Returns only safe, non-sensitive fields. No auth required — the
+// orderId itself is the access token (long random string from Razorpay).
+paymentRouter.get('/status/:orderId', express.json(), paymentController.checkStatus);
+
 // Three distinct URLs, one per Razorpay account -- each account's own
 // dashboard gets its own webhook secret tied unambiguously to its URL.
 paymentRouter.post('/webhook', express.raw({ type: '*/*' }), paymentController.webhookFor('default'));

@@ -538,6 +538,43 @@ const paymentController = {
       res.status(500).json({ message: error.message || 'Reconcile failed' });
     }
   },
+
+  // GET /payments/status/:orderId — public, no auth required.
+  // Called by the frontend to check whether a payment completed on the
+  // backend (via webhook) after the donor navigated away from the
+  // Razorpay checkout widget before the success callback fired — e.g.
+  // a UPI payment in PhonePe/GPay where the donor switches apps and
+  // doesn't return to the browser. The orderId is used as the access
+  // key (long random Razorpay string, not guessable). Only safe
+  // non-sensitive fields are returned.
+  checkStatus: async (req, res) => {
+    try {
+      const { orderId } = req.params;
+      if (!orderId) return res.status(400).json({ message: 'orderId is required' });
+
+      const donation = await donationModel
+        .findOne({ razorpayOrderId: orderId })
+        .select('status receiptNumber dccSyncStatus whatsappReceiptSentAt donorName amount sevaName type createdAt')
+        .lean();
+
+      if (!donation) return res.status(404).json({ found: false });
+
+      res.status(200).json({
+        found: true,
+        status: donation.status,
+        completed: donation.status === 'completed',
+        receiptReady: !!(donation.receiptNumber),
+        whatsappSent: !!(donation.whatsappReceiptSentAt),
+        donorName: donation.donorName,
+        amount: donation.amount,
+        sevaName: donation.sevaName || donation.type,
+        createdAt: donation.createdAt,
+      });
+    } catch (error) {
+      console.error('checkStatus error', error && error.message ? error.message : error);
+      res.status(500).json({ message: 'Status check failed' });
+    }
+  },
 };
 
 module.exports = { paymentController, createRazorpayInstance };
