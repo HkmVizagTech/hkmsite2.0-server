@@ -16,8 +16,8 @@ async function getClient() {
 		client = redis.createClient({
 			url: REDIS_URL,
 			socket: {
-				connectTimeout: 1500,
-				reconnectStrategy: (retries) => (retries >= 2 ? new Error('Redis unreachable — giving up') : 250),
+				connectTimeout: 2000,
+				reconnectStrategy: (retries) => (retries >= 5 ? new Error('Redis unreachable') : Math.min(retries * 100, 500)),
 			},
 		});
 		client.on('error', (err) => console.error('Redis client error:', err && err.message ? err.message : err));

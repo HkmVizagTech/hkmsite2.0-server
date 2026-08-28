@@ -155,26 +155,49 @@ async function markDonationCompleted({ donationId, orderId, paymentId }) {
 }
 
 // Background pipeline: DCC sync, WhatsApp receipt, Meta CAPI.
-// Errors are recorded per-donation for admin visibility — never throws.
+// Each step is isolated — a failure in one doesn't block the others.
+// DCC and WhatsApp are fire-and-forget: any failures are recorded on the
+// donation record for the Needs Manual Receipt / Needs WhatsApp admin
+// tabs, and the scheduled reconciliation job retries DCC automatically.
+// This keeps the pipeline non-blocking under burst traffic (e.g. during
+// a Janmashtami campaign where hundreds of payments complete in a short
+// window) — a slow DCC response never delays the WhatsApp receipt for a
+// different donor whose payment completed at the same time.
 async function runPostCompletionPipeline(donationId, paymentId) {
+  let donation;
   try {
-    let donation = await donationModel.findById(donationId);
-    if (!donation) return;
-
-    await syncDonationToDcc(donation, paymentId);
-
     donation = await donationModel.findById(donationId);
-
-    await sendDonationWhatsAppReceipt(donation);
-
-    try {
-      const { sendPurchaseEvent } = require("./metaCapi.service");
-      await sendPurchaseEvent(donation);
-    } catch (e) {
-      console.warn("Meta CAPI purchase event failed (non-fatal):", e && e.message ? e.message : e);
-    }
+    if (!donation) return;
   } catch (err) {
-    console.error("Post-completion pipeline error for donation", String(donationId), err && err.stack ? err.stack : err);
+    console.error("Post-completion pipeline: failed to load donation", String(donationId), err && err.message ? err.message : err);
+    return;
+  }
+
+  // DCC sync — fire-and-forget, failures visible in Needs Manual Receipt tab.
+  syncDonationToDcc(donation, paymentId).catch((err) => {
+    console.error("DCC sync failed (non-fatal, will appear in Needs Manual Receipt):", String(donationId), err && err.message ? err.message : err);
+  });
+
+  // WhatsApp receipt — fire-and-forget after refreshing the donation so
+  // we have the DCC receipt number if it synced fast enough, otherwise
+  // the idempotency guard and the Needs WhatsApp tab handle the retry.
+  setImmediate(async () => {
+    try {
+      const refreshed = await donationModel.findById(donationId);
+      if (refreshed) await sendDonationWhatsAppReceipt(refreshed);
+    } catch (err) {
+      console.error("WhatsApp receipt failed (non-fatal, will appear in Needs WhatsApp tab):", String(donationId), err && err.message ? err.message : err);
+    }
+  });
+
+  // Meta CAPI — best-effort, never blocks anything.
+  try {
+    const { sendPurchaseEvent } = require("./metaCapi.service");
+    sendPurchaseEvent(donation).catch((e) => {
+      console.warn("Meta CAPI purchase event failed (non-fatal):", e && e.message ? e.message : e);
+    });
+  } catch (e) {
+    console.warn("Meta CAPI import failed (non-fatal):", e && e.message ? e.message : e);
   }
 }
 
