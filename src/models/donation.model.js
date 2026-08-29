@@ -87,6 +87,15 @@ const donationSchema = new mongoose.Schema({
   // still-pending donation, so the reminder job never messages the same
   // donor twice about the same donation.
   whatsappPendingReminderSent: { type: Boolean, default: false },
+  // Failed attempts at that reminder. The job only marks a donation as
+  // reminded on a genuinely successful send, so without a cap a permanently
+  // unsendable record (bad phone number, deleted template) would be retried
+  // on every pass forever — and because the batch is ordered oldest-first
+  // with a fixed limit, enough of them would starve newer donations out of
+  // the batch entirely. Records past PENDING_REMINDER_MAX_ATTEMPTS are
+  // skipped; whatsappPendingReminderError says why they gave up.
+  whatsappPendingReminderAttempts: { type: Number, default: 0 },
+  whatsappPendingReminderError: { type: String },
   // Meta (Facebook) Pixel + Conversions API. Captured at order-creation
   // from the browser so the server-side Purchase event (fired on payment
   // completion) can be deduplicated against the browser pixel event

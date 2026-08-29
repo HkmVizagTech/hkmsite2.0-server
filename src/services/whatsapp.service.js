@@ -1,20 +1,55 @@
 // src/services/whatsapp.service.js
 //
-// Flaxxa WAPI client, wired to the same API contract already used across
-// other HkmVizagTech repos (bhajan-clubbing-server, hkm-wapi-crm):
+// Flaxxa WAPI client.
 //   Base URL: https://wapi.flaxxa.com
-//   Auth: `token` passed INSIDE the JSON body — not a header, not a query
-//         param on POST requests.
-//   POST /api/v1/sendtemplatemessage  { token, phone, template_name, template_language, components }
-//   POST /api/v1/sendmessage          { token, phone, message }  (only works within the
-//                                       24h customer-initiated reply window — NOT reliable
-//                                       for outbound-first messages like donation receipts)
+//   Auth: `token` passed INSIDE the JSON body / form fields — not a header.
+//   POST /api/v1/sendtemplatemessage                 { token, phone, template_name, template_language, components }
+//   POST /api/v1/sendtemplatemessage_withattachment  multipart, same fields + header_attachment
+//   POST /api/v1/sendmessage                         { token, phone, message }  (24h window only)
 //
-// Phone numbers are stored in the DB in whatever format the donor typed
-// (10-digit Indian mobile, usually). Flaxxa expects E.164 without a leading
-// "+" — we normalize here rather than trusting the stored format.
+// ---------------------------------------------------------------------------
+// HARD-WON FACTS ABOUT THIS API — verified against the live endpoint
+// (Aug 2026, token 9234…, test recipient 919951141915). Do not "simplify"
+// any of this away; every line below is the result of a failing send.
+//
+// 1. FAILURE LOOKS LIKE SUCCESS.
+//    Flaxxa answers HTTP 200 {"status":"success","message_wamid":null} when
+//    Meta REJECTED the message. Only a non-null message_wamid means it was
+//    actually delivered to WhatsApp. assertDelivered() turns the null case
+//    into a thrown error — without it, callers mark records as "sent" for
+//    messages that never left. This is why the pending reminder appeared to
+//    work while nothing arrived.
+//
+// 2. FLAXXA DOES NOT SUPPORT DYNAMIC URL BUTTONS.
+//    A template whose button URL ends in {{1}} can NEVER be sent through this
+//    API. Meta replies "(#131008) Required parameter is missing" because
+//    Flaxxa drops the button parameter on the way through. Verified against
+//    every shape: components [{type:"button",sub_type:"url",index:"0"|0,...}]
+//    (before and after the body component), sub_type "URL", parameter type
+//    "payload", and top-level button / buttons / button_1 / button_url /
+//    button_text_1 / button_url_1 / dynamic_url / button_value / button_parameters.
+//    All of them return message_wamid: null. A known-good template on the same
+//    account WITHOUT a dynamic button sends fine in the same run.
+//    => Template button URLs must be STATIC. Per-page links go in the body.
+//
+// 3. HEADER IMAGES CANNOT BE SENT AS A LINK.
+//    {type:"header", parameters:[{type:"image", image:{link}}]} on the JSON
+//    endpoint is ignored — Meta then reports the header parameter missing.
+//    Header media must be POSTed as binary on the _withattachment endpoint.
+//    (Confirmed working: bc_qr_pass_v4 + binary header_attachment.)
+//
+// 4. THE MULTIPART FIELD IS "components", NOT "components[]".
+//    "components[]" makes Flaxxa throw
+//    json_decode(): Argument #1 ($json) must be of type string, array given.
+//
+// 5. META ACCEPTS ONLY image/jpeg AND image/png FOR IMAGE HEADERS.
+//    The seva banners in R2 are .webp, so they are converted with sharp
+//    before being attached.
+// ---------------------------------------------------------------------------
 
 const WAPI_BASE = "https://wapi.flaxxa.com";
+
+const { buildPendingFields } = require("./pendingMessage.util");
 
 const isWhatsAppConfigured = () => Boolean(process.env.WAPI_TOKEN);
 
@@ -29,6 +64,31 @@ const normalizePhone = (raw) => {
   if (digits.length === 11 && digits.startsWith("0")) return `91${digits.slice(1)}`;
   return digits; // already looks international, or too malformed to fix — pass through
 };
+
+/**
+ * Flaxxa returns HTTP 200 for messages Meta refused. The only reliable
+ * success signal is a non-null message_wamid. Throwing here is what lets
+ * callers (pending reminders, receipts) record a real failure instead of
+ * silently flagging the record as sent.
+ */
+function assertDelivered(payload, context) {
+  const wamid = payload && (payload.message_wamid || payload.wamid);
+  if (wamid) return payload;
+
+  const status = payload && payload.status;
+  const detail =
+    (payload && (payload.error || payload.message)) ||
+    "Meta rejected the send (message_wamid was null)";
+
+  const err = new Error(
+    `WhatsApp send failed for ${context}: ${detail}` +
+      (status ? ` [flaxxa status: ${status}]` : "") +
+      ". Common causes: the template has a dynamic {{1}} URL button (unsupported by Flaxxa)," +
+      " a required header parameter was not supplied, or the template/language pair is wrong."
+  );
+  err.response = payload;
+  throw err;
+}
 
 async function callWapi(path, body) {
   const token = process.env.WAPI_TOKEN;
@@ -64,9 +124,11 @@ async function callWapi(path, body) {
  * first message to a donor — required for outbound receipts/confirmations,
  * unlike free-form sendMessage which only works inside a 24h reply window).
  *
+ * NOTE: do not pass a {type:"button"} component — Flaxxa discards it (see
+ * fact 2 at the top of this file). Keep template button URLs static.
+ *
  * @param {string} phone - raw phone number (any common format, normalized here)
- * @param {string} templateName - the exact name of an approved template in
- *   Meta Business Manager (via Flaxxa)
+ * @param {string} templateName - exact name of an approved template
  * @param {Array}  components - Meta template components array, e.g.
  *   [{ type: "body", parameters: [{ type: "text", text: "Ramesh" }, ...] }]
  * @param {string} [language] - defaults to WAPI_TEMPLATE_LANG env var, then "en"
@@ -75,54 +137,46 @@ async function sendTemplateMessage(phone, templateName, components, language) {
   const normalizedPhone = normalizePhone(phone);
   if (!normalizedPhone) throw new Error("Invalid or missing phone number");
 
-  return callWapi("/api/v1/sendtemplatemessage", {
+  const result = await callWapi("/api/v1/sendtemplatemessage", {
     phone: normalizedPhone,
     template_name: templateName,
     template_language: language || process.env.WAPI_TEMPLATE_LANG || "en",
     components,
   });
+
+  return assertDelivered(result, `template "${templateName}" -> ${normalizedPhone}`);
 }
 
 /**
  * Sends a free-form text message. Only actually reaches the recipient if
- * they messaged this WhatsApp Business number within the last 24 hours —
- * Meta silently drops outbound-first free text otherwise. Not suitable for
- * donation receipts; kept here for completeness / future inbox-reply use.
+ * they messaged this WhatsApp Business number within the last 24 hours.
  */
 async function sendTextMessage(phone, message) {
   const normalizedPhone = normalizePhone(phone);
   if (!normalizedPhone) throw new Error("Invalid or missing phone number");
 
-  return callWapi("/api/v1/sendmessage", { phone: normalizedPhone, message });
+  const result = await callWapi("/api/v1/sendmessage", { phone: normalizedPhone, message });
+  return assertDelivered(result, `text message -> ${normalizedPhone}`);
 }
 
 /**
- * Sends an approved WhatsApp template message WITH a file attached (e.g. the
- * receipt PDF) as the template's header media. Flaxxa exposes this as a
- * SEPARATE endpoint from the plain JSON template call above — it requires
- * multipart/form-data (with the token inside the form fields, same as the
- * JSON call) rather than a JSON body, so it can't reuse callWapi().
+ * Low-level multipart template send. Header media (PDF or image) goes up as
+ * binary in `header_attachment`; this is the ONLY way header media reaches
+ * Meta through Flaxxa.
  *
- * @param {string} phone - raw phone number (normalized here)
- * @param {string} templateName - approved template name whose header is
- *   configured as a document/media placeholder in Meta Business Manager
- * @param {Array}  bodyParameters - just the body{parameters:[...]} array
- *   contents (not the full components wrapper — this function builds that)
- * @param {string} filePath - local path to the PDF to attach
- * @param {string} filename - filename shown to the recipient in WhatsApp
+ * @param {string} normalizedPhone - already normalized E.164-without-plus
+ * @param {string} templateName
+ * @param {Array}  components - full components array (body only; no buttons)
+ * @param {Buffer|import("stream").Readable} file
+ * @param {string} filename
+ * @param {string} contentType - "application/pdf" | "image/jpeg" | "image/png"
+ * @param {string} [language]
  */
-async function sendTemplateMessageWithAttachment(phone, templateName, bodyParameters, filePath, filename, language) {
-  const normalizedPhone = normalizePhone(phone);
-  if (!normalizedPhone) throw new Error("Invalid or missing phone number");
-
+async function postTemplateWithAttachment(normalizedPhone, templateName, components, file, filename, contentType, language) {
   const token = process.env.WAPI_TOKEN;
   if (!token) throw new Error("WAPI_TOKEN is not set");
 
-  // Lazy-required: only needed for this one function, and keeps the module
-  // loadable even in environments where these packages weren't installed
-  // for some reason (the plain JSON path above needs neither).
   const FormData = require("form-data");
-  const fs = require("fs");
   const axios = require("axios");
 
   const form = new FormData();
@@ -130,55 +184,112 @@ async function sendTemplateMessageWithAttachment(phone, templateName, bodyParame
   form.append("phone", normalizedPhone);
   form.append("template_name", templateName);
   form.append("template_language", language || process.env.WAPI_TEMPLATE_LANG || "en");
-  form.append("components", JSON.stringify([{ type: "body", parameters: bodyParameters }]));
-  form.append("header_attachment", fs.createReadStream(filePath), {
-    filename,
-    contentType: "application/pdf",
-  });
+  // MUST be "components" — "components[]" makes Flaxxa throw (fact 4 above).
+  form.append("components", JSON.stringify(components));
+  form.append("header_attachment", file, { filename, contentType });
 
   const response = await axios.post(`${WAPI_BASE}/api/v1/sendtemplatemessage_withattachment`, form, {
     headers: form.getHeaders(),
+    maxBodyLength: Infinity,
+    maxContentLength: Infinity,
   });
-  return response.data;
+
+  return assertDelivered(response.data, `template "${templateName}" (+${contentType}) -> ${normalizedPhone}`);
+}
+
+/**
+ * Sends an approved template WITH a PDF attached as the template's header
+ * media (e.g. the donation receipt).
+ *
+ * @param {Array} bodyParameters - just the body parameters array (not the
+ *   full components wrapper — this function builds that)
+ */
+async function sendTemplateMessageWithAttachment(phone, templateName, bodyParameters, filePath, filename, language) {
+  const normalizedPhone = normalizePhone(phone);
+  if (!normalizedPhone) throw new Error("Invalid or missing phone number");
+
+  const fs = require("fs");
+  return postTemplateWithAttachment(
+    normalizedPhone,
+    templateName,
+    [{ type: "body", parameters: bodyParameters }],
+    fs.createReadStream(filePath),
+    filename,
+    "application/pdf",
+    language
+  );
 }
 
 // ---------------------------------------------------------------------------
-// Pending-transaction ("donation recorded, payment not yet confirmed")
-// reminder — the same flow used by the Annadana/Subhojanam site, adapted so a
-// single approved template works across every seva on this site.
+// Header image handling
 //
-// The approved template (pending_seva_notice) is a media template:
-//   1 header image placeholder (the seva's desktop banner),
-//   4 body variables: {{body_1}} name, {{body_2}} amount, {{body_3}} seva name,
-//     {{body_4}} "once payment is completed, the amount will be allocated
-//           towards <seva name>" sentence (the seva name is baked in),
-//   1 footer URL button ("Transaction Link") whose link is
-//     https://www.harekrishnavizag.org/{{1}} where {{1}} is the seva page path
-//     suffix (e.g. "brick-seva-campaign", "donations").
-// Override the template name with WAPI_PENDING_TEMPLATE_NAME if a different
-// template gets approved.
+// Meta accepts only image/jpeg and image/png for image headers, and Flaxxa
+// will not fetch a header image from a link — so the banner is downloaded
+// here, converted to JPEG, and attached as binary. Converted buffers are
+// cached per URL for the process lifetime: the same handful of seva banners
+// are reused across every reminder run.
+// ---------------------------------------------------------------------------
+
+const headerImageCache = new Map();
+const MAX_HEADER_BYTES = 4.5 * 1024 * 1024; // Meta's limit is 5MB
+
+async function fetchHeaderImageJpeg(url) {
+  if (!url) return null;
+  if (headerImageCache.has(url)) return headerImageCache.get(url);
+
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Header image download failed (HTTP ${res.status}): ${url}`);
+  const input = Buffer.from(await res.arrayBuffer());
+
+  const sharp = require("sharp");
+  let jpeg = await sharp(input)
+    .rotate()
+    .resize({ width: 1600, withoutEnlargement: true })
+    .jpeg({ quality: 80, mozjpeg: true })
+    .toBuffer();
+
+  if (jpeg.length > MAX_HEADER_BYTES) {
+    jpeg = await sharp(input)
+      .rotate()
+      .resize({ width: 1080, withoutEnlargement: true })
+      .jpeg({ quality: 70, mozjpeg: true })
+      .toBuffer();
+  }
+
+  headerImageCache.set(url, jpeg);
+  return jpeg;
+}
+
+// ---------------------------------------------------------------------------
+// Pending-transaction ("donation recorded, payment not yet confirmed") reminder.
+//
+// Template shape this code expects (pending_seva_notice):
+//   header : IMAGE  — supplied per seva as a binary JPEG attachment
+//   body   : 4 variables
+//              {{1}} donor name
+//              {{2}} amount
+//              {{3}} seva name
+//              {{4}} allocation sentence, WITH the seva's page link appended
+//   button : optional, and its URL MUST BE STATIC (no {{1}}). Flaxxa cannot
+//            supply a button variable, so a dynamic button URL makes every
+//            send fail with (#131008). The per-seva link lives in {{4}} instead.
 // ---------------------------------------------------------------------------
 
 const PENDING_TEMPLATE_NAME =
   process.env.WAPI_PENDING_TEMPLATE_NAME || "pending_seva_notice";
-
-const SITE_URL =
-  process.env.FRONTEND_URL || "https://www.harekrishnavizag.org";
 
 /**
  * Sends the approved "pending transaction" WhatsApp template to a donor
  * whose donation was recorded but whose payment is not yet confirmed.
  *
  * @param {string} phone - raw donor mobile (normalized here)
- * @param {string} donorName - donor name ({{1}})
- * @param {number|string} amount - donation amount in rupees ({{2}})
- * @param {string} [sevaName] - seva/programme name ({{3}} and embedded in {{4}}),
- *   falls back to "your seva" so the message reads correctly for every seva
+ * @param {string} donorName - {{1}}
+ * @param {number|string} amount - {{2}}
+ * @param {string} [sevaName] - {{3}}, also embedded in {{4}}
  * @param {object} [options]
- * @param {string} [options.linkSuffix] - footer URL button suffix ({{1}} of the
- *   button link), e.g. "brick-seva-campaign". Preferred over sourcePage.
- * @param {string} [options.sourcePage] - fallback for linkSuffix when not given
- * @param {string} [options.sevaImage] - header image URL for this seva
+ * @param {string} [options.linkSuffix] - seva page path, e.g. "brick-seva-campaign"
+ * @param {string} [options.sourcePage] - fallback for linkSuffix
+ * @param {string} [options.sevaImage] - header banner URL for this seva
  */
 async function sendPendingWhatsapp(phone, donorName, amount, sevaName, options = {}) {
   const normalizedPhone = normalizePhone(phone);
@@ -186,42 +297,41 @@ async function sendPendingWhatsapp(phone, donorName, amount, sevaName, options =
 
   const { linkSuffix, sourcePage, sevaImage } = options;
 
-  // {4} sentence — the seva name is baked into the value so the same template
-  // reads correctly for every seva.
-  const allocationText = `Once payment is completed, the amount will be allocated towards ${sevaName || "your seva"}`;
+  // includeLinkInBody: true — on Flaxxa the template's button URL must be
+  // static (fact 2 above), so the seva link rides along in {{4}} instead.
+  const fields = buildPendingFields({
+    donorName,
+    amount,
+    sevaName,
+    linkSuffix: linkSuffix || sourcePage,
+    includeLinkInBody: true,
+  });
 
-  // Footer URL button suffix. The template's button link is
-  // "https://www.harekrishnavizag.org/{{1}}" so we send just the path
-  // (no leading slash).
-  const suffix = (linkSuffix || sourcePage)
-    ? String(linkSuffix || sourcePage).replace(/^\/+/, "")
-    : "donate";
+  const components = [
+    {
+      type: "body",
+      parameters: [
+        { type: "text", text: fields.name },
+        { type: "text", text: fields.amount },
+        { type: "text", text: fields.seva },
+        { type: "text", text: fields.allocation },
+      ],
+    },
+  ];
 
-  const components = [];
-
+  // Image header -> must go up as binary. If no banner resolves, fall back to
+  // the plain JSON send (only valid if the template has no media header).
   if (sevaImage) {
-    components.push({
-      type: "header",
-      parameters: [{ type: "image", image: { link: sevaImage } }],
-    });
+    const jpeg = await fetchHeaderImageJpeg(sevaImage);
+    return postTemplateWithAttachment(
+      normalizedPhone,
+      PENDING_TEMPLATE_NAME,
+      components,
+      jpeg,
+      "seva-banner.jpg",
+      "image/jpeg"
+    );
   }
-
-  components.push({
-    type: "body",
-    parameters: [
-      { type: "text", text: String(donorName || "Devotee") },
-      { type: "text", text: String(amount) },
-      { type: "text", text: sevaName || "your seva" },
-      { type: "text", text: allocationText },
-    ],
-  });
-
-  components.push({
-    type: "button",
-    sub_type: "url",
-    index: "0",
-    parameters: [{ type: "text", text: suffix }],
-  });
 
   return sendTemplateMessage(normalizedPhone, PENDING_TEMPLATE_NAME, components);
 }
@@ -233,4 +343,5 @@ module.exports = {
   sendTextMessage,
   sendPendingWhatsapp,
   normalizePhone,
+  fetchHeaderImageJpeg,
 };
