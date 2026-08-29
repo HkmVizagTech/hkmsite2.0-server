@@ -5,12 +5,18 @@
 // /api/internal/send-pending-reminders endpoint), adapted for this site's
 // donation model and many sevas.
 //
-// A donation becomes "pending" here when the Razorpay order is created but
-// the payment is not yet captured/confirmed (abandoned checkout, or payment
-// still in progress). Once a pending donation is older than the cutoff
-// (default 6 minutes, like Annadan) and we haven't already messaged the
-// donor, we send the approved "pending transaction" WhatsApp template with
-// that donation's own seva name — so one template covers every seva.
+// Two kinds of donation get the nudge, both with the identical "pending"
+// wording (donors don't need the distinction, and it keeps one approved
+// template covering everything):
+//   "pending" — the Razorpay order was created but never captured: an
+//               abandoned checkout, or a payment still in progress.
+//   "failed"  — Razorpay sent payment.failed for the order and no capture was
+//               found (see payment.controller.js). The donor tried and the
+//               payment did not go through, so the nudge is if anything more
+//               useful here than for an abandoned checkout.
+// Once such a donation is older than the cutoff (default 6 minutes, like
+// Annadan) and we haven't already messaged the donor, we send the approved
+// "pending transaction" WhatsApp template with that donation's own seva name.
 //
 // The whatsappPendingReminderSent flag makes this idempotent: it is set only
 // after a successful send, so overlapping runs (in-process scheduler + an
@@ -61,6 +67,14 @@ function resolveProvider() {
 // donor to have genuinely abandoned an in-progress checkout).
 const CUTOFF_MINUTES = Number(process.env.PENDING_REMINDER_CUTOFF_MINUTES || 6);
 
+// ...and how old is TOO old. Without this floor, the very first run after
+// deploy would sweep up every pending/failed donation ever recorded and
+// message donors about attempts they abandoned months ago. It also keeps the
+// job sane in steady state: a nudge about a checkout from last week is noise,
+// not a reminder. Anything older than this is ignored permanently — it never
+// becomes eligible again, so nothing accumulates waiting to be released.
+const MAX_AGE_HOURS = Number(process.env.PENDING_REMINDER_MAX_AGE_HOURS || 24);
+
 // Batch size per run — keeps each pass short and lets the schedule loop
 // around to remaining records on later runs.
 const BATCH_SIZE = Number(process.env.PENDING_REMINDER_BATCH_SIZE || 100);
@@ -71,6 +85,74 @@ const BATCH_SIZE = Number(process.env.PENDING_REMINDER_BATCH_SIZE || 100);
 // ordered oldest-first with a fixed limit, a pile of them would crowd newer
 // donations out of the batch. Their last error is kept on the record.
 const MAX_ATTEMPTS = Number(process.env.PENDING_REMINDER_MAX_ATTEMPTS || 3);
+
+// Donation statuses that earn a reminder. Both get the same message.
+// Override with a comma-separated PENDING_REMINDER_STATUSES if needed.
+const REMINDER_STATUSES = String(process.env.PENDING_REMINDER_STATUSES || "pending,failed")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+// A donor whose payment fails or stalls usually retries straight away, and
+// each attempt creates its OWN donation record — so the failed record lingers
+// while the retry succeeds. Telling someone "your transaction of Rs.2100 is
+// pending" minutes after their money actually went through is worse than
+// saying nothing: it reads as "your payment did not work", and some donors
+// will pay a second time.
+//
+// So immediately before each send we re-check the database: has this mobile
+// number completed a donation since it made this attempt? If yes, stay quiet.
+//
+// The lookback grace covers the case where the successful payment is recorded
+// a little BEFORE the stalled record's own timestamp (clock skew, or a webhook
+// landing out of order). It is deliberately small: a wide window would
+// suppress legitimate reminders for regular donors, who by definition have
+// completed donations in their history. Set to 0 to disable the check.
+const RETRY_GRACE_MINUTES = Number(
+  process.env.PENDING_REMINDER_SKIP_IF_COMPLETED_WITHIN_MINUTES || 15
+);
+
+// Mirrors SUCCESS_STATUSES in donationAdmin.controller.js.
+const SUCCESS_STATUSES = ["completed"];
+
+// donorMobile is stored as the donor typed it, so the same person can appear
+// as "9951141915", "919951141915" or "+91 99511 41915" across attempts.
+// Match on the common variants of the last 10 digits — exact values rather
+// than a suffix regex, so the donorMobile index is still usable.
+function mobileVariants(raw) {
+  const digits = String(raw || "").replace(/\D/g, "");
+  if (digits.length < 10) return digits ? [String(raw), digits] : [];
+  const last10 = digits.slice(-10);
+  return [last10, `91${last10}`, `+91${last10}`, `0${last10}`, String(raw)];
+}
+
+/**
+ * True when this donor has already completed a donation since making this
+ * attempt — i.e. the pending/failed record is a superseded retry and the
+ * money is in.
+ */
+async function donorAlreadyCompleted(donation) {
+  if (!RETRY_GRACE_MINUTES || !donation.donorMobile) return false;
+
+  const variants = mobileVariants(donation.donorMobile);
+  if (!variants.length) return false;
+
+  const since = new Date(
+    new Date(donation.createdAt).getTime() - RETRY_GRACE_MINUTES * 60 * 1000
+  );
+
+  const completed = await donationModel
+    .findOne({
+      _id: { $ne: donation._id },
+      donorMobile: { $in: variants },
+      status: { $in: SUCCESS_STATUSES },
+      createdAt: { $gte: since },
+    })
+    .select("_id amount sevaName createdAt")
+    .lean();
+
+  return completed || false;
+}
 
 // Desktop banner image shown as the WhatsApp template header, keyed by the
 // donation's base sourcePage (see baseSourcePage). If a page has no dedicated
@@ -182,12 +264,16 @@ async function runPendingReminders() {
     return { skipped: true, reason: provider.reason, provider: provider.name, checked: 0, sent: 0, failed: 0 };
   }
 
-  const cutoff = new Date(Date.now() - CUTOFF_MINUTES * 60 * 1000);
+  const now = Date.now();
+  // Old enough to have genuinely stalled...
+  const cutoff = new Date(now - CUTOFF_MINUTES * 60 * 1000);
+  // ...but recent enough that the donor still remembers making the attempt.
+  const floor = new Date(now - MAX_AGE_HOURS * 60 * 60 * 1000);
 
   const pendingDonations = await donationModel
     .find({
-      status: "pending",
-      createdAt: { $lte: cutoff },
+      status: { $in: REMINDER_STATUSES },
+      createdAt: { $lte: cutoff, $gte: floor },
       whatsappPendingReminderSent: { $ne: true },
       // Give up on records that have already failed MAX_ATTEMPTS times.
       // ($lt alone would not match documents predating this field.)
@@ -205,6 +291,7 @@ async function runPendingReminders() {
 
   let sent = 0;
   let failed = 0;
+  let skipped = 0;
 
   for (const donation of pendingDonations) {
     if (!donation.donorMobile) {
@@ -212,6 +299,20 @@ async function runPendingReminders() {
       // this record forever on every pass.
       donation.whatsappPendingReminderSent = true;
       await donation.save();
+      continue;
+    }
+
+    // Superseded retry — this donor's money already went through, so a
+    // "still pending" message would only confuse them into paying twice.
+    const completedInstead = await donorAlreadyCompleted(donation);
+    if (completedInstead) {
+      donation.whatsappPendingReminderSent = true;
+      await donation.save();
+      skipped += 1;
+      console.log(
+        `Pending reminder skipped for ${donation.status} donation ${String(donation._id)} —`,
+        `donor completed donation ${String(completedInstead._id)} instead`,
+      );
       continue;
     }
 
@@ -231,7 +332,7 @@ async function runPendingReminders() {
       await donation.save();
       sent += 1;
       console.log(
-        `Pending reminder sent via ${provider.name} for donation`,
+        `Pending reminder sent via ${provider.name} for ${donation.status} donation`,
         String(donation._id),
         "->",
         donation.donorMobile,
@@ -258,10 +359,14 @@ async function runPendingReminders() {
 
   return {
     provider: provider.name,
+    statuses: REMINDER_STATUSES,
     checked: pendingDonations.length,
     sent,
     failed,
+    skipped,
     cutoffMinutes: CUTOFF_MINUTES,
+    maxAgeHours: MAX_AGE_HOURS,
+    window: { from: floor.toISOString(), to: cutoff.toISOString() },
   };
 }
 
