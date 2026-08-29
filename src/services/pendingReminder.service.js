@@ -21,6 +21,40 @@ const {
   isWhatsAppConfigured,
   sendPendingWhatsapp,
 } = require("./whatsapp.service");
+const {
+  isGupshupConfigured,
+  sendPendingWhatsappViaGupshup,
+} = require("./gupshup.service");
+
+// Which BSP sends the pending reminder.
+//
+//   "flaxxa"  (default) — the main +91… business number. Its template button
+//              URL has to be static because Flaxxa cannot fill a {{1}} in a
+//              button link, so the seva link is written into the body text.
+//   "gupshup"          — the 917075176108 number. Gupshup DOES fill dynamic
+//              URL buttons, so the reminder keeps its per-seva
+//              "Transaction Link" button. Needs GUPSHUP_API_KEY,
+//              GUPSHUP_APP_NAME and GUPSHUP_PENDING_TEMPLATE_ID.
+//
+// Switch with PENDING_WHATSAPP_PROVIDER once the Gupshup template is approved.
+const PROVIDER = String(process.env.PENDING_WHATSAPP_PROVIDER || "flaxxa").toLowerCase();
+
+function resolveProvider() {
+  if (PROVIDER === "gupshup") {
+    return {
+      name: "gupshup",
+      configured: isGupshupConfigured(),
+      reason: "gupshup_not_configured",
+      send: sendPendingWhatsappViaGupshup,
+    };
+  }
+  return {
+    name: "flaxxa",
+    configured: isWhatsAppConfigured(),
+    reason: "whatsapp_not_configured",
+    send: sendPendingWhatsapp,
+  };
+}
 
 // How old a pending donation must be before we nudge the donor (6 minutes —
 // enough for UPI/auto-debit flows to settle or fail visibly, and for the
@@ -30,6 +64,13 @@ const CUTOFF_MINUTES = Number(process.env.PENDING_REMINDER_CUTOFF_MINUTES || 6);
 // Batch size per run — keeps each pass short and lets the schedule loop
 // around to remaining records on later runs.
 const BATCH_SIZE = Number(process.env.PENDING_REMINDER_BATCH_SIZE || 100);
+
+// How many failed sends before a donation is left alone. The job marks a
+// donation reminded only on a real success, so a permanently unsendable record
+// would otherwise be retried every pass forever — and since the batch is
+// ordered oldest-first with a fixed limit, a pile of them would crowd newer
+// donations out of the batch. Their last error is kept on the record.
+const MAX_ATTEMPTS = Number(process.env.PENDING_REMINDER_MAX_ATTEMPTS || 3);
 
 // Desktop banner image shown as the WhatsApp template header, keyed by the
 // donation's base sourcePage (see baseSourcePage). If a page has no dedicated
@@ -52,8 +93,14 @@ const SEVA_IMAGES = {
 };
 
 // Generic fallback header image when no mapping matches.
+//
+// This must NOT be empty: pending_seva_notice has an IMAGE header, and Meta
+// rejects the entire send with "(#131008) Required parameter is missing" when
+// no header media is supplied. Point WAPI_PENDING_IMAGE at a neutral temple
+// banner if this one isn't the right generic.
 const DEFAULT_SEVA_IMAGE =
-  process.env.WAPI_PENDING_IMAGE || "";
+  process.env.WAPI_PENDING_IMAGE ||
+  R2 + "1785588189215-1785588187426-brick-hero-desk.webp";
 
 // Reduces a sourcePage to its base page so campaigner/deep-link variants map
 // to the same banner as their parent page, e.g. "/janmashtami/c/xyz" ->
@@ -130,8 +177,9 @@ function resolveLinkSuffix(donation) {
  * @returns {Promise<{skipped?: boolean, reason?: string, checked: number, sent: number, failed: number}>}
  */
 async function runPendingReminders() {
-  if (!isWhatsAppConfigured()) {
-    return { skipped: true, reason: "whatsapp_not_configured", checked: 0, sent: 0, failed: 0 };
+  const provider = resolveProvider();
+  if (!provider.configured) {
+    return { skipped: true, reason: provider.reason, provider: provider.name, checked: 0, sent: 0, failed: 0 };
   }
 
   const cutoff = new Date(Date.now() - CUTOFF_MINUTES * 60 * 1000);
@@ -141,6 +189,12 @@ async function runPendingReminders() {
       status: "pending",
       createdAt: { $lte: cutoff },
       whatsappPendingReminderSent: { $ne: true },
+      // Give up on records that have already failed MAX_ATTEMPTS times.
+      // ($lt alone would not match documents predating this field.)
+      $or: [
+        { whatsappPendingReminderAttempts: { $exists: false } },
+        { whatsappPendingReminderAttempts: { $lt: MAX_ATTEMPTS } },
+      ],
       // Skip recurring/subscription first-charges — those stay "pending"
       // until the subscription activates, and the donor already authorised
       // autopay, so a "donation not confirmed" nudge would be wrong here.
@@ -162,7 +216,7 @@ async function runPendingReminders() {
     }
 
     try {
-      await sendPendingWhatsapp(
+      await provider.send(
         donation.donorMobile,
         donation.donorName || "Devotee",
         donation.amount,
@@ -177,15 +231,23 @@ async function runPendingReminders() {
       await donation.save();
       sent += 1;
       console.log(
-        "Pending reminder sent for donation",
+        `Pending reminder sent via ${provider.name} for donation`,
         String(donation._id),
         "->",
         donation.donorMobile,
       );
     } catch (err) {
       failed += 1;
+      const message = err && err.message ? err.message : String(err);
+      donation.whatsappPendingReminderAttempts = (donation.whatsappPendingReminderAttempts || 0) + 1;
+      donation.whatsappPendingReminderError = message.slice(0, 500);
+      try {
+        await donation.save();
+      } catch (saveErr) {
+        console.error("Could not record reminder failure for donation", String(donation._id), saveErr.message);
+      }
       console.error(
-        "Pending reminder failed for donation",
+        `Pending reminder failed via ${provider.name} for donation`,
         String(donation._id),
         err && err.response && err.response.data
           ? JSON.stringify(err.response.data)
@@ -195,6 +257,7 @@ async function runPendingReminders() {
   }
 
   return {
+    provider: provider.name,
     checked: pendingDonations.length,
     sent,
     failed,
@@ -202,4 +265,13 @@ async function runPendingReminders() {
   };
 }
 
-module.exports = { runPendingReminders };
+module.exports = {
+  runPendingReminders,
+  // Exported for warm-seva-banners.js, which pre-converts every banner to JPEG
+  // so no donor's reminder is the first to pay that cost (or to hit the
+  // generic-banner fallback because R2 was misconfigured).
+  SEVA_IMAGES,
+  DEFAULT_SEVA_IMAGE,
+  getSevaImage,
+  resolveLinkSuffix,
+};
