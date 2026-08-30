@@ -212,4 +212,66 @@ async function completeDonation({ donationId, orderId, paymentId }) {
   return donationModel.findById(donation._id);
 }
 
-module.exports = { completeDonation, markDonationCompleted, runPostCompletionPipeline, sendDonationWhatsAppReceipt };
+// Handles a Razorpay `subscription.charged` event — fires for EVERY charge
+// on a subscription, including the very first one. Shared by both the
+// inline webhook fallback (payment.controller.js, used when Redis isn't
+// available) and the queued worker (worker/paymentWorker.js) so the two
+// paths can never drift apart with different logic for the same event.
+//
+// Two cases:
+//   - First charge: the donor's authorization already created a pending
+//     donation record (in createSubscription). If it's still pending here
+//     (verifyPayment from the frontend hasn't completed it yet, or never
+//     will if the donor closed the tab right after authorizing), complete
+//     THAT record rather than creating a duplicate.
+//   - Every later monthly charge: clone the original into a fresh record
+//     (all receipt/DCC/WhatsApp/payment-identifier fields stripped so it
+//     starts clean) and complete that.
+// Idempotent against duplicate webhook delivery via razorpayPaymentId.
+async function handleSubscriptionCharged(payload) {
+  const payment = payload && payload.payment && payload.payment.entity;
+  const subscription = payload && payload.subscription && payload.subscription.entity;
+  const subId = (subscription && subscription.id) || (payment && payment.subscription_id);
+  if (!payment || !subId) return { ok: false, reason: "missing_payment_or_subscription" };
+
+  const already = await donationModel.findOne({ razorpayPaymentId: payment.id });
+  if (already) {
+    return { ok: true, skipped: true, reason: "already_recorded" };
+  }
+
+  const original = await donationModel.findOne({ subscriptionId: subId }).sort({ createdAt: 1 });
+  if (!original) {
+    return { ok: false, reason: "no_original_donation_found" };
+  }
+
+  let targetDonationId;
+  if (original.status === "pending") {
+    // First charge — complete the record created at signup rather than
+    // creating a duplicate.
+    targetDonationId = original._id;
+  } else {
+    // A later monthly charge — clone the original into a fresh record.
+    const src = original.toObject();
+    [
+      "_id", "__v", "createdAt", "updatedAt", "date",
+      "razorpayOrderId", "razorpayPaymentId", "transactionId",
+      "receiptNumber", "receiptGeneratedAt",
+      "lastPaymentDate",
+      "dccSyncedAt", "dccLastAttemptAt", "dccSyncError", "dccPayload", "dccResponse", "dccSyncStatus",
+      "whatsappReceiptSentAt", "whatsappReceiptError", "whatsappSendStatus",
+    ].forEach((k) => delete src[k]);
+    const clone = await donationModel.create({
+      ...src,
+      amount: payment.amount ? payment.amount / 100 : original.amount,
+      status: "pending",
+    });
+    targetDonationId = clone._id;
+  }
+
+  await completeDonation({ donationId: targetDonationId, paymentId: payment.id });
+  await donationModel.findByIdAndUpdate(original._id, { lastPaymentDate: new Date() });
+
+  return { ok: true, donationId: targetDonationId.toString() };
+}
+
+module.exports = { completeDonation, markDonationCompleted, runPostCompletionPipeline, sendDonationWhatsAppReceipt, handleSubscriptionCharged };

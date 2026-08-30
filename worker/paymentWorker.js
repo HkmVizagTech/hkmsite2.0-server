@@ -1,6 +1,6 @@
 const { connectDb } = require('../src/config/db');
 const { popJob } = require('../src/redis/redisClient');
-const { completeDonation } = require('../src/services/paymentCompletion.service');
+const { completeDonation, handleSubscriptionCharged } = require('../src/services/paymentCompletion.service');
 const { donationModel } = require('../src/models/donation.model');
 const { createRazorpayInstance } = require('../src/controllers/payment.controller');
 
@@ -69,54 +69,17 @@ async function processJob(job) {
         break;
       }
       case 'subscription.charged': {
-        // Fires for every successful monthly autopay charge (including the
-        // first). We create one donation record per charge so each month is
-        // tracked, receipted and DCC-synced like a normal donation.
-        const payment = job.payload && job.payload.payment && job.payload.payment.entity;
-        const subscription = job.payload && job.payload.subscription && job.payload.subscription.entity;
-        const subId = (subscription && subscription.id) || (payment && payment.subscription_id);
-        if (!payment || !subId) break;
-
-        // Idempotency — this exact charge already recorded?
-        const already = await donationModel.findOne({ razorpayPaymentId: payment.id });
-        if (already) {
-          console.log('Worker: subscription charge already recorded', payment.id);
-          break;
-        }
-
-        // The record created when the donor authorised the subscription.
-        const original = await donationModel.findOne({ subscriptionId: subId }).sort({ createdAt: 1 });
-        if (!original) {
-          console.warn('Worker: no donation found for subscription', subId);
-          break;
-        }
-
-        if (original.status === 'pending') {
-          // First charge — complete the record we already created at signup.
-          await completeDonation({ donationId: original._id, paymentId: payment.id });
-          console.log('Worker: subscription first charge completed', subId);
+        // Shared logic lives in handleSubscriptionCharged (paymentCompletion
+        // .service.js) so this queued path and the inline webhook fallback
+        // in payment.controller.js never drift apart.
+        const result = await handleSubscriptionCharged(job.payload);
+        if (result.ok && !result.skipped) {
+          console.log('Worker: subscription charge completed', result.donationId);
+        } else if (result.skipped) {
+          console.log('Worker: subscription charge skipped —', result.reason);
         } else {
-          // A later monthly charge — clone the original into a fresh record.
-          const src = original.toObject();
-          [
-            '_id', '__v', 'createdAt', 'updatedAt', 'date',
-            'razorpayOrderId', 'razorpayPaymentId', 'transactionId',
-            'receiptNumber', 'receiptGeneratedAt',
-            'lastPaymentDate',
-            'dccSyncedAt', 'dccLastAttemptAt', 'dccSyncError', 'dccPayload', 'dccResponse',
-            'whatsappReceiptSentAt', 'whatsappReceiptError',
-          ].forEach((k) => delete src[k]);
-          const clone = await donationModel.create({
-            ...src,
-            amount: payment.amount ? payment.amount / 100 : original.amount,
-            status: 'pending',
-            dccSyncStatus: 'pending',
-          });
-          await completeDonation({ donationId: clone._id, paymentId: payment.id });
-          console.log('Worker: subscription recurring charge recorded', subId, payment.id);
+          console.warn('Worker: subscription charge could not be processed —', result.reason);
         }
-        // Track when this subscription last charged — useful for admin visibility.
-        await donationModel.findByIdAndUpdate(original._id, { lastPaymentDate: new Date() });
         break;
       }
       case 'subscription.activated': {

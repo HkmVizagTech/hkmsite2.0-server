@@ -3,7 +3,7 @@ const crypto = require('crypto');
 const { donationModel } = require('../models/donation.model');
 const { planModel } = require('../models/plan.model');
 const { enqueueJob } = require('../redis/redisClient');
-const { completeDonation, markDonationCompleted, runPostCompletionPipeline } = require('../services/paymentCompletion.service');
+const { completeDonation, markDonationCompleted, runPostCompletionPipeline, handleSubscriptionCharged } = require('../services/paymentCompletion.service');
 
 const RAZORPAY_ACCOUNTS = {
   default: {
@@ -120,6 +120,24 @@ async function processWebhookEventInline(event) {
     case 'subscription.activated': {
       const sub = event.payload && event.payload.subscription && event.payload.subscription.entity;
       if (sub) await donationModel.findOneAndUpdate({ subscriptionId: sub.id }, { status: 'active' });
+      break;
+    }
+    case 'subscription.charged': {
+      // Fires for EVERY charge on a subscription, including the very first
+      // one (also handled by verifyPayment via the frontend). For month 2
+      // onwards, this is the ONLY signal we ever get — Razorpay just
+      // auto-debits in the background with no frontend interaction at all.
+      // Shared logic (idempotent, handles the first-charge edge case,
+      // clones all relevant fields) lives in handleSubscriptionCharged so
+      // this inline path and the queued worker never drift apart.
+      const result = await handleSubscriptionCharged(event.payload);
+      if (result.ok && !result.skipped) {
+        console.log('subscription.charged: recurring donation completed', result.donationId);
+      } else if (result.skipped) {
+        console.log('subscription.charged: skipped —', result.reason);
+      } else {
+        console.warn('subscription.charged: could not process —', result.reason);
+      }
       break;
     }
     case 'subscription.cancelled': {
