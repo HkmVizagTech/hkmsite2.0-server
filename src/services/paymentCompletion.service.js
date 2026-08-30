@@ -173,22 +173,37 @@ async function runPostCompletionPipeline(donationId, paymentId) {
     return;
   }
 
-  // DCC sync — fire-and-forget, failures visible in Needs Manual Receipt tab.
-  syncDonationToDcc(donation, paymentId).catch((err) => {
-    console.error("DCC sync failed (non-fatal, will appear in Needs Manual Receipt):", String(donationId), err && err.message ? err.message : err);
-  });
+  // DCC sync MUST complete (success or failure) before WhatsApp is
+  // attempted — WhatsApp needs the receipt number DCC generates to build
+  // the PDF at all. This whole pipeline already runs detached from the
+  // HTTP response (both verifyPayment and the webhook handler respond to
+  // the donor/Razorpay BEFORE calling this function, via setImmediate),
+  // so awaiting DCC here does not delay the donor's page load — it only
+  // sequences these two internally-dependent steps correctly.
+  //
+  // CORRECTNESS NOTE: an earlier version of this function ran DCC and
+  // WhatsApp in parallel (DCC un-awaited, WhatsApp fired via a separate
+  // setImmediate) as a "campaign-scale" optimization. That was wrong:
+  // WhatsApp's setImmediate callback runs on the next event-loop tick —
+  // essentially immediately — while DCC is a real network call to a
+  // third-party API that takes real time. WhatsApp would refetch the
+  // donation before DCC had written the receipt number, silently skip
+  // with reason "no_receipt_yet" (not logged as an error, since that
+  // reason is meant to represent a genuine DCC failure, not a race), and
+  // no receipt would ever go out — confirmed live: 13 of 15 recent
+  // completed donations had dccSyncStatus=synced but no WhatsApp sent.
+  try {
+    await syncDonationToDcc(donation, paymentId);
+  } catch (err) {
+    console.error("DCC sync failed (non-fatal, will appear in Needs Manual Receipt tab):", String(donationId), err && err.message ? err.message : err);
+  }
 
-  // WhatsApp receipt — fire-and-forget after refreshing the donation so
-  // we have the DCC receipt number if it synced fast enough, otherwise
-  // the idempotency guard and the Needs WhatsApp tab handle the retry.
-  setImmediate(async () => {
-    try {
-      const refreshed = await donationModel.findById(donationId);
-      if (refreshed) await sendDonationWhatsAppReceipt(refreshed);
-    } catch (err) {
-      console.error("WhatsApp receipt failed (non-fatal, will appear in Needs WhatsApp tab):", String(donationId), err && err.message ? err.message : err);
-    }
-  });
+  try {
+    const refreshed = await donationModel.findById(donationId);
+    if (refreshed) await sendDonationWhatsAppReceipt(refreshed);
+  } catch (err) {
+    console.error("WhatsApp receipt failed (non-fatal, will appear in Needs WhatsApp tab):", String(donationId), err && err.message ? err.message : err);
+  }
 
   // Meta CAPI — best-effort, never blocks anything.
   try {
