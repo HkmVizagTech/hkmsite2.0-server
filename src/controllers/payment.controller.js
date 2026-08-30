@@ -604,6 +604,7 @@ const paymentController = {
   auditSubscriptions: async (req, res) => {
     try {
       const accountName = req.query.account || 'default';
+      const deep = req.query.deep === 'true';
       const created = createRazorpayInstance(accountName);
       if (!created) {
         return res.status(500).json({ message: `Razorpay not configured for account "${accountName}"` });
@@ -625,7 +626,10 @@ const paymentController = {
           razorpayPaymentCount = invoices.paid_count || 0;
         } catch {}
 
-        results.push({
+        const ourCompletedCount = ourDonations.filter((d) => d.status === 'completed').length;
+        const gap = razorpayPaymentCount > ourCompletedCount;
+
+        const entry = {
           subscriptionId: sub.id,
           razorpayStatus: sub.status,
           planId: sub.plan_id,
@@ -633,10 +637,34 @@ const paymentController = {
           totalCount: sub.total_count,
           createdAt: sub.created_at ? new Date(sub.created_at * 1000) : null,
           currentEnd: sub.current_end ? new Date(sub.current_end * 1000) : null,
+          notes: sub.notes || {},
           ourDonationRecords: ourDonations.length,
           ourRecords: ourDonations,
-          gap: razorpayPaymentCount > ourDonations.filter((d) => d.status === 'completed').length,
-        });
+          gap,
+        };
+
+        // deep=true fetches the actual linked payments for gap subscriptions,
+        // to recover donor identity (email/contact are on the Payment entity
+        // even when not in the subscription's own notes).
+        if (deep && gap) {
+          try {
+            const payments = await created.instance.invoices.all({ subscription_id: sub.id, count: 20 });
+            entry.razorpayPayments = (payments.items || []).map((inv) => ({
+              invoiceId: inv.id,
+              paymentId: inv.payment_id,
+              status: inv.status,
+              amount: inv.amount ? inv.amount / 100 : null,
+              date: inv.date ? new Date(inv.date * 1000) : null,
+              customerName: inv.customer_details?.name || null,
+              customerEmail: inv.customer_details?.email || null,
+              customerContact: inv.customer_details?.contact || null,
+            }));
+          } catch (e) {
+            entry.razorpayPaymentsError = e.message || String(e);
+          }
+        }
+
+        results.push(entry);
       }
 
       const withGaps = results.filter((r) => r.gap);
