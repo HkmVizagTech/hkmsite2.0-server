@@ -682,6 +682,121 @@ const paymentController = {
       res.status(500).json({ message: error.message || 'Audit failed' });
     }
   },
+
+  // POST /payments/backfill-subscription-gaps?account=default&execute=true
+  // ADMIN ONLY. Recovers donation records for REAL subscription charges
+  // that Razorpay processed but we have zero record of (found via
+  // audit-subscriptions). For each gap subscription, fetches the Plan
+  // (for the seva name) and every paid invoice (for the actual historical
+  // charge date/amount/donor email+phone), then creates the missing
+  // donation record(s) with the ORIGINAL charge date preserved (not
+  // today's date) and runs each through the full completion pipeline
+  // (DCC sync + WhatsApp receipt) so these donors finally get what
+  // they're owed.
+  //
+  // execute=true is required to actually create records and send
+  // WhatsApp messages — without it, this only returns a preview of
+  // exactly what would be created/sent, for review before any donor is
+  // contacted about a months-old transaction.
+  backfillSubscriptionGaps: async (req, res) => {
+    try {
+      const accountName = req.query.account || 'default';
+      const execute = req.query.execute === 'true';
+      const created = createRazorpayInstance(accountName);
+      if (!created) {
+        return res.status(500).json({ message: `Razorpay not configured for account "${accountName}"` });
+      }
+
+      const razorpaySubscriptions = await created.instance.subscriptions.all({ count: 100 });
+      const planCache = new Map();
+      const preview = [];
+      let recordsCreated = 0;
+
+      for (const sub of razorpaySubscriptions.items || []) {
+        const ourDonations = await donationModel.find({ subscriptionId: sub.id }).select('razorpayPaymentId status').lean();
+        const ourCompletedCount = ourDonations.filter((d) => d.status === 'completed').length;
+
+        let paidCount = 0;
+        try {
+          const subDetail = await created.instance.subscriptions.fetch(sub.id);
+          paidCount = subDetail.paid_count || 0;
+        } catch { continue; }
+
+        if (paidCount <= ourCompletedCount) continue; // no gap for this subscription
+
+        // Seva name from the Plan (cached to avoid refetching the same plan repeatedly).
+        let sevaName = 'Monthly Seva';
+        if (!planCache.has(sub.plan_id)) {
+          try {
+            const plan = await created.instance.plans.fetch(sub.plan_id);
+            planCache.set(sub.plan_id, plan.item && plan.item.name ? plan.item.name : 'Monthly Seva');
+          } catch { planCache.set(sub.plan_id, 'Monthly Seva'); }
+        }
+        sevaName = planCache.get(sub.plan_id);
+
+        let invoices = [];
+        try {
+          const invoiceRes = await created.instance.invoices.all({ subscription_id: sub.id, count: 20 });
+          invoices = (invoiceRes.items || []).filter((inv) => inv.status === 'paid');
+        } catch (e) {
+          preview.push({ subscriptionId: sub.id, error: `Could not fetch invoices: ${e.message || e}` });
+          continue;
+        }
+
+        for (const inv of invoices) {
+          const alreadyRecorded = await donationModel.findOne({ razorpayPaymentId: inv.payment_id });
+          if (alreadyRecorded) continue; // this specific charge already has a record
+
+          const entry = {
+            subscriptionId: sub.id,
+            paymentId: inv.payment_id,
+            amount: inv.amount ? inv.amount / 100 : null,
+            chargeDate: inv.date ? new Date(inv.date * 1000) : null,
+            donorEmail: inv.customer_details && inv.customer_details.email || null,
+            donorMobile: inv.customer_details && inv.customer_details.contact || null,
+            sevaName,
+          };
+
+          if (execute) {
+            const newDonation = await donationModel.create({
+              donorName: entry.donorEmail ? entry.donorEmail.split('@')[0] : 'Devotee',
+              donorEmail: entry.donorEmail || undefined,
+              donorMobile: entry.donorMobile ? entry.donorMobile.replace(/^\+91/, '') : undefined,
+              amount: entry.amount,
+              type: 'Monthly Seva',
+              sourcePage: 'recovered-subscription-backfill',
+              sevaName,
+              paymentAccount: accountName,
+              subscriptionId: sub.id,
+              isRecurring: true,
+              status: 'pending',
+              razorpayPaymentId: inv.payment_id,
+              createdAt: entry.chargeDate || new Date(),
+            });
+            await completeDonation({ donationId: newDonation._id, paymentId: inv.payment_id });
+            entry.donationId = newDonation._id.toString();
+            entry.action = 'CREATED_AND_COMPLETED';
+            recordsCreated++;
+          } else {
+            entry.action = 'WOULD_CREATE';
+          }
+
+          preview.push(entry);
+        }
+      }
+
+      res.status(200).json({
+        success: true,
+        mode: execute ? 'EXECUTED — records created, DCC+WhatsApp triggered' : 'PREVIEW ONLY — nothing created or sent',
+        recordsCreated,
+        totalGapsFound: preview.length,
+        preview,
+      });
+    } catch (error) {
+      console.error('backfillSubscriptionGaps error', error && error.message ? error.message : error);
+      res.status(500).json({ message: error.message || 'Backfill failed' });
+    }
+  },
 };
 
 module.exports = { paymentController, createRazorpayInstance };

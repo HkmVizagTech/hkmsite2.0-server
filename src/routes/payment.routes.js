@@ -45,5 +45,6 @@ paymentRouter.post('/webhook/touchstone', express.raw({ type: '*/*' }), paymentC
 
 paymentRouter.post('/reconcile/:donationId', authMiddleware, adminMiddleware, express.json(), paymentController.reconcile);
 paymentRouter.get('/audit-subscriptions', authMiddleware, adminMiddleware, paymentController.auditSubscriptions);
+paymentRouter.post('/backfill-subscription-gaps', authMiddleware, adminMiddleware, paymentController.backfillSubscriptionGaps);
 
 module.exports = { paymentRouter };
