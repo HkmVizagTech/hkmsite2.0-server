@@ -593,6 +593,67 @@ const paymentController = {
       res.status(500).json({ message: 'Status check failed' });
     }
   },
+
+  // GET /payments/audit-subscriptions?account=default — ADMIN ONLY.
+  // Fetches real subscription records directly from Razorpay's API and
+  // cross-references each one against our own database (matched by
+  // subscriptionId). Surfaces exactly which real Razorpay subscriptions
+  // we have NO donation record for at all, and which charges Razorpay
+  // shows that our database doesn't — the ground truth check for
+  // "I see recurring payments in Razorpay that aren't showing up here".
+  auditSubscriptions: async (req, res) => {
+    try {
+      const accountName = req.query.account || 'default';
+      const created = createRazorpayInstance(accountName);
+      if (!created) {
+        return res.status(500).json({ message: `Razorpay not configured for account "${accountName}"` });
+      }
+
+      const razorpaySubscriptions = await created.instance.subscriptions.all({ count: 100 });
+      const results = [];
+
+      for (const sub of razorpaySubscriptions.items || []) {
+        const ourDonations = await donationModel
+          .find({ subscriptionId: sub.id })
+          .sort({ createdAt: 1 })
+          .select('donorName amount status razorpayPaymentId createdAt lastPaymentDate')
+          .lean();
+
+        let razorpayPaymentCount = 0;
+        try {
+          const invoices = await created.instance.subscriptions.fetch(sub.id);
+          razorpayPaymentCount = invoices.paid_count || 0;
+        } catch {}
+
+        results.push({
+          subscriptionId: sub.id,
+          razorpayStatus: sub.status,
+          planId: sub.plan_id,
+          razorpayPaidCount: razorpayPaymentCount,
+          totalCount: sub.total_count,
+          createdAt: sub.created_at ? new Date(sub.created_at * 1000) : null,
+          currentEnd: sub.current_end ? new Date(sub.current_end * 1000) : null,
+          ourDonationRecords: ourDonations.length,
+          ourRecords: ourDonations,
+          gap: razorpayPaymentCount > ourDonations.filter((d) => d.status === 'completed').length,
+        });
+      }
+
+      const withGaps = results.filter((r) => r.gap);
+      const noRecordAtAll = results.filter((r) => r.ourDonationRecords === 0);
+
+      res.status(200).json({
+        success: true,
+        totalRazorpaySubscriptions: results.length,
+        subscriptionsWithNoDbRecordAtAll: noRecordAtAll.length,
+        subscriptionsWithPaymentGaps: withGaps.length,
+        results,
+      });
+    } catch (error) {
+      console.error('auditSubscriptions error', error && error.message ? error.message : error);
+      res.status(500).json({ message: error.message || 'Audit failed' });
+    }
+  },
 };
 
 module.exports = { paymentController, createRazorpayInstance };

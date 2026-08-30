@@ -44,5 +44,6 @@ paymentRouter.post('/webhook/donations', express.raw({ type: '*/*' }), paymentCo
 paymentRouter.post('/webhook/touchstone', express.raw({ type: '*/*' }), paymentController.webhookFor('touchstone'));
 
 paymentRouter.post('/reconcile/:donationId', authMiddleware, adminMiddleware, express.json(), paymentController.reconcile);
+paymentRouter.get('/audit-subscriptions', authMiddleware, adminMiddleware, paymentController.auditSubscriptions);
 
 module.exports = { paymentRouter };
