@@ -268,7 +268,8 @@ async function fetchHeaderImageJpeg(url) {
 //   body   : 4 variables
 //              {{1}} donor name
 //              {{2}} amount
-//              {{3}} seva name
+//              {{3}} seva name, with its campaign in brackets on festival
+//                    pages — "Abhisheka Seva (Sri Krishna Janmashtami)"
 //              {{4}} allocation sentence, WITH the seva's page link appended
 //   button : optional, and its URL MUST BE STATIC (no {{1}}). Flaxxa cannot
 //            supply a button variable, so a dynamic button URL makes every
@@ -290,12 +291,14 @@ const PENDING_TEMPLATE_NAME =
  * @param {string} [options.linkSuffix] - seva page path, e.g. "brick-seva-campaign"
  * @param {string} [options.sourcePage] - fallback for linkSuffix
  * @param {string} [options.sevaImage] - header banner URL for this seva
+ * @param {string} [options.campaignLabel] - festival the donation came from,
+ *        e.g. "Sri Krishna Janmashtami"; shown in brackets after {{3}}
  */
 async function sendPendingWhatsapp(phone, donorName, amount, sevaName, options = {}) {
   const normalizedPhone = normalizePhone(phone);
   if (!normalizedPhone) throw new Error("Invalid or missing phone number");
 
-  const { linkSuffix, sourcePage, sevaImage } = options;
+  const { linkSuffix, linkQuery, sourcePage, sevaImage, campaignLabel } = options;
 
   // includeLinkInBody: true — on Flaxxa the template's button URL must be
   // static (fact 2 above), so the seva link rides along in {{4}} instead.
@@ -303,7 +306,9 @@ async function sendPendingWhatsapp(phone, donorName, amount, sevaName, options =
     donorName,
     amount,
     sevaName,
+    campaignLabel,
     linkSuffix: linkSuffix || sourcePage,
+    linkQuery,
     includeLinkInBody: true,
   });
 

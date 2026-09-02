@@ -224,6 +224,53 @@ const FESTIVAL_PAGES = new Set([
   "brick-seva-campaign",
 ]);
 
+// Human-readable campaign name for the festival pages, keyed by base
+// sourcePage. This is what turns a bare "Abhisheka Seva" in the reminder into
+// "Abhisheka Seva (Sri Krishna Janmashtami)" — festival seva names are generic
+// enough that a donor who abandoned a checkout during a festival will not
+// place them without the occasion.
+//
+// Only festival pages belong here. On the 6 core seva pages the seva name IS
+// the campaign ("Brick Seva" on /brick-seva-campaign), so a label there would
+// only repeat itself — and buildPendingFields would drop it anyway.
+const CAMPAIGN_LABELS = {
+  janmashtami: "Sri Krishna Janmashtami",
+  janmashtami3: "Sri Krishna Janmashtami",
+  "donations/janmashtami2": "Sri Krishna Janmashtami",
+  "shayani-ekadashi": "Shayani Ekadashi",
+  chaturmas: "Chaturmas",
+  "special-occasion": "Special Occasion Seva",
+};
+
+// "sri-krishna-janmashtami" -> "Sri Krishna Janmashtami". Used for the
+// festivalSlug fallback below, so the label is presentable even when nobody
+// remembered to add the page to CAMPAIGN_LABELS.
+function prettifySlug(slug) {
+  return String(slug || "")
+    .split(/[-_/\s]+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+/**
+ * The festival/campaign to name in the reminder, or "" for pages that don't
+ * need one.
+ *
+ * Falls back to the donation's own festivalSlug so a festival page added after
+ * this file was last edited still gets context automatically. That fallback is
+ * self-limiting in exactly the right way: only the festival pages send
+ * festivalSlug with their order (janmashtami x3 and chaturmas today), so the
+ * core seva pages stay unlabelled without needing an exclusion list.
+ */
+function resolveCampaignLabel(donation) {
+  const basePage = baseSourcePage(donation.sourcePage);
+  if (CAMPAIGN_LABELS[basePage]) return CAMPAIGN_LABELS[basePage];
+
+  const slug = String(donation.festivalSlug || "").trim().replace(/^\/+|\/+$/g, "");
+  return slug ? prettifySlug(slug) : "";
+}
+
 // Resolves the footer button path for a donation. Festival/campaign pages keep
 // their own link (so a Janmashtami donation returns to Janmashtami, not a
 // standalone seva). Otherwise, a match on one of the 6 core sevas maps to that
@@ -247,6 +294,77 @@ function resolveLinkSuffix(donation) {
   // Unknown seva — fall back to the page it came from so the donor still lands
   // on a place they can re-attempt the payment.
   return basePage || "donate";
+}
+
+// Pages whose checkout understands ?seva=<slug>&amount=<rupees> and will open
+// pre-filled. Keyed by the resolved link path (what the donor is actually sent
+// to), not the sourcePage. A page missing from this set still gets a working
+// bare link — the deep link is an enhancement, never a requirement.
+const DEEP_LINK_PAGES = new Set(["janmashtami", "janmashtami3", "donations/janmashtami2"]);
+
+// Fallback title -> slug map for the Janmashtami sevas, used only for
+// donations created BEFORE the pages started sending sevaSlug with the order.
+// New donations carry their own slug and never reach this table, so it does
+// not need maintaining as sevas change year to year — it only has to keep
+// matching the backlog of pending records still inside the 24h window.
+//
+// Keys are normalized (lowercase, punctuation collapsed to single spaces).
+const LEGACY_SEVA_SLUGS = {
+  "annadana seva": "annadana",
+  "gau seva": "gau-seva",
+  "pushpalankara seva": "pushpalankara",
+  "abhisheka seva": "abhisheka",
+  "naivedhya seva": "naivedhya",
+  "tulasi archana seva": "tulasi-archana",
+  "makhan mishri seva": "makhan-mishri",
+  "vastrabharana seva": "vastrabharana",
+  "chappan bhog seva": "chappan-bhog",
+  "mandapa seva": "mandapa",
+  "japa yagna seva": "japa-yagna",
+};
+
+function normalizeSevaName(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+/**
+ * The seva's slug on its page, or "" when we can't establish one.
+ *
+ * Prefers the slug stored on the donation at order time — that is the exact
+ * value the page matches on, and survives a seva being renamed. Falls back to
+ * the title map above for records created before that field existed.
+ */
+function resolveSevaSlug(donation) {
+  const stored = String(donation.sevaSlug || "").trim();
+  if (stored) return stored;
+
+  return LEGACY_SEVA_SLUGS[normalizeSevaName(donation.sevaName)] || "";
+}
+
+/**
+ * Deep-link params for the reminder's link, or null when this donation's page
+ * can't use them. Returning null (rather than a partial query) is what keeps
+ * every other page's link exactly as it is today.
+ */
+function resolveLinkQuery(donation, linkSuffix) {
+  if (!DEEP_LINK_PAGES.has(linkSuffix)) return null;
+
+  const seva = resolveSevaSlug(donation);
+  if (!seva) return null;
+
+  const query = { seva };
+
+  // Restore the amount too, so the donor's only remaining step is to pay. 100
+  // is the page's own minimum — below it the page would reject the value, so
+  // it is better to let the donor pick again than to pre-fill something the
+  // form refuses.
+  const amount = Math.round(Number(donation.amount));
+  if (Number.isFinite(amount) && amount >= 100) query.amount = String(amount);
+
+  return query;
 }
 
 /**
@@ -316,6 +434,8 @@ async function runPendingReminders() {
       continue;
     }
 
+    const linkSuffix = resolveLinkSuffix(donation);
+
     try {
       await provider.send(
         donation.donorMobile,
@@ -323,9 +443,11 @@ async function runPendingReminders() {
         donation.amount,
         donation.sevaName || donation.type || "your seva",
         {
-          linkSuffix: resolveLinkSuffix(donation),
+          linkSuffix,
+          linkQuery: resolveLinkQuery(donation, linkSuffix),
           sourcePage: donation.sourcePage,
           sevaImage: getSevaImage(donation),
+          campaignLabel: resolveCampaignLabel(donation),
         },
       );
       donation.whatsappPendingReminderSent = true;
@@ -379,4 +501,9 @@ module.exports = {
   DEFAULT_SEVA_IMAGE,
   getSevaImage,
   resolveLinkSuffix,
+  CAMPAIGN_LABELS,
+  resolveCampaignLabel,
+  DEEP_LINK_PAGES,
+  resolveSevaSlug,
+  resolveLinkQuery,
 };

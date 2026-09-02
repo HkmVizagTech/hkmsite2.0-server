@@ -12,6 +12,12 @@ const donationSchema = new mongoose.Schema({
   message: { type: String },
   sourcePage: { type: String },
   sevaName: { type: String },
+  // The seva's slug on its page ("abhisheka", "vastrabharana"), as sent by the
+  // festival pages. sevaName is the display title and can be reworded between
+  // years; this is the stable key the page's ?seva= deep link matches on, so
+  // the pending-payment reminder can send a donor back to the exact seva they
+  // abandoned. Absent on donations from pages that don't have per-seva slugs.
+  sevaSlug: { type: String },
   legacySevaId: { type: Number },
   paymentAccount: { type: String },
   transactionId: { type: String },

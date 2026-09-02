@@ -52,7 +52,8 @@ const SOURCE_NUMBER = process.env.GUPSHUP_SOURCE_NUMBER || "917075176108";
 //   type           MEDIA (image header) / UTILITY / language En
 //   Gupshup UUID   f12a709c-bc1f-429b-84d5-1262bc01a73c   <- what this API wants
 //   Facebook id    3598241980329839                       <- Meta's own id, not used here
-//   body           {{1}} name, {{2}} amount, {{3}} seva, {{4}} allocation sentence
+//   body           {{1}} name, {{2}} amount, {{3}} seva (with its campaign in
+//                  brackets on festival pages), {{4}} allocation sentence
 //   button         Visit Website "Transaction Link" -> https://www.harekrishnavizag.org/{{1}}
 //
 // The button's {{1}} is numbered independently of the body's variables; in the
@@ -223,13 +224,15 @@ async function sendGupshupTemplate({ phone, templateId, params, headerImageUrl }
  * providers are interchangeable from the reminder job's point of view.
  */
 async function sendPendingWhatsappViaGupshup(phone, donorName, amount, sevaName, options = {}) {
-  const { linkSuffix, sourcePage, sevaImage } = options;
+  const { linkSuffix, linkQuery, sourcePage, sevaImage, campaignLabel } = options;
 
   const fields = buildPendingFields({
     donorName,
     amount,
     sevaName,
+    campaignLabel,
     linkSuffix: linkSuffix || sourcePage,
+    linkQuery,
     // Gupshup fills the button, so the body sentence stays clean.
     includeLinkInBody: false,
   });

@@ -219,6 +219,7 @@ const paymentController = {
         type: req.body.type || (sourcePage === 'donations' ? 'Donation' : undefined),
         sourcePage,
         sevaName,
+        sevaSlug: req.body.sevaSlug ? String(req.body.sevaSlug).slice(0, 80) : undefined,
         legacySevaId,
         message: message || undefined,
         paymentAccount: account.name,
