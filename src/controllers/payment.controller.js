@@ -3,6 +3,11 @@ const crypto = require('crypto');
 const { donationModel } = require('../models/donation.model');
 const { planModel } = require('../models/plan.model');
 const { enqueueJob } = require('../redis/redisClient');
+
+// Hand Razorpay webhook events to worker/paymentWorker.js instead of
+// processing them in-process. Only turn this on once that worker is running as
+// its own deployed service — see the comment at the enqueue site below.
+const QUEUE_ENABLED = String(process.env.PAYMENTS_QUEUE_ENABLED || 'false') === 'true';
 const { completeDonation, markDonationCompleted, runPostCompletionPipeline, handleSubscriptionCharged } = require('../services/paymentCompletion.service');
 
 const RAZORPAY_ACCOUNTS = {
@@ -488,15 +493,34 @@ const paymentController = {
       res.status(200).send('Webhook received');
 
       setImmediate(async () => {
-        try {
-          // Bound the enqueue — never trust Redis to fail fast.
-          await Promise.race([
-            enqueueJob('payments:jobs', { event: event.event, payload: event.payload, receivedAt: Date.now() }),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('enqueue timeout (2s)')), 2000)),
-          ]);
-          return; // worker will process it
-        } catch (enqueueErr) {
-          console.warn('Failed to enqueue webhook job, falling back to inline processing:', enqueueErr && enqueueErr.message ? enqueueErr.message : enqueueErr);
+        // The queue is OFF unless PAYMENTS_QUEUE_ENABLED=true, and that is
+        // deliberate rather than cautious.
+        //
+        // On a successful enqueue this handler returns immediately and hands
+        // ownership of the event to worker/paymentWorker.js. If that worker is
+        // not actually running, the event sits in the `payments:jobs` list
+        // forever: the donation is never marked completed, no receipt goes
+        // out, no DCC sync happens — and Razorpay saw a 200, so nothing
+        // anywhere reports a failure. It is silent data loss.
+        //
+        // Before this flag existed, the only thing preventing that was Redis
+        // being unreachable (REDIS_URL unset, so every enqueue failed and every
+        // event took the inline path). That made "configure REDIS_URL" — an
+        // innocuous-looking change made for caching, which needs no worker —
+        // enough to break payments. The flag decouples the two: caching can be
+        // switched on freely, and the queue only takes over when someone has
+        // explicitly confirmed a consumer exists.
+        if (QUEUE_ENABLED) {
+          try {
+            // Bound the enqueue — never trust Redis to fail fast.
+            await Promise.race([
+              enqueueJob('payments:jobs', { event: event.event, payload: event.payload, receivedAt: Date.now() }),
+              new Promise((_, reject) => setTimeout(() => reject(new Error('enqueue timeout (2s)')), 2000)),
+            ]);
+            return; // worker will process it
+          } catch (enqueueErr) {
+            console.warn('Failed to enqueue webhook job, falling back to inline processing:', enqueueErr && enqueueErr.message ? enqueueErr.message : enqueueErr);
+          }
         }
         try {
           await processWebhookEventInline(event);

@@ -1,5 +1,11 @@
 const { campaignerModel } = require("../models/campaigner.model");
 const { donationModel } = require("../models/donation.model");
+const { cacheWrap, cacheKeys } = require("../redis/redisClient");
+
+// Shorter than the site-wide stats TTL: a campaigner refreshing their own page
+// to watch donations land is the single most sensitive audience for staleness
+// on the whole site.
+const CAMPAIGNER_TTL = Number(process.env.CAMPAIGNER_CACHE_TTL_SECONDS || 20);
 
 const PRICE_PER_SQFT = () => Number(process.env.SQFT_PRICE_PER_UNIT) || 6000;
 
@@ -107,31 +113,62 @@ const campaignerController = {
   getBySlug: async (req, res) => {
     try {
       const slug = String(req.params.slug || "").toLowerCase();
-      const campaigner = await campaignerModel.findOne({ slug, status: "active" }).lean();
-      if (!campaigner) return res.status(404).json({ message: "Campaigner not found" });
 
-      const filter = { status: "completed", campaignerSlug: slug };
-      const [recent, agg] = await Promise.all([
-        donationModel.find(filter).sort({ date: -1 }).limit(20).select("donorName amount date").lean(),
-        donationModel.aggregate([
-          { $match: filter },
-          { $group: { _id: null, totalAmount: { $sum: "$amount" }, donorCount: { $sum: 1 } } },
-        ]),
-      ]);
+      // P2P campaign pages are shared by the campaigner into WhatsApp groups,
+      // so traffic is bursty and lands on the same few slugs at once — many
+      // people opening one link within a minute of each other. That is the
+      // shape a short TTL suits best. Completing a donation busts this key
+      // (paymentCompletion.service.js), so a campaigner watching their own
+      // page still sees a new donation appear promptly.
+      //
+      // A 404 is deliberately NOT cached: an unknown slug is either a typo or
+      // a campaigner still awaiting approval, and caching the miss would keep
+      // their page broken for the whole TTL after they go active.
+      const cached = await cacheWrap(cacheKeys.campaigner(slug), CAMPAIGNER_TTL, async () => {
+        const campaigner = await campaignerModel.findOne({ slug, status: "active" }).lean();
+        // null tells cacheWrap not to cache — see the 404 note above.
+        if (!campaigner) return null;
+
+        const filter = { status: "completed", campaignerSlug: slug };
+        const [recent, agg] = await Promise.all([
+          donationModel.find(filter).sort({ date: -1 }).limit(20).select("donorName amount date").lean(),
+          donationModel.aggregate([
+            { $match: filter },
+            { $group: { _id: null, totalAmount: { $sum: "$amount" }, donorCount: { $sum: 1 } } },
+          ]),
+        ]);
+
+        // Redact before caching; keep raw dates for per-request timeAgo, and
+        // raw amounts so the sqft conversion tracks the current price.
+        return {
+          name: campaigner.name,
+          slug: campaigner.slug,
+          goalSqft: campaigner.goalSqft || 0,
+          message: campaigner.message || "",
+          totalAmount: agg[0]?.totalAmount || 0,
+          donorCount: agg[0]?.donorCount || 0,
+          donors: recent.map((d) => ({
+            name: toDisplayName(d.donorName),
+            amount: d.amount,
+            date: d.date,
+          })),
+        };
+      });
+
+      if (!cached) return res.status(404).json({ message: "Campaigner not found" });
 
       const price = PRICE_PER_SQFT();
-      const totalAmount = agg[0]?.totalAmount || 0;
 
       res.status(200).json({
-        name: campaigner.name,
-        slug: campaigner.slug,
-        goalSqft: campaigner.goalSqft || 0,
-        message: campaigner.message || "",
-        raisedAmount: totalAmount,
-        sqftRaised: Math.floor(totalAmount / price),
-        donorCount: agg[0]?.donorCount || 0,
-        donors: recent.map((d) => ({
-          name: toDisplayName(d.donorName),
+        name: cached.name,
+        slug: cached.slug,
+        goalSqft: cached.goalSqft,
+        message: cached.message,
+        raisedAmount: cached.totalAmount,
+        sqftRaised: Math.floor(cached.totalAmount / price),
+        donorCount: cached.donorCount,
+        donors: cached.donors.map((d) => ({
+          name: d.name,
           amount: d.amount,
           sqft: Math.floor((d.amount || 0) / price),
           time: timeAgo(d.date),

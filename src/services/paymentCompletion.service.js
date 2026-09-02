@@ -8,6 +8,7 @@ const {
   sendTemplateMessageWithAttachment,
 } = require("./whatsapp.service");
 const { generateReceiptBuffer } = require("./receipt.service");
+const { cacheDel, cacheKeys } = require("../redis/redisClient");
 
 // Approved Meta template for the receipt-with-PDF message. Confirmed from
 // the real approved template: body expects 3 params — donor name
@@ -154,6 +155,42 @@ async function markDonationCompleted({ donationId, orderId, paymentId }) {
   return donation;
 }
 
+/**
+ * Drops the cached public totals that this donation has just changed.
+ *
+ * Deliberately fire-and-forget and deliberately un-awaited by callers: a
+ * donation is completed whether or not Redis cooperates, and the TTLs are the
+ * real correctness guarantee — this only shortens the window from "up to a
+ * minute" to "immediately" for the pages where a donor is most likely to be
+ * looking for their own name.
+ *
+ * All keys go in one DEL, so this is a single round trip no matter how many
+ * are named.
+ */
+async function invalidateDonationCaches(donation) {
+  if (!donation) return;
+  try {
+    await cacheDel(
+      // Site-wide totals always move.
+      cacheKeys.statsOverview(),
+      // Cheaper to drop unconditionally than to reproduce the endpoint's
+      // "type SQFT or sevaName Square Foot Seva" match here and risk the two
+      // definitions drifting apart.
+      cacheKeys.statsSqft(),
+      // The per-seva donor wall is keyed by whichever of these the caller
+      // queried by, so drop both spellings.
+      donation.sevaName ? cacheKeys.statsSeva(donation.sevaName) : null,
+      donation.type ? cacheKeys.statsCategory(donation.type) : null,
+      // P2P campaign page, when this donation came through one.
+      donation.campaignerSlug ? cacheKeys.campaigner(donation.campaignerSlug) : null
+    );
+  } catch (err) {
+    // cacheDel already swallows Redis errors; this is belt-and-braces so a
+    // cache concern can never surface as a failed donation.
+    console.warn("Cache invalidation after donation completion failed (non-fatal):", err && err.message ? err.message : err);
+  }
+}
+
 // Background pipeline: DCC sync, WhatsApp receipt, Meta CAPI.
 // Each step is isolated — a failure in one doesn't block the others.
 // DCC and WhatsApp are fire-and-forget: any failures are recorded on the
@@ -172,6 +209,13 @@ async function runPostCompletionPipeline(donationId, paymentId) {
     console.error("Post-completion pipeline: failed to load donation", String(donationId), err && err.message ? err.message : err);
     return;
   }
+
+  // Refresh the public totals first, before the slow steps below. This runs
+  // in a pipeline that is already detached from the donor's HTTP response, so
+  // it costs the donor nothing — but doing it here rather than after the DCC
+  // and WhatsApp calls means the donor wall updates in milliseconds instead
+  // of after a third-party round trip.
+  invalidateDonationCaches(donation);
 
   // DCC sync MUST complete (success or failure) before WhatsApp is
   // attempted — WhatsApp needs the receipt number DCC generates to build
@@ -289,4 +333,4 @@ async function handleSubscriptionCharged(payload) {
   return { ok: true, donationId: targetDonationId.toString() };
 }
 
-module.exports = { completeDonation, markDonationCompleted, runPostCompletionPipeline, sendDonationWhatsAppReceipt, handleSubscriptionCharged };
+module.exports = { completeDonation, markDonationCompleted, runPostCompletionPipeline, sendDonationWhatsAppReceipt, handleSubscriptionCharged, invalidateDonationCaches };

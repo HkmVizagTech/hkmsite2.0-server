@@ -1,4 +1,21 @@
 const { donationModel } = require("../models/donation.model");
+const { cacheWrap, cacheKeys } = require("../redis/redisClient");
+
+// How long a public stats payload may be stale. These numbers are "raised so
+// far" totals and donor walls — a minute of lag is invisible to a donor, and
+// completing a donation busts the relevant keys anyway (see
+// paymentCompletion.service.js), so the TTL is only the backstop for
+// donations that land through a path that doesn't invalidate.
+const OVERVIEW_TTL = Number(process.env.STATS_CACHE_TTL_SECONDS || 60);
+const SQFT_TTL = Number(process.env.STATS_CACHE_TTL_SECONDS || 60);
+const SEVA_TTL = Number(process.env.STATS_CACHE_TTL_SECONDS || 60);
+
+// The per-seva donor wall accepts ?limit=1..50. Caching per limit would create
+// a separate entry for every value a caller happens to pass, and they would
+// all invalidate independently. Instead we always fetch and cache the widest
+// allowed slice and cut it down per request — one entry per seva, and a
+// smaller limit becomes free.
+const MAX_DONOR_WALL = 50;
 
 // First name + last initial only, e.g. "Ramesh K." — never expose full PII
 // (email/phone/full surname) on a public donor wall.
@@ -8,6 +25,10 @@ const toDisplayName = (fullName) => {
   return `${parts[0]} ${parts[parts.length - 1].charAt(0)}.`;
 };
 
+// NOTE: this runs on the way OUT of the cache, never on the way in. Caching a
+// rendered "3 min ago" would freeze it for the life of the entry, so a donor
+// refreshing the page would watch the clock stand still. Cached payloads carry
+// raw dates and are rendered per request.
 const timeAgo = (date) => {
   const diffMs = Date.now() - new Date(date).getTime();
   const mins = Math.floor(diffMs / 60000);
@@ -38,29 +59,56 @@ const sevaStatsController = {
       if (category) or.push({ type: category });
       if (or.length) filter.$or = or;
 
-      const [recent, agg] = await Promise.all([
-        donationModel
-          .find(filter)
-          .sort({ date: -1 })
-          .limit(Math.min(50, Math.max(1, parseInt(limit, 10) || 5)))
-          .select("donorName amount date")
-          .lean(),
-        donationModel.aggregate([
-          { $match: filter },
-          { $group: { _id: null, totalAmount: { $sum: "$amount" }, donorCount: { $sum: 1 } } },
-        ]),
-      ]);
+      // One cache entry per seva OR category. A request naming both is rare
+      // and would need a combined key, so it skips the cache rather than
+      // risking a key that invalidation doesn't know how to name.
+      const cacheKey =
+        sevaName && category
+          ? null
+          : sevaName
+            ? cacheKeys.statsSeva(sevaName)
+            : cacheKeys.statsCategory(category);
 
-      const donors = recent.map((d) => ({
-        name: toDisplayName(d.donorName),
-        amount: d.amount,
-        time: timeAgo(d.date),
-      }));
+      const load = async () => {
+        const [recent, agg] = await Promise.all([
+          donationModel
+            .find(filter)
+            .sort({ date: -1 })
+            .limit(MAX_DONOR_WALL)
+            .select("donorName amount date")
+            .lean(),
+          donationModel.aggregate([
+            { $match: filter },
+            { $group: { _id: null, totalAmount: { $sum: "$amount" }, donorCount: { $sum: 1 } } },
+          ]),
+        ]);
+
+        // Redact here, before anything is written to Redis — the cache must
+        // never hold a full donor name. `date` stays raw so timeAgo() can be
+        // recomputed per request.
+        return {
+          donors: recent.map((d) => ({
+            name: toDisplayName(d.donorName),
+            amount: d.amount,
+            date: d.date,
+          })),
+          totalAmount: agg[0]?.totalAmount || 0,
+          donorCount: agg[0]?.donorCount || 0,
+        };
+      };
+
+      const data = cacheKey ? await cacheWrap(cacheKey, SEVA_TTL, load) : await load();
+
+      const wanted = Math.min(MAX_DONOR_WALL, Math.max(1, parseInt(limit, 10) || 5));
 
       res.status(200).json({
-        donors,
-        totalAmount: agg[0]?.totalAmount || 0,
-        donorCount: agg[0]?.donorCount || 0,
+        donors: data.donors.slice(0, wanted).map((d) => ({
+          name: d.name,
+          amount: d.amount,
+          time: timeAgo(d.date),
+        })),
+        totalAmount: data.totalAmount,
+        donorCount: data.donorCount,
       });
     } catch (err) {
       console.error("sevaStats.get error:", err);
@@ -83,10 +131,14 @@ const sevaStatsController = {
         $or: [{ type: "SQFT" }, { sevaName: "Square Foot Seva" }],
       };
 
+      // Consumes an already-redacted cached row ({ name, amount, date }) and
+      // renders the two per-request fields: the sqft conversion (which depends
+      // on an env var that can change without the cache knowing) and the
+      // relative time.
       const toEntry = (d) => {
         const sqft = Math.floor((d.amount || 0) / PRICE_PER_SQFT);
         return {
-          name: toDisplayName(d.donorName),
+          name: d.name,
           amount: d.amount,
           sqft, // 0 when below one square foot — client falls back to ₹ display
           time: timeAgo(d.date),
@@ -95,26 +147,44 @@ const sevaStatsController = {
 
       // Both walls show exactly 5 entries: "Latest" = 5 most recent (older
       // ones drop off as new donations arrive), "Largest" = top 5 amounts.
-      const [latest, largest, agg] = await Promise.all([
-        donationModel
-          .find(filter)
-          .sort({ date: -1 })
-          .limit(5)
-          .select("donorName amount date")
-          .lean(),
-        donationModel
-          .find(filter)
-          .sort({ amount: -1, date: -1 })
-          .limit(5)
-          .select("donorName amount date")
-          .lean(),
-        donationModel.aggregate([
-          { $match: filter },
-          { $group: { _id: null, totalAmount: { $sum: "$amount" }, donorCount: { $sum: 1 } } },
-        ]),
-      ]);
+      //
+      // The `largest` sort has no supporting index — { amount: -1, date: -1 }
+      // is an in-memory sort of every matching donation — which is most of why
+      // this endpoint is worth caching at all.
+      const { latest, largest, totalAmount, donorCount } = await cacheWrap(
+        cacheKeys.statsSqft(),
+        SQFT_TTL,
+        async () => {
+          const [latestDocs, largestDocs, agg] = await Promise.all([
+            donationModel
+              .find(filter)
+              .sort({ date: -1 })
+              .limit(5)
+              .select("donorName amount date")
+              .lean(),
+            donationModel
+              .find(filter)
+              .sort({ amount: -1, date: -1 })
+              .limit(5)
+              .select("donorName amount date")
+              .lean(),
+            donationModel.aggregate([
+              { $match: filter },
+              { $group: { _id: null, totalAmount: { $sum: "$amount" }, donorCount: { $sum: 1 } } },
+            ]),
+          ]);
 
-      const totalAmount = agg[0]?.totalAmount || 0;
+          // Redact before caching; keep raw dates for per-request timeAgo.
+          const redact = (d) => ({ name: toDisplayName(d.donorName), amount: d.amount, date: d.date });
+          return {
+            latest: latestDocs.map(redact),
+            largest: largestDocs.map(redact),
+            totalAmount: agg[0]?.totalAmount || 0,
+            donorCount: agg[0]?.donorCount || 0,
+          };
+        }
+      );
+
       const sqftRaised = Math.floor(totalAmount / PRICE_PER_SQFT);
       const goalAmount = GOAL_SQFT * PRICE_PER_SQFT;
       const percent = goalAmount > 0
@@ -126,7 +196,7 @@ const sevaStatsController = {
         goalSqft: GOAL_SQFT,
         sqftRaised,
         totalAmount,
-        donorCount: agg[0]?.donorCount || 0,
+        donorCount,
         percent,
         latest: latest.map(toEntry),
         largest: largest.map(toEntry),
@@ -144,42 +214,67 @@ const sevaStatsController = {
     try {
       const filter = { status: "completed" };
 
-      const [totals, perSeva, recent] = await Promise.all([
-        donationModel.aggregate([
-          { $match: filter },
-          { $group: { _id: null, totalAmount: { $sum: "$amount" }, donorCount: { $sum: 1 } } },
-        ]),
-        donationModel.aggregate([
-          { $match: filter },
-          {
-            $group: {
-              _id: { $ifNull: ["$sevaName", "$type"] },
-              totalAmount: { $sum: "$amount" },
-              donorCount: { $sum: 1 },
-            },
-          },
-        ]),
-        donationModel
-          .find(filter)
-          .sort({ date: -1 })
-          .limit(15)
-          .select("donorName amount date sevaName type")
-          .lean(),
-      ]);
+      // The most expensive endpoint on the site, and the reason this whole
+      // cache exists. Two $group stages over { status: "completed" } with no
+      // other constraint — every completed donation ever recorded, twice, per
+      // request. `status` is indexed but it is low-cardinality, so the index
+      // barely narrows anything; this is effectively a collection scan that
+      // gets slower every month. It backs /donate, the busiest landing page.
+      const { totalAmount, donorCount, bySeva, donors } = await cacheWrap(
+        cacheKeys.statsOverview(),
+        OVERVIEW_TTL,
+        async () => {
+          const [totals, perSeva, recent] = await Promise.all([
+            donationModel.aggregate([
+              { $match: filter },
+              { $group: { _id: null, totalAmount: { $sum: "$amount" }, donorCount: { $sum: 1 } } },
+            ]),
+            donationModel.aggregate([
+              { $match: filter },
+              {
+                $group: {
+                  _id: { $ifNull: ["$sevaName", "$type"] },
+                  totalAmount: { $sum: "$amount" },
+                  donorCount: { $sum: 1 },
+                },
+              },
+            ]),
+            donationModel
+              .find(filter)
+              .sort({ date: -1 })
+              .limit(15)
+              .select("donorName amount date sevaName type")
+              .lean(),
+          ]);
 
-      const bySeva = {};
-      perSeva.forEach((s) => {
-        if (s._id) bySeva[s._id] = { totalAmount: s.totalAmount, donorCount: s.donorCount };
-      });
+          const grouped = {};
+          perSeva.forEach((s) => {
+            if (s._id) grouped[s._id] = { totalAmount: s.totalAmount, donorCount: s.donorCount };
+          });
+
+          // Redact before caching; keep raw dates for per-request timeAgo.
+          return {
+            totalAmount: totals[0]?.totalAmount || 0,
+            donorCount: totals[0]?.donorCount || 0,
+            bySeva: grouped,
+            donors: recent.map((d) => ({
+              name: toDisplayName(d.donorName),
+              amount: d.amount,
+              seva: d.sevaName || d.type || "General",
+              date: d.date,
+            })),
+          };
+        }
+      );
 
       res.status(200).json({
-        totalAmount: totals[0]?.totalAmount || 0,
-        donorCount: totals[0]?.donorCount || 0,
+        totalAmount,
+        donorCount,
         bySeva,
-        donors: recent.map((d) => ({
-          name: toDisplayName(d.donorName),
+        donors: donors.map((d) => ({
+          name: d.name,
           amount: d.amount,
-          seva: d.sevaName || d.type || "General",
+          seva: d.seva,
           time: timeAgo(d.date),
         })),
       });
