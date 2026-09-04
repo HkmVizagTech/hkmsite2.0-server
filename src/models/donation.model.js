@@ -89,6 +89,24 @@ const donationSchema = new mongoose.Schema({
   // sendDonationWhatsAppReceipt in paymentCompletion.service.js.
   whatsappSendStatus: { type: String, enum: ["sending"], default: undefined },
   whatsappReceiptError: { type: String },
+  // Which number/API actually sent the receipt ("gupshup" | "flaxxa").
+  // Recorded per donation because the provider is switchable at runtime via
+  // RECEIPT_WHATSAPP_PROVIDER, so "which one sent this?" can't be answered
+  // from the current env alone when investigating an old delivery.
+  whatsappProvider: { type: String },
+  // Provider's message id for the receipt send. This is the join key for the
+  // Gupshup delivery callback (/webhooks/whatsapp/gupshup) — indexed because
+  // every incoming event looks a donation up by it.
+  whatsappMessageId: { type: String, index: true },
+  // What the provider's callback last reported. "submitted" means the API
+  // accepted it and nothing has come back yet — NOT that the donor received
+  // it; only "delivered"/"read" mean that.
+  whatsappDeliveryStatus: {
+    type: String,
+    enum: ["submitted", "enqueued", "sent", "delivered", "read", "failed"],
+    default: undefined,
+  },
+  whatsappDeliveredAt: { type: Date },
   // Set once the "pending transaction" WhatsApp reminder has been sent for a
   // still-pending donation, so the reminder job never messages the same
   // donor twice about the same donation.

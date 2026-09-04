@@ -76,6 +76,26 @@ const SEND_BUTTON_PARAM = () => String(process.env.GUPSHUP_PENDING_BUTTON_PARAM 
 const isGupshupConfigured = () =>
   Boolean(process.env.GUPSHUP_API_KEY && process.env.GUPSHUP_APP_NAME && PENDING_TEMPLATE_ID());
 
+// Approved-on-Gupshup donation-receipt template — the replacement for the
+// Flaxxa `common_donation_success_reciept` send, which started failing once
+// the Flaxxa number hit its spam/quality limit.
+//
+//   name           common_donation_success_reciept_hkmv
+//   Gupshup UUID   1c953ac3-3856-4b9d-b4ab-f52f98ba2564   <- what this API wants
+//   Facebook id    1072589332027795                       <- Meta's own id, not used here
+//   type           DOCUMENT header / UTILITY / language En / POSITIONAL params
+//   body           {{1}} donor name, {{2}} amount (bare number — the template
+//                  already prints "₹" and "/-"), {{3}} seva / purpose
+//   buttons        none
+//
+// Verified against GET https://api.gupshup.io/wa/app/<appId>/template:
+// status APPROVED, templateType DOCUMENT, no footer, no buttons.
+const RECEIPT_TEMPLATE_ID = () =>
+  process.env.GUPSHUP_RECEIPT_TEMPLATE_ID || "1c953ac3-3856-4b9d-b4ab-f52f98ba2564";
+
+const isGupshupReceiptConfigured = () =>
+  Boolean(process.env.GUPSHUP_API_KEY && process.env.GUPSHUP_APP_NAME && RECEIPT_TEMPLATE_ID());
+
 // ---------------------------------------------------------------------------
 // Header image: Meta accepts only image/jpeg and image/png from the link, and
 // the seva banners are .webp. Convert once, re-host on R2 under a key derived
@@ -162,9 +182,12 @@ async function resolveJpegHeaderUrl(sourceUrl) {
  * @param {string} input.templateId - approved template UUID from the Gupshup console
  * @param {string[]} input.params - positional variables ({{1}}…) plus, last,
  *   the dynamic URL button's value if the template has one
- * @param {string} [input.headerImageUrl] - public jpeg/png URL for a media header
+ * @param {string} [input.headerImageUrl] - public jpeg/png URL for an IMAGE header
+ * @param {object} [input.media] - pre-built `message` payload for any other
+ *   header type, e.g. { type: "document", document: { link, filename } }.
+ *   Takes precedence over headerImageUrl when both are given.
  */
-async function sendGupshupTemplate({ phone, templateId, params, headerImageUrl }) {
+async function sendGupshupTemplate({ phone, templateId, params, headerImageUrl, media }) {
   const apiKey = process.env.GUPSHUP_API_KEY;
   const appName = process.env.GUPSHUP_APP_NAME;
   if (!apiKey) throw new Error("GUPSHUP_API_KEY is not set");
@@ -180,7 +203,9 @@ async function sendGupshupTemplate({ phone, templateId, params, headerImageUrl }
   form.append("destination", destination);
   form.append("src.name", appName);
   form.append("template", JSON.stringify({ id: templateId, params }));
-  if (headerImageUrl) {
+  if (media) {
+    form.append("message", JSON.stringify(media));
+  } else if (headerImageUrl) {
     form.append("message", JSON.stringify({ type: "image", image: { link: headerImageUrl } }));
   }
 
@@ -250,11 +275,102 @@ async function sendPendingWhatsappViaGupshup(phone, donorName, amount, sevaName,
   });
 }
 
+// ---------------------------------------------------------------------------
+// Donation receipt (PDF) via Gupshup
+//
+// KEY DIFFERENCE FROM FLAXXA: Flaxxa took the receipt as binary multipart
+// (header_attachment). Gupshup's template API takes only a LINK — the PDF must
+// be publicly fetchable by Meta at send time. So the generated receipt is
+// uploaded to the same R2 bucket the site already uses for media, and that
+// public URL is handed to Gupshup.
+//
+// The object key is derived from the donation id plus a salt, so it is
+// deterministic (a resend overwrites rather than piling up copies) but not
+// guessable by incrementing an id — receipts carry the donor's address/PAN.
+// Set RECEIPT_URL_SALT in Railway to something private; if it is unset the
+// key falls back to a plain hash of the id, which still isn't enumerable.
+//
+// Meta caches the document on its own CDN once fetched, so the R2 object is
+// only strictly needed for a few seconds. It is kept because the admin
+// "download receipt" path benefits from it; add an R2 lifecycle rule on the
+// `receipts/` prefix if you'd rather they expire.
+// ---------------------------------------------------------------------------
+
+async function uploadReceiptPdf(pdfBytes, donationId) {
+  const publicBase = (process.env.R2_PUBLIC_URL || "").replace(/\/+$/, "");
+  if (!publicBase) {
+    throw new Error(
+      "R2_PUBLIC_URL is not set — Gupshup can only attach a receipt from a public link, " +
+        "so the PDF cannot be delivered. Set R2_PUBLIC_URL (and the R2_* credentials) in Railway."
+    );
+  }
+
+  const salt = process.env.RECEIPT_URL_SALT || "hkmv-receipt";
+  const hash = crypto.createHash("sha256").update(`${salt}:${donationId}`).digest("hex").slice(0, 24);
+  const key = `receipts/${hash}.pdf`;
+
+  const { PutObjectCommand } = require("@aws-sdk/client-s3");
+  const { r2Client, bucketName } = require("../config/R2.config");
+  await r2Client.send(
+    new PutObjectCommand({
+      Bucket: bucketName,
+      Key: key,
+      Body: Buffer.from(pdfBytes),
+      ContentType: "application/pdf",
+      // Short cache: a resend after a corrected receipt must not serve the
+      // stale PDF to Meta from an edge cache.
+      CacheControl: "public, max-age=300",
+    })
+  );
+
+  return `${publicBase}/${key}`;
+}
+
+/**
+ * Sends the donation receipt (approved template + PDF document header)
+ * through Gupshup.
+ *
+ * @param {object} input
+ * @param {string} input.phone      - donor mobile, any format
+ * @param {string} input.donorName  - {{1}}
+ * @param {string} input.amountText - {{2}}, bare number e.g. "2,500"
+ *                                    (the template supplies "₹" and "/-")
+ * @param {string} input.sevaName   - {{3}}
+ * @param {Uint8Array|Buffer} input.pdfBytes - the generated receipt
+ * @param {string} input.filename   - filename the donor sees in WhatsApp
+ * @param {string} input.donationId - used to derive the R2 object key
+ */
+async function sendReceiptWhatsappViaGupshup({
+  phone,
+  donorName,
+  amountText,
+  sevaName,
+  pdfBytes,
+  filename,
+  donationId,
+}) {
+  const link = await uploadReceiptPdf(pdfBytes, donationId);
+
+  return sendGupshupTemplate({
+    phone,
+    templateId: RECEIPT_TEMPLATE_ID(),
+    params: [donorName, amountText, sevaName],
+    media: {
+      type: "document",
+      document: { link, filename: filename || "Donation_Receipt.pdf" },
+    },
+  });
+}
+
 module.exports = {
   isGupshupConfigured,
+  isGupshupReceiptConfigured,
   getPendingTemplateId: PENDING_TEMPLATE_ID,
+  getReceiptTemplateId: RECEIPT_TEMPLATE_ID,
   sendGupshupTemplate,
   sendPendingWhatsappViaGupshup,
+  sendReceiptWhatsappViaGupshup,
+  uploadReceiptPdf,
   resolveJpegHeaderUrl,
   GUPSHUP_TEMPLATE_URL,
 };

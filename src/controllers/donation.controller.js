@@ -808,11 +808,22 @@ const donationController = {
         .find({
           status: "completed",
           receiptNumber: { $nin: [null, ""] },
-          whatsappReceiptSentAt: { $in: [null, undefined] },
+          $or: [
+            // Never sent at all.
+            { whatsappReceiptSentAt: { $in: [null, undefined] } },
+            // Sent, accepted by the provider's API, then reported FAILED by
+            // the delivery callback — the donor has no receipt even though
+            // whatsappReceiptSentAt is set. Without this clause those
+            // donations were invisible: the send looked successful and only
+            // the callback knew otherwise.
+            { whatsappDeliveryStatus: "failed" },
+          ],
         })
         .sort({ createdAt: -1 })
         .limit(200)
-        .select("donorName donorEmail donorMobile amount sevaName type createdAt receiptNumber whatsappReceiptError")
+        .select(
+          "donorName donorEmail donorMobile amount sevaName type createdAt receiptNumber whatsappReceiptError whatsappReceiptSentAt whatsappProvider whatsappDeliveryStatus"
+        )
         .lean();
 
       res.status(200).json({ success: true, count: donations.length, donations });
@@ -829,13 +840,24 @@ const donationController = {
     try {
       const { id } = req.params;
       const { isWhatsAppConfigured } = require("../services/whatsapp.service");
+      const { isGupshupReceiptConfigured } = require("../services/gupshup.service");
       const { sendDonationWhatsAppReceipt } = require("../services/paymentCompletion.service");
       const donation = await donationModel.findById(id);
       if (!donation) return res.status(404).json({ message: "Donation not found" });
 
-      if (!isWhatsAppConfigured()) {
+      // Must match the provider sendDonationWhatsAppReceipt will actually use
+      // (RECEIPT_WHATSAPP_PROVIDER, default gupshup). This gate used to check
+      // WAPI_TOKEN unconditionally, which would refuse every resend on a
+      // Gupshup-only setup even though the send would have worked.
+      const provider = String(process.env.RECEIPT_WHATSAPP_PROVIDER || "gupshup").toLowerCase();
+      const configured = provider === "gupshup" ? isGupshupReceiptConfigured() : isWhatsAppConfigured();
+      if (!configured) {
+        const missing =
+          provider === "gupshup"
+            ? "GUPSHUP_API_KEY / GUPSHUP_APP_NAME are"
+            : "WAPI_TOKEN is";
         return res.status(200).json({
-          message: "WAPI_TOKEN is not configured on this server, so WhatsApp isn't connected yet. Nothing was sent.",
+          message: `${missing} not configured on this server, so WhatsApp isn't connected yet. Nothing was sent.`,
           skipped: true,
         });
       }

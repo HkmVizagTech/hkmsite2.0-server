@@ -25,6 +25,7 @@ const { sevaStatsRouter } = require("./src/routes/sevaStats.routes");
 const { campaignerRouter } = require("./src/routes/campaigner.routes");
 const { mediaRouter } = require("./src/routes/media.routes");
 const { volunteerRouter } = require("./src/routes/volunteer.routes");
+const { whatsappWebhookRouter } = require("./src/routes/whatsappWebhook.routes");
 const app = express();
 
 const allowedOrigins = new Set([
@@ -112,6 +113,11 @@ app.use("/seva-stats", sevaStatsRouter);
 app.use("/important-dates", importantDateRouter);
 app.use("/festival-donations", festivalDonationRouter);
 app.use("/volunteers", volunteerRouter);
+
+// Gupshup WhatsApp delivery callbacks (receipt sent / delivered / read /
+// failed). Unauthenticated by nature — the shared secret is in the path, and
+// the handler answers 200 to everything so Gupshup never retries in a loop.
+app.use("/webhooks/whatsapp", whatsappWebhookRouter);
 
 // dev routes removed for production safety
 

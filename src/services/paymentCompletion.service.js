@@ -7,6 +7,10 @@ const {
   isWhatsAppConfigured,
   sendTemplateMessageWithAttachment,
 } = require("./whatsapp.service");
+const {
+  isGupshupReceiptConfigured,
+  sendReceiptWhatsappViaGupshup,
+} = require("./gupshup.service");
 const { generateReceiptBuffer } = require("./receipt.service");
 const { cacheDel, cacheKeys } = require("../redis/redisClient");
 
@@ -18,6 +22,26 @@ const { cacheDel, cacheKeys } = require("../redis/redisClient");
 // sendDonationWhatsAppReceipt below).
 const RECEIPT_TEMPLATE_NAME = process.env.WAPI_RECEIPT_TEMPLATE_NAME || "common_donation_success_reciept";
 
+// ---------------------------------------------------------------------------
+// WHICH NUMBER SENDS THE RECEIPT
+//
+// "gupshup" (default) — the 917075176108 Gupshup number, template
+//            common_donation_success_reciept_hkmv. Switched to this because
+//            the Flaxxa number hit its messaging/quality limit and receipts
+//            stopped being delivered. Gupshup takes the PDF as a public LINK,
+//            so the receipt is uploaded to R2 first (see gupshup.service.js);
+//            that means the R2_* vars must be set alongside the GUPSHUP_* ones.
+// "flaxxa"  — the previous path: Flaxxa WAPI, template
+//            common_donation_success_reciept, PDF posted as binary multipart.
+//            Kept as a one-env-var rollback, nothing more.
+//
+// Set RECEIPT_WHATSAPP_PROVIDER=flaxxa in Railway to roll back without a deploy.
+// The same three body variables are used either way, in the same order, so a
+// switch changes only the number and the transport.
+// ---------------------------------------------------------------------------
+const RECEIPT_PROVIDER = () =>
+  String(process.env.RECEIPT_WHATSAPP_PROVIDER || "gupshup").toLowerCase();
+
 // Isolated on purpose: a WhatsApp failure (bad template name, Meta outage,
 // invalid phone) must NEVER undo or break the donation record — the payment
 // already succeeded and DCC (if configured) already has its own record.
@@ -25,7 +49,11 @@ const RECEIPT_TEMPLATE_NAME = process.env.WAPI_RECEIPT_TEMPLATE_NAME || "common_
 // generation, and WhatsApp send are each wrapped separately so one failing
 // doesn't cascade into losing the others.
 async function sendDonationWhatsAppReceipt(donation, { force = false } = {}) {
-  if (!isWhatsAppConfigured()) return { ok: false, skipped: true, reason: "whatsapp_not_configured" };
+  const provider = RECEIPT_PROVIDER();
+  const configured = provider === "gupshup" ? isGupshupReceiptConfigured() : isWhatsAppConfigured();
+  if (!configured) {
+    return { ok: false, skipped: true, reason: "whatsapp_not_configured", provider };
+  }
   if (!donation.donorMobile) return { ok: false, skipped: true, reason: "no_phone_number" };
 
   // No receipt number yet (DCC hasn't synced, or failed) -- per policy, no
@@ -75,36 +103,74 @@ async function sendDonationWhatsAppReceipt(donation, { force = false } = {}) {
     return { ok: false, skipped: true, reason: "send_in_progress" };
   }
 
-  const amountText = `Rs. ${Number(donation.amount || 0).toLocaleString("en-IN")}`;
+  // Bare number: both approved templates print the currency symbol and "/-"
+  // themselves, so "2,500" here becomes "₹2,500/-" in the delivered message.
+  const amountText = Number(donation.amount || 0).toLocaleString("en-IN");
+  const donorName = donation.donorName || "Devotee";
+  const sevaText = donation.sevaName || donation.type || "Seva";
+  const filename = `Donation_Receipt_${String(donation.donorName || "Donor").replace(/\s+/g, "_")}.pdf`;
+
   let tmpFile = null;
   try {
     const pdfBytes = await generateReceiptBuffer(donation._id);
-    tmpFile = path.join(os.tmpdir(), `receipt-${donation._id}-${Date.now()}.pdf`);
-    fs.writeFileSync(tmpFile, pdfBytes);
 
-    await sendTemplateMessageWithAttachment(
-      donation.donorMobile,
-      RECEIPT_TEMPLATE_NAME,
-      [
-        { type: "text", text: donation.donorName || "Devotee" },
-        { type: "text", text: amountText.replace(/^Rs\.\s*/, "") },
-        { type: "text", text: donation.sevaName || donation.type || "Seva" },
-      ],
-      tmpFile,
-      `Donation_Receipt_${String(donation.donorName || "Donor").replace(/\s+/g, "_")}.pdf`
-    );
+    let sendResult = null;
+
+    if (provider === "gupshup") {
+      // Gupshup attaches the PDF from a public link (uploaded to R2 inside
+      // this call) rather than as multipart binary.
+      sendResult = await sendReceiptWhatsappViaGupshup({
+        phone: donation.donorMobile,
+        donorName,
+        amountText,
+        sevaName: sevaText,
+        pdfBytes,
+        filename,
+        donationId: donation._id.toString(),
+      });
+    } else {
+      tmpFile = path.join(os.tmpdir(), `receipt-${donation._id}-${Date.now()}.pdf`);
+      fs.writeFileSync(tmpFile, pdfBytes);
+
+      sendResult = await sendTemplateMessageWithAttachment(
+        donation.donorMobile,
+        RECEIPT_TEMPLATE_NAME,
+        [
+          { type: "text", text: donorName },
+          { type: "text", text: amountText },
+          { type: "text", text: sevaText },
+        ],
+        tmpFile,
+        filename
+      );
+    }
+
+    // The provider's message id is the join key the delivery callback needs
+    // (/webhooks/whatsapp/gupshup). "submitted" is recorded deliberately, not
+    // "sent": the API accepting the request is not the donor receiving it —
+    // only the callback can say that.
+    const messageId =
+      (sendResult && (sendResult.messageId || sendResult.message_wamid || sendResult.wamid)) || null;
 
     await donationModel.findByIdAndUpdate(donation._id, {
       whatsappReceiptSentAt: new Date(),
       whatsappReceiptError: null,
       whatsappSendStatus: null,
+      whatsappProvider: provider,
+      whatsappMessageId: messageId,
+      whatsappDeliveryStatus: "submitted",
+      whatsappDeliveredAt: null,
     });
-    return { ok: true, withPdf: true };
+    return { ok: true, withPdf: true, provider, messageId };
   } catch (error) {
     // PDF generation or the WhatsApp send itself failed -- still no
     // message goes out (per policy), just record why for admin visibility.
     const message = error && error.message ? error.message : String(error);
-    console.error("WhatsApp PDF receipt failed for donation", donation._id.toString(), message);
+    console.error(
+      `WhatsApp PDF receipt failed via ${provider} for donation`,
+      donation._id.toString(),
+      message
+    );
     await donationModel.findByIdAndUpdate(donation._id, { whatsappReceiptError: message, whatsappSendStatus: null });
     return { ok: false, error: message };
   } finally {
