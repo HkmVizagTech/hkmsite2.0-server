@@ -210,14 +210,20 @@ async function resendRecentFailedReceipts({
 } = {}) {
   const since = new Date(Date.now() - Number(hours) * 60 * 60 * 1000);
 
+  const query = {
+    status: "completed",
+    createdAt: { $gte: since },
+    receiptNumber: { $nin: [null, ""] },
+    donorMobile: { $nin: [null, ""] },
+    whatsappReceiptSentAt: { $in: [null, undefined] },
+  };
+
+  // Counted separately from the (limited) batch so a caller can tell
+  // "that's all of them" apart from "there are more — run it again".
+  const totalMatching = await donationModel.countDocuments(query);
+
   const candidates = await donationModel
-    .find({
-      status: "completed",
-      createdAt: { $gte: since },
-      receiptNumber: { $nin: [null, ""] },
-      donorMobile: { $nin: [null, ""] },
-      whatsappReceiptSentAt: { $in: [null, undefined] },
-    })
+    .find(query)
     .sort({ createdAt: 1 })
     .limit(Number(limit))
     .select("_id donorName donorMobile amount sevaName type receiptNumber createdAt whatsappReceiptError");
@@ -226,7 +232,9 @@ async function resendRecentFailedReceipts({
     provider: RECEIPT_PROVIDER(),
     windowHours: Number(hours),
     since: since.toISOString(),
+    totalMatching,
     candidates: candidates.length,
+    remaining: Math.max(0, totalMatching - candidates.length),
     sent: 0,
     skipped: 0,
     failed: 0,

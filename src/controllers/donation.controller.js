@@ -833,6 +833,43 @@ const donationController = {
     }
   },
 
+  // ADMIN - bulk resend for a window of receipts that never went out, e.g.
+  // the hours in which every Flaxxa send failed on that number's spam/quality
+  // limit. Same auth as the rest of this admin API; no internal secret and no
+  // shell access needed, which is the point — this is driven from the Needs
+  // WhatsApp tab.
+  //
+  // POST /donations/resend-recent-whatsapp  { hours, limit, send }
+  //   send !== true  -> DRY RUN: returns exactly who would be messaged.
+  //   send === true  -> sends, sequentially, with a delay between each.
+  //
+  // Safe to run twice: it only picks donations with no recorded receipt send,
+  // and the send path keeps its idempotency guard (no force), so a donor who
+  // already has a receipt is skipped rather than messaged again.
+  resendRecentWhatsApp: async (req, res) => {
+    try {
+      const body = req.body || {};
+      const hours = Number(body.hours ?? req.query.hours ?? 9);
+      // Capped per call so one click can't run long enough to be cut off by a
+      // proxy timeout mid-batch. `remaining` in the response tells the UI
+      // whether to offer another round.
+      const limit = Math.min(Number(body.limit ?? req.query.limit ?? 25), 100);
+      const dryRun = String(body.send ?? req.query.send ?? "") !== "true";
+
+      if (!Number.isFinite(hours) || hours <= 0 || hours > 24 * 30) {
+        return res.status(400).json({ success: false, message: "hours must be between 1 and 720." });
+      }
+
+      const { resendRecentFailedReceipts } = require("../services/paymentCompletion.service");
+      const result = await resendRecentFailedReceipts({ hours, limit, dryRun, delayMs: 700 });
+
+      return res.status(200).json({ success: true, ...result });
+    } catch (err) {
+      console.error("resendRecentWhatsApp error:", err);
+      return res.status(500).json({ success: false, message: err.message || "Server error" });
+    }
+  },
+
   // ADMIN - manually re-trigger the WhatsApp receipt message, isolated from
   // DCC so a WhatsApp-only failure (bad phone, template not approved yet)
   // can be retried without re-running the DCC sync.

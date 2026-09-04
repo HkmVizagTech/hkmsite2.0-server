@@ -16,6 +16,9 @@ donationRouter.get("/report", authMiddleware, adminMiddleware, donationControlle
 donationRouter.get("/whatsapp-audit", authMiddleware, adminMiddleware, donationController.whatsappAudit);
 donationRouter.get("/needs-manual-receipt", authMiddleware, adminMiddleware, donationController.needsManualReceipt);
 donationRouter.get("/needs-whatsapp", authMiddleware, adminMiddleware, donationController.needsWhatsApp);
+// Bulk resend for a window of receipts that never went out (provider outage).
+// Declared before the "/:id/..." routes so it can never be read as an id.
+donationRouter.post("/resend-recent-whatsapp", authMiddleware, adminMiddleware, donationController.resendRecentWhatsApp);
 donationRouter.get("/:id", authMiddleware, adminMiddleware, donationController.get);
 donationRouter.post("/:id/resend-receipt", authMiddleware, adminMiddleware, donationController.resendReceipt);
 donationRouter.put("/:id/receipt-number", authMiddleware, adminMiddleware, donationController.patchReceiptNumber);
