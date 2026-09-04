@@ -141,6 +141,56 @@ app.get("/api/internal/send-pending-reminders", async (req, res) => {
   }
 });
 
+// Internal endpoint to re-send receipts that never went out during a provider
+// outage — written for the window in which every Flaxxa send failed on that
+// number's spam/quality limit. Sends through whichever provider is configured
+// now (RECEIPT_WHATSAPP_PROVIDER, default gupshup).
+//
+// GET so it can be triggered from a phone browser:
+//   /api/internal/resend-receipts?secret=<INTERNAL_SECRET>&hours=9
+//     -> DRY RUN: lists exactly which donations would be messaged, sends nothing
+//   /api/internal/resend-receipts?secret=<INTERNAL_SECRET>&hours=9&send=true
+//     -> actually sends
+//
+// Dry run is the DEFAULT deliberately: this endpoint messages real donors, and
+// a URL in a browser is one accidental refresh away from re-running. Sending
+// requires send=true to be typed on purpose.
+//
+// Re-running it is safe regardless — it only selects donations with no
+// recorded receipt send, and the send path keeps its idempotency guard (no
+// force), so an already-receipted donor is skipped, never messaged twice.
+// If the HTTP request times out mid-run the sends continue server-side; check
+// the logs, or just run it again.
+const handleResendReceipts = async (req, res) => {
+  const supplied = req.headers["x-internal-secret"] || req.query.secret;
+  if (!process.env.INTERNAL_SECRET || supplied !== process.env.INTERNAL_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const hours = Number(req.query.hours || 9);
+  const limit = Number(req.query.limit || 100);
+  const delayMs = Number(req.query.delayMs || 900);
+  const dryRun = String(req.query.send || "") !== "true";
+
+  try {
+    const { resendRecentFailedReceipts } = require("./src/services/paymentCompletion.service");
+    const result = await resendRecentFailedReceipts({ hours, limit, dryRun, delayMs });
+    return res.json({
+      success: true,
+      ...result,
+      ...(dryRun
+        ? { note: "DRY RUN — nothing was sent. Add &send=true to this URL to send these receipts." }
+        : {}),
+    });
+  } catch (err) {
+    console.error("Resend receipts job error:", err && err.stack ? err.stack : err);
+    return res.status(500).json({ error: err && err.message ? err.message : String(err) });
+  }
+};
+
+app.get("/api/internal/resend-receipts", handleResendReceipts);
+app.post("/api/internal/resend-receipts", handleResendReceipts);
+
 app.get('/health', (req, res) => {
   const states = ['disconnected', 'connected', 'connecting', 'disconnecting'];
   const dbState = mongoose && mongoose.connection ? mongoose.connection.readyState : 0;

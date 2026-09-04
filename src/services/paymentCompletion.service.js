@@ -180,6 +180,104 @@ async function sendDonationWhatsAppReceipt(donation, { force = false } = {}) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// BULK RESEND — for receipts that never went out during a provider outage.
+//
+// Written for the Flaxxa spam/quality limit: for a window of hours, every
+// receipt send failed, so those donations sit completed, with a real DCC
+// receipt number, and whatsappReceiptSentAt still null. This walks that exact
+// set and sends each one again through whichever provider is configured now
+// (Gupshup by default).
+//
+// SAFETY — why a donor cannot get two receipts from this:
+//   * The query only selects donations with whatsappReceiptSentAt null, i.e.
+//     ones where no receipt has ever been recorded as sent.
+//   * It calls sendDonationWhatsAppReceipt WITHOUT force, so the hard
+//     idempotency guard and the atomic "sending" lock both still apply. Even
+//     if this query were wrong, an already-sent donation would be skipped
+//     with reason "already_sent" rather than messaged twice.
+//   * Sends are sequential with a delay, so a burst can't trip Gupshup's own
+//     rate limits and re-create the problem this is fixing.
+//
+// Donations still missing a receiptNumber (DCC never synced) are deliberately
+// left alone — per policy no WhatsApp goes out without a real receipt.
+// ---------------------------------------------------------------------------
+async function resendRecentFailedReceipts({
+  hours = 9,
+  limit = 100,
+  dryRun = false,
+  delayMs = 1200,
+} = {}) {
+  const since = new Date(Date.now() - Number(hours) * 60 * 60 * 1000);
+
+  const candidates = await donationModel
+    .find({
+      status: "completed",
+      createdAt: { $gte: since },
+      receiptNumber: { $nin: [null, ""] },
+      donorMobile: { $nin: [null, ""] },
+      whatsappReceiptSentAt: { $in: [null, undefined] },
+    })
+    .sort({ createdAt: 1 })
+    .limit(Number(limit))
+    .select("_id donorName donorMobile amount sevaName type receiptNumber createdAt whatsappReceiptError");
+
+  const summary = {
+    provider: RECEIPT_PROVIDER(),
+    windowHours: Number(hours),
+    since: since.toISOString(),
+    candidates: candidates.length,
+    sent: 0,
+    skipped: 0,
+    failed: 0,
+    dryRun: Boolean(dryRun),
+    results: [],
+  };
+
+  if (dryRun) {
+    summary.results = candidates.map((d) => ({
+      id: d._id.toString(),
+      donor: d.donorName,
+      amount: d.amount,
+      receiptNumber: d.receiptNumber,
+      createdAt: d.createdAt,
+      previousError: d.whatsappReceiptError || null,
+    }));
+    return summary;
+  }
+
+  for (const donation of candidates) {
+    try {
+      const result = await sendDonationWhatsAppReceipt(donation);
+      if (result.ok && !result.skipped) summary.sent += 1;
+      else if (result.skipped) summary.skipped += 1;
+      else summary.failed += 1;
+
+      summary.results.push({
+        id: donation._id.toString(),
+        donor: donation.donorName,
+        ok: Boolean(result.ok),
+        skipped: Boolean(result.skipped),
+        reason: result.reason || null,
+        error: result.error || null,
+        messageId: result.messageId || null,
+      });
+    } catch (err) {
+      summary.failed += 1;
+      summary.results.push({
+        id: donation._id.toString(),
+        donor: donation.donorName,
+        ok: false,
+        error: err && err.message ? err.message : String(err),
+      });
+    }
+
+    if (delayMs) await new Promise((r) => setTimeout(r, Number(delayMs)));
+  }
+
+  return summary;
+}
+
 // Fast path: marks the donation as completed and sets payment IDs.
 // Returns the donation document (or null if not found).
 async function markDonationCompleted({ donationId, orderId, paymentId }) {
@@ -399,4 +497,4 @@ async function handleSubscriptionCharged(payload) {
   return { ok: true, donationId: targetDonationId.toString() };
 }
 
-module.exports = { completeDonation, markDonationCompleted, runPostCompletionPipeline, sendDonationWhatsAppReceipt, handleSubscriptionCharged, invalidateDonationCaches };
+module.exports = { completeDonation, markDonationCompleted, runPostCompletionPipeline, sendDonationWhatsAppReceipt, resendRecentFailedReceipts, handleSubscriptionCharged, invalidateDonationCaches };
