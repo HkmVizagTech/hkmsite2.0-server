@@ -202,25 +202,40 @@ async function sendDonationWhatsAppReceipt(donation, { force = false } = {}) {
 // Donations still missing a receiptNumber (DCC never synced) are deliberately
 // left alone — per policy no WhatsApp goes out without a real receipt.
 // ---------------------------------------------------------------------------
+// hours = 0 (or null) means NO time window: every donation that has a receipt
+// and never had one sent. The window is only a convenience for scoping to a
+// known outage — and it is anchored on createdAt, i.e. when the donation
+// RECORD was created, not when the receipt was raised. That distinction
+// matters for offline/manual donations: one entered days ago but receipted
+// today falls outside a short window even though its receipt failed today.
+// When in doubt, run it with no window and read the counts.
 async function resendRecentFailedReceipts({
   hours = 9,
   limit = 100,
   dryRun = false,
   delayMs = 1200,
 } = {}) {
-  const since = new Date(Date.now() - Number(hours) * 60 * 60 * 1000);
+  const useWindow = Number(hours) > 0;
+  const since = useWindow ? new Date(Date.now() - Number(hours) * 60 * 60 * 1000) : null;
 
-  const query = {
+  // Everything that has a real receipt and no recorded WhatsApp send.
+  const base = {
     status: "completed",
-    createdAt: { $gte: since },
     receiptNumber: { $nin: [null, ""] },
-    donorMobile: { $nin: [null, ""] },
     whatsappReceiptSentAt: { $in: [null, undefined] },
   };
+  // ...of which only these can actually be messaged.
+  const sendable = { ...base, donorMobile: { $nin: [null, ""] } };
+  const query = useWindow ? { ...sendable, createdAt: { $gte: since } } : sendable;
 
-  // Counted separately from the (limited) batch so a caller can tell
-  // "that's all of them" apart from "there are more — run it again".
-  const totalMatching = await donationModel.countDocuments(query);
+  // Three counts, because "why is this number smaller than the tab's list?"
+  // is otherwise unanswerable: the window excludes some, and donations with
+  // no phone number on file can never be messaged at all.
+  const [totalMatching, allTimeSendable, allTimeNeeding] = await Promise.all([
+    donationModel.countDocuments(query),
+    donationModel.countDocuments(sendable),
+    donationModel.countDocuments(base),
+  ]);
 
   const candidates = await donationModel
     .find(query)
@@ -230,9 +245,11 @@ async function resendRecentFailedReceipts({
 
   const summary = {
     provider: RECEIPT_PROVIDER(),
-    windowHours: Number(hours),
-    since: since.toISOString(),
+    windowHours: useWindow ? Number(hours) : null,
+    since: since ? since.toISOString() : null,
     totalMatching,
+    allTimeSendable,
+    allTimeNoPhone: Math.max(0, allTimeNeeding - allTimeSendable),
     candidates: candidates.length,
     remaining: Math.max(0, totalMatching - candidates.length),
     sent: 0,

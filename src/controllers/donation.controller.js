@@ -849,15 +849,20 @@ const donationController = {
   resendRecentWhatsApp: async (req, res) => {
     try {
       const body = req.body || {};
-      const hours = Number(body.hours ?? req.query.hours ?? 9);
+      // hours = 0 (or "all") drops the time window entirely: every donation
+      // with a receipt and no recorded send. Offline/manual donations are the
+      // reason this matters — the window filters on when the donation record
+      // was created, not when its receipt was raised.
+      const rawHours = body.hours ?? req.query.hours ?? 9;
+      const hours = String(rawHours).toLowerCase() === "all" ? 0 : Number(rawHours);
       // Capped per call so one click can't run long enough to be cut off by a
       // proxy timeout mid-batch. `remaining` in the response tells the UI
       // whether to offer another round.
       const limit = Math.min(Number(body.limit ?? req.query.limit ?? 25), 100);
       const dryRun = String(body.send ?? req.query.send ?? "") !== "true";
 
-      if (!Number.isFinite(hours) || hours <= 0 || hours > 24 * 30) {
-        return res.status(400).json({ success: false, message: "hours must be between 1 and 720." });
+      if (!Number.isFinite(hours) || hours < 0 || hours > 24 * 365) {
+        return res.status(400).json({ success: false, message: "hours must be 0 (all time) or between 1 and 8760." });
       }
 
       const { resendRecentFailedReceipts } = require("../services/paymentCompletion.service");
