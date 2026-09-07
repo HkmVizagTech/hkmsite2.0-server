@@ -833,6 +833,23 @@ const donationController = {
     }
   },
 
+  // TEMPORARY diagnostic — direct, unambiguous check of exactly which
+  // donations have sourcePage="donations/janmashtami2", since other list
+  // endpoints either exclude these by design or don't project sourcePage
+  // in their response, making it impossible to confirm via those alone.
+  debugJanmashtami2: async (req, res) => {
+    try {
+      const donations = await donationModel
+        .find({ sourcePage: "donations/janmashtami2" })
+        .sort({ createdAt: -1 })
+        .select("donorName amount status paymentAccount razorpayOrderId razorpayPaymentId createdAt")
+        .lean();
+      res.status(200).json({ success: true, count: donations.length, donations });
+    } catch (err) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  },
+
   // ADMIN - bulk resend for a window of receipts that never went out, e.g.
   // the hours in which every Flaxxa send failed on that number's spam/quality
   // limit. Same auth as the rest of this admin API; no internal secret and no
