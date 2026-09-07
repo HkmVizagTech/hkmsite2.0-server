@@ -834,36 +834,6 @@ const donationController = {
     }
   },
 
-  // TEMPORARY diagnostic — direct, unambiguous check of exactly which
-  // donations have sourcePage="donations/janmashtami2", since other list
-  // endpoints either exclude these by design or don't project sourcePage
-  // in their response, making it impossible to confirm via those alone.
-  debugJanmashtami2: async (req, res) => {
-    try {
-      const donations = await donationModel
-        .find({ sourcePage: "donations/janmashtami2" })
-        .sort({ createdAt: -1 })
-        .select("donorName amount status paymentAccount razorpayOrderId razorpayPaymentId createdAt")
-        .lean();
-      res.status(200).json({ success: true, count: donations.length, donations });
-    } catch (err) {
-      res.status(500).json({ success: false, message: err.message });
-    }
-  },
-
-  // TEMPORARY - quick count of the true sitewide pending backlog (matching
-  // the reconciliation service's own base filter), so we know how many
-  // audit-pending passes are actually needed instead of guessing.
-  debugPendingCount: async (req, res) => {
-    try {
-      const total = await donationModel.countDocuments({ status: "pending", razorpayOrderId: { $exists: true, $ne: null } });
-      const janm2Pending = await donationModel.countDocuments({ status: "pending", sourcePage: "donations/janmashtami2", razorpayOrderId: { $exists: true, $ne: null } });
-      res.status(200).json({ success: true, totalPendingSitewide: total, janmashtami2Pending: janm2Pending });
-    } catch (err) {
-      res.status(500).json({ success: false, message: err.message });
-    }
-  },
-
   // ADMIN - bulk resend for a window of receipts that never went out, e.g.
   // the hours in which every Flaxxa send failed on that number's spam/quality
   // limit. Same auth as the rest of this admin API; no internal secret and no
