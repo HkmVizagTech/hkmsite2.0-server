@@ -1,15 +1,15 @@
 const { donationModel } = require("../models/donation.model");
 const { createRazorpayInstance } = require("./payment.controller");
 
-// The standalone /donations page is fully separate from the rest of the
-// site's donation flows (seva pages, sqft campaign, janmashtami) and has
-// its own dedicated admin at /donations/admin — it must never show up
-// blended into this main site-wide donations list/stats.
-// /donations/janmashtami2 is treated the same way by explicit request —
-// it lives under the /donations path and its donations should follow
-// the same DCC/accounting treatment (enrolledBy default, excluded here,
-// shown only in /donations/admin) as the /donations page itself.
-const EXCLUDE_DONATIONS_PAGE = { sourcePage: { $nin: ["donations", "donations/janmashtami2"] } };
+// The standalone /donations page (and anything built under /donations/...,
+// e.g. /donations/janmashtami2) is fully separate from the rest of the
+// site's donation flows and has its own dedicated admin at /donations/admin
+// — it must never show up blended into this main site-wide donations
+// list/stats. Matches "donations" exactly or "donations/<anything>", so a
+// future page added under this path is automatically covered without
+// needing this list updated by hand each time.
+const DONATIONS_DOMAIN_PATTERN = /^donations(\/|$)/;
+const EXCLUDE_DONATIONS_PAGE = { sourcePage: { $not: DONATIONS_DOMAIN_PATTERN } };
 
 // Shared helper: builds a { createdAt: {...} } match clause from optional
 // YYYY-MM-DD from/to query params. `to` is inclusive through end of day.

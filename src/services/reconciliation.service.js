@@ -2,9 +2,11 @@ const { donationModel } = require("../models/donation.model");
 const { createRazorpayInstance } = require("../controllers/payment.controller");
 const { completeDonation } = require("./paymentCompletion.service");
 
-// The standalone /donations page has its own dedicated admin — same
-// definition as donation.controller.js's EXCLUDE_DONATIONS_PAGE.
-const EXCLUDE_DONATIONS_PAGE = { sourcePage: { $nin: ["donations", "donations/janmashtami2"] } };
+// The standalone /donations page (and anything under /donations/...) has
+// its own dedicated admin — same pattern as donation.controller.js's
+// EXCLUDE_DONATIONS_PAGE. Matches "donations" exactly or "donations/<any>".
+const DONATIONS_DOMAIN_PATTERN = /^donations(\/|$)/;
+const EXCLUDE_DONATIONS_PAGE = { sourcePage: { $not: DONATIONS_DOMAIN_PATTERN } };
 
 /**
  * Checks pending donations (that have a Razorpay order) against Razorpay's

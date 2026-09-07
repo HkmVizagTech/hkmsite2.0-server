@@ -15,10 +15,13 @@ const { completeDonation } = require("../services/paymentCompletion.service");
 
 // Every query here is scoped to the /donations page's own donations only —
 // never mixes in seva-page or campaign donations from the rest of the site.
-// donations/janmashtami2 is included by explicit request — it's treated
-// as part of the /donations page's own accounting scope.
+// Matches "donations" exactly or "donations/<anything>" (covers any future
+// page built under this path, e.g. donations/janmashtami2, automatically)
+// plus two legacy exact-match fallbacks for older data shapes that predate
+// this pattern ("/donations" with a leading slash, and type:"Donation").
+const DONATIONS_DOMAIN_PATTERN = /^donations(\/|$)/;
 const DONATIONS_PAGE_FILTER = {
-  $or: [{ sourcePage: "donations" }, { sourcePage: "/donations" }, { sourcePage: "donations/janmashtami2" }, { type: "Donation" }],
+  $or: [{ sourcePage: DONATIONS_DOMAIN_PATTERN }, { sourcePage: "/donations" }, { type: "Donation" }],
 };
 
 const SUCCESS_STATUSES = ["completed"];

@@ -241,9 +241,13 @@ const buildFullAddress = (prasadamAddress) => {
   return value || null;
 };
 
+// Matches "donations" exactly or "donations/<anything>" — same pattern
+// as EXCLUDE_DONATIONS_PAGE/DONATIONS_PAGE_FILTER elsewhere, so a future
+// page added under /donations/... automatically gets the same enrolledBy
+// treatment without needing this updated by hand each time.
+const DONATIONS_DOMAIN_PATTERN = /^donations(\/|$)/;
 const isSpecialEnrolledByDonation = (donation) => (
-  normalizeString(donation.sourcePage) === "donations" ||
-  normalizeString(donation.sourcePage) === "donations/janmashtami2"
+  DONATIONS_DOMAIN_PATTERN.test(normalizeString(donation.sourcePage))
 );
 
 const resolveEnrolledBy = (donation) => {
