@@ -185,11 +185,12 @@ const donationController = {
   auditPending: async (req, res) => {
     try {
       const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 100));
+      const skip = Math.max(0, parseInt(req.query.skip, 10) || 0);
       const fix = req.query.fix === "true";
       const scope = req.query.scope || "seva"; // "seva" (default) or "all"
 
       const { reconcilePendingDonations } = require("../services/reconciliation.service");
-      const { summary, results } = await reconcilePendingDonations({ limit, fix, scope });
+      const { summary, results } = await reconcilePendingDonations({ limit, skip, fix, scope });
 
       res.status(200).json({
         success: true,

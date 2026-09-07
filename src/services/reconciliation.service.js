@@ -19,7 +19,7 @@ const EXCLUDE_DONATIONS_PAGE = { sourcePage: { $nin: ["donations", "donations/ja
  * Used by both GET /donations/audit-pending (manual, on-demand) and the
  * scheduled job in jobs/reconcilePendingDonations.js (automatic, periodic).
  */
-async function reconcilePendingDonations({ limit = 100, fix = false, scope = "all" } = {}) {
+async function reconcilePendingDonations({ limit = 100, skip = 0, fix = false, scope = "all" } = {}) {
   const baseFilter = {
     status: "pending",
     razorpayOrderId: { $exists: true, $ne: null },
@@ -31,6 +31,7 @@ async function reconcilePendingDonations({ limit = 100, fix = false, scope = "al
   const pending = await donationModel
     .find(baseFilter)
     .sort({ createdAt: 1 })
+    .skip(skip)
     .limit(limit)
     .lean();
 
