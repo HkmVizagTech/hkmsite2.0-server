@@ -188,9 +188,17 @@ const donationController = {
       const skip = Math.max(0, parseInt(req.query.skip, 10) || 0);
       const fix = req.query.fix === "true";
       const scope = req.query.scope || "seva"; // "seva" (default) or "all"
+      // statuses=pending,failed — comma-separated. Defaults to just
+      // "pending" (existing behavior). Pass "pending,failed" for a
+      // thorough sweep that also re-verifies records already marked
+      // failed, in case any were wrong (e.g. failed before a later
+      // successful retry that Razorpay captured).
+      const statuses = req.query.statuses
+        ? String(req.query.statuses).split(",").map((s) => s.trim()).filter(Boolean)
+        : ["pending"];
 
       const { reconcilePendingDonations } = require("../services/reconciliation.service");
-      const { summary, results } = await reconcilePendingDonations({ limit, skip, fix, scope });
+      const { summary, results } = await reconcilePendingDonations({ limit, skip, fix, scope, statuses });
 
       res.status(200).json({
         success: true,
