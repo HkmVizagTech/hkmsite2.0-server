@@ -34,7 +34,9 @@ async function reconcilePendingDonations({ limit = 100, skip = 0, fix = false, s
     status: { $in: statuses },
     razorpayOrderId: { $exists: true, $ne: null },
   };
-  if (scope !== "all") {
+  if (scope === "donations-only") {
+    baseFilter.sourcePage = DONATIONS_DOMAIN_PATTERN;
+  } else if (scope !== "all") {
     Object.assign(baseFilter, EXCLUDE_DONATIONS_PAGE);
   }
 
