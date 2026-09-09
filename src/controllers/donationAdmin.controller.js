@@ -116,20 +116,29 @@ const donationAdminController = {
     }
   },
 
-  // GET /donations-admin/transactions?page=&limit=&search=&status=&startDate=&endDate=&campaign=&source=&medium=
+  // GET /donations-admin/transactions?page=&limit=&search=&status=&startDate=&endDate=&campaign=&source=&medium=&sourcePage=
   getAllTransactions: async (req, res) => {
     try {
       const {
         page = 1, limit = 20, search = "", status = "all",
-        startDate, endDate, campaign, source, medium,
+        startDate, endDate, campaign, source, medium, sourcePage,
       } = req.query;
 
       const query = { ...DONATIONS_PAGE_FILTER };
 
+      // Optional narrowing within the /donations family — e.g.
+      // sourcePage=donations for just the main page's own transactions,
+      // or sourcePage=donations/janmashtami2 for just that page's,
+      // instead of the combined family-wide total.
+      if (sourcePage) {
+        delete query.$or;
+        query.sourcePage = sourcePage;
+      }
+
       if (status === "needs_attention") {
         query.status = "completed";
         query.$and = [
-          { $or: query.$or },
+          { $or: query.$or || [{ sourcePage: query.sourcePage }] },
           { $or: [
             { dccSyncStatus: "failed" },
             { whatsappReceiptSentAt: { $exists: false } },
