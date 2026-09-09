@@ -15,10 +15,13 @@ const { completeDonation } = require("../services/paymentCompletion.service");
 
 // Every query here is scoped to the /donations page's own donations only —
 // never mixes in seva-page or campaign donations from the rest of the site.
-// donations/janmashtami2 is included by explicit request — it's treated
-// as part of the /donations page's own accounting scope.
+// Matches "donations" exactly or "donations/<anything>" (covers any future
+// page built under this path, e.g. donations/janmashtami2, automatically)
+// plus two legacy exact-match fallbacks for older data shapes that predate
+// this pattern ("/donations" with a leading slash, and type:"Donation").
+const DONATIONS_DOMAIN_PATTERN = /^donations(\/|$)/;
 const DONATIONS_PAGE_FILTER = {
-  $or: [{ sourcePage: "donations" }, { sourcePage: "/donations" }, { sourcePage: "donations/janmashtami2" }, { type: "Donation" }],
+  $or: [{ sourcePage: DONATIONS_DOMAIN_PATTERN }, { sourcePage: "/donations" }, { type: "Donation" }],
 };
 
 const SUCCESS_STATUSES = ["completed"];
@@ -113,20 +116,88 @@ const donationAdminController = {
     }
   },
 
-  // GET /donations-admin/transactions?page=&limit=&search=&status=&startDate=&endDate=&campaign=&source=&medium=
+  // GET /donations-admin/report?startDate=&endDate=&sourcePage=
+  // Full report for the /donations family over a custom date range:
+  // per-page split (main /donations vs any sub-page like
+  // donations/janmashtami2), a day-by-day series, and a seva breakdown.
+  // Unlike GET /donations/report (the main site's report), this one is
+  // scoped TO the /donations family rather than excluding it, since that
+  // endpoint's EXCLUDE_DONATIONS_PAGE filter would return nothing for
+  // this domain.
+  getReport: async (req, res) => {
+    try {
+      const { startDate, endDate, sourcePage } = req.query;
+      if (!startDate || !endDate) {
+        return res.status(400).json({ success: false, message: "startDate and endDate are required (YYYY-MM-DD)." });
+      }
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      end.setHours(23, 59, 59, 999);
+
+      const baseMatch = sourcePage
+        ? { sourcePage, status: "completed", createdAt: { $gte: start, $lte: end } }
+        : { ...DONATIONS_PAGE_FILTER, status: "completed", createdAt: { $gte: start, $lte: end } };
+
+      const [summaryAgg, byPageAgg, dailyAgg, sevaAgg] = await Promise.all([
+        donationModel.aggregate([
+          { $match: baseMatch },
+          { $group: { _id: null, total: { $sum: "$amount" }, count: { $sum: 1 } } },
+        ]),
+        donationModel.aggregate([
+          { $match: baseMatch },
+          { $group: { _id: { $ifNull: ["$sourcePage", "unknown"] }, amount: { $sum: "$amount" }, count: { $sum: 1 } } },
+          { $sort: { amount: -1 } },
+        ]),
+        donationModel.aggregate([
+          { $match: baseMatch },
+          { $group: { _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } }, amount: { $sum: "$amount" }, count: { $sum: 1 } } },
+          { $sort: { _id: 1 } },
+        ]),
+        donationModel.aggregate([
+          { $match: baseMatch },
+          { $group: { _id: { $ifNull: ["$sevaName", { $ifNull: ["$type", "General"] }] }, amount: { $sum: "$amount" }, count: { $sum: 1 } } },
+          { $sort: { amount: -1 } },
+          { $limit: 30 },
+        ]),
+      ]);
+
+      res.status(200).json({
+        success: true,
+        range: { start, end },
+        summary: { totalAmount: summaryAgg[0]?.total || 0, count: summaryAgg[0]?.count || 0 },
+        byPage: byPageAgg.map((p) => ({ sourcePage: p._id, amount: p.amount, count: p.count })),
+        daily: dailyAgg.map((d) => ({ date: d._id, amount: d.amount, count: d.count })),
+        sevaBreakdown: sevaAgg.map((s) => ({ name: s._id, amount: s.amount, count: s.count })),
+      });
+    } catch (error) {
+      console.error("donationAdmin.getReport error:", error);
+      res.status(500).json({ success: false, message: "Failed to generate report" });
+    }
+  },
+
+  // GET /donations-admin/transactions?page=&limit=&search=&status=&startDate=&endDate=&campaign=&source=&medium=&sourcePage=
   getAllTransactions: async (req, res) => {
     try {
       const {
         page = 1, limit = 20, search = "", status = "all",
-        startDate, endDate, campaign, source, medium,
+        startDate, endDate, campaign, source, medium, sourcePage,
       } = req.query;
 
       const query = { ...DONATIONS_PAGE_FILTER };
 
+      // Optional narrowing within the /donations family — e.g.
+      // sourcePage=donations for just the main page's own transactions,
+      // or sourcePage=donations/janmashtami2 for just that page's,
+      // instead of the combined family-wide total.
+      if (sourcePage) {
+        delete query.$or;
+        query.sourcePage = sourcePage;
+      }
+
       if (status === "needs_attention") {
         query.status = "completed";
         query.$and = [
-          { $or: query.$or },
+          { $or: query.$or || [{ sourcePage: query.sourcePage }] },
           { $or: [
             { dccSyncStatus: "failed" },
             { whatsappReceiptSentAt: { $exists: false } },
