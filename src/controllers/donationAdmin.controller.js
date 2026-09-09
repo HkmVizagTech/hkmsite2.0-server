@@ -116,6 +116,65 @@ const donationAdminController = {
     }
   },
 
+  // GET /donations-admin/report?startDate=&endDate=&sourcePage=
+  // Full report for the /donations family over a custom date range:
+  // per-page split (main /donations vs any sub-page like
+  // donations/janmashtami2), a day-by-day series, and a seva breakdown.
+  // Unlike GET /donations/report (the main site's report), this one is
+  // scoped TO the /donations family rather than excluding it, since that
+  // endpoint's EXCLUDE_DONATIONS_PAGE filter would return nothing for
+  // this domain.
+  getReport: async (req, res) => {
+    try {
+      const { startDate, endDate, sourcePage } = req.query;
+      if (!startDate || !endDate) {
+        return res.status(400).json({ success: false, message: "startDate and endDate are required (YYYY-MM-DD)." });
+      }
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      end.setHours(23, 59, 59, 999);
+
+      const baseMatch = sourcePage
+        ? { sourcePage, status: "completed", createdAt: { $gte: start, $lte: end } }
+        : { ...DONATIONS_PAGE_FILTER, status: "completed", createdAt: { $gte: start, $lte: end } };
+
+      const [summaryAgg, byPageAgg, dailyAgg, sevaAgg] = await Promise.all([
+        donationModel.aggregate([
+          { $match: baseMatch },
+          { $group: { _id: null, total: { $sum: "$amount" }, count: { $sum: 1 } } },
+        ]),
+        donationModel.aggregate([
+          { $match: baseMatch },
+          { $group: { _id: { $ifNull: ["$sourcePage", "unknown"] }, amount: { $sum: "$amount" }, count: { $sum: 1 } } },
+          { $sort: { amount: -1 } },
+        ]),
+        donationModel.aggregate([
+          { $match: baseMatch },
+          { $group: { _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } }, amount: { $sum: "$amount" }, count: { $sum: 1 } } },
+          { $sort: { _id: 1 } },
+        ]),
+        donationModel.aggregate([
+          { $match: baseMatch },
+          { $group: { _id: { $ifNull: ["$sevaName", { $ifNull: ["$type", "General"] }] }, amount: { $sum: "$amount" }, count: { $sum: 1 } } },
+          { $sort: { amount: -1 } },
+          { $limit: 30 },
+        ]),
+      ]);
+
+      res.status(200).json({
+        success: true,
+        range: { start, end },
+        summary: { totalAmount: summaryAgg[0]?.total || 0, count: summaryAgg[0]?.count || 0 },
+        byPage: byPageAgg.map((p) => ({ sourcePage: p._id, amount: p.amount, count: p.count })),
+        daily: dailyAgg.map((d) => ({ date: d._id, amount: d.amount, count: d.count })),
+        sevaBreakdown: sevaAgg.map((s) => ({ name: s._id, amount: s.amount, count: s.count })),
+      });
+    } catch (error) {
+      console.error("donationAdmin.getReport error:", error);
+      res.status(500).json({ success: false, message: "Failed to generate report" });
+    }
+  },
+
   // GET /donations-admin/transactions?page=&limit=&search=&status=&startDate=&endDate=&campaign=&source=&medium=&sourcePage=
   getAllTransactions: async (req, res) => {
     try {

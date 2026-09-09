@@ -9,6 +9,7 @@ const donationAdminRouter = express.Router();
 // and requires an authenticated admin — same protection pattern as the
 // rest of the admin API.
 donationAdminRouter.get("/dashboard-stats", authMiddleware, donationsAdminMiddleware, donationAdminController.getDashboardStats);
+donationAdminRouter.get("/report", authMiddleware, donationsAdminMiddleware, donationAdminController.getReport);
 donationAdminRouter.get("/transactions", authMiddleware, donationsAdminMiddleware, donationAdminController.getAllTransactions);
 donationAdminRouter.get("/transactions/:id", authMiddleware, donationsAdminMiddleware, donationAdminController.getTransactionById);
 donationAdminRouter.get("/utm-stats", authMiddleware, donationsAdminMiddleware, donationAdminController.getUtmStats);
