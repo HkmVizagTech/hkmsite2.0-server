@@ -13,6 +13,8 @@ const { donationRouter } = require("./src/routes/donation.routes");
 const { donationPageRouter } = require("./src/routes/donationPage.routes");
 const { donationAdminRouter } = require("./src/routes/donationAdmin.routes");
 const { festivalDonationRouter } = require("./src/routes/festivalDonation.routes");
+const { festivalShowcaseRouter } = require("./src/routes/festivalShowcase.routes");
+const { ekadashiCampaignRouter } = require("./src/routes/ekadashiCampaign.routes");
 const { paymentRouter } = require("./src/routes/payment.routes");
 const { importantDateRouter } = require("./src/routes/importantDate.routes.js");
 const { blogRouter } = require("./src/routes/blog.routes");
@@ -112,6 +114,8 @@ app.use("/seva-stats", sevaStatsRouter);
 
 app.use("/important-dates", importantDateRouter);
 app.use("/festival-donations", festivalDonationRouter);
+app.use("/festival-showcases", festivalShowcaseRouter);
+app.use("/ekadashi-campaign", ekadashiCampaignRouter);
 app.use("/volunteers", volunteerRouter);
 
 // Gupshup WhatsApp delivery callbacks (receipt sent / delivered / read /
