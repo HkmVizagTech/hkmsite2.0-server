@@ -40,6 +40,8 @@ const eventController = {
         title,
         description,
         date,
+        bannerImage: req.body.bannerImage || undefined,
+        registrationLink: req.body.registrationLink || undefined,
         images: imageUrls,
         category,
         status,

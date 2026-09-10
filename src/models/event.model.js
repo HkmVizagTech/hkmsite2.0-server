@@ -7,6 +7,9 @@ const eventSchema = new mongoose.Schema({
   /* Hero/banner image for the event — a persistent URL (R2 / media library).
      Falls back to images[0] in the UI when not set. */
   bannerImage: { type: String },
+  /* When set, the event links out to this landing page (registrations
+     happen there) instead of using the on-page registration form. */
+  registrationLink: { type: String },
   images: [{ type: String }], // URLs or filenames
   registrationForm: { type: Object },
   category: { type: String, default: "General" },
