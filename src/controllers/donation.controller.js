@@ -832,14 +832,75 @@ const donationController = {
   // admin can review and send manually — separate from Needs Manual
   // Receipt, which is about missing receipt NUMBERS, not missing
   // deliveries of a receipt that already exists.
-  // TEMPORARY - size the donor-backfill scope before building/running it.
-  debugBackfillScope: async (req, res) => {
+  // POST /donations/backfill-donors?limit=200&skip=0&execute=true
+  // Backfills Donor records for historical completed donations that
+  // predate the Donor system (or came through the regular website flow
+  // before it was wired into the completion pipeline). Groups by mobile
+  // number so a repeat donor gets exactly ONE Donor record covering all
+  // their past donations, not one per donation. No preacher involved -
+  // assignedPreacherId stays unset, same as any other website donation.
+  //
+  // Processes unique mobile numbers in batches (not individual
+  // donations) since there are ~4,000 of them - call repeatedly with
+  // increasing skip until totalGroupsThisBatch < limit.
+  backfillDonors: async (req, res) => {
     try {
-      const totalDonations = await donationModel.countDocuments({ status: "completed", donorMobile: { $exists: true, $ne: "" }, donorRecordId: { $exists: false } });
-      const distinctMobiles = await donationModel.distinct("donorMobile", { status: "completed", donorMobile: { $exists: true, $ne: "" }, donorRecordId: { $exists: false } });
-      res.status(200).json({ success: true, donationsNeedingBackfill: totalDonations, uniqueDonors: distinctMobiles.length });
+      const limit = Math.min(300, Math.max(1, parseInt(req.query.limit, 10) || 200));
+      const execute = req.query.execute === "true";
+      // CORRECTNESS: when executing, each processed group gets
+      // donorRecordId set and drops out of the $match filter below - the
+      // matching pool shrinks as we go, exactly like the reconciliation
+      // pagination bug found earlier this session. A fixed/incrementing
+      // skip would then skip over unprocessed donors, not just already-
+      // processed ones. So execute mode always uses skip=0 - the next
+      // batch is always at the top of whatever's left. skip is only
+      // meaningful (and only accepted) in preview mode, for browsing
+      // without changing anything between calls.
+      const skip = execute ? 0 : Math.max(0, parseInt(req.query.skip, 10) || 0);
+
+      const groups = await donationModel.aggregate([
+        { $match: { status: "completed", donorMobile: { $exists: true, $ne: "" }, donorRecordId: { $exists: false } } },
+        { $sort: { createdAt: -1 } },
+        { $group: { _id: "$donorMobile", name: { $first: "$donorName" }, email: { $first: "$donorEmail" }, count: { $sum: 1 } } },
+        { $sort: { _id: 1 } },
+        { $skip: skip },
+        { $limit: limit },
+      ]);
+
+      const { findOrCreateDonor } = require("../services/donor.service");
+      const results = [];
+
+      for (const g of groups) {
+        const entry = { mobile: g._id, name: g.name, email: g.email, donationCount: g.count };
+        if (execute) {
+          try {
+            const donor = await findOrCreateDonor({ mobile: g._id, name: g.name, email: g.email });
+            const updateResult = await donationModel.updateMany(
+              { donorMobile: g._id, status: "completed", donorRecordId: { $exists: false } },
+              { donorRecordId: donor._id, donorId: donor.donorId }
+            );
+            entry.donorId = donor.donorId;
+            entry.donationsLinked = updateResult.modifiedCount;
+            entry.action = "LINKED";
+          } catch (err) {
+            entry.action = "ERROR";
+            entry.error = err.message;
+          }
+        } else {
+          entry.action = "WOULD_LINK";
+        }
+        results.push(entry);
+      }
+
+      res.status(200).json({
+        success: true,
+        mode: execute ? "EXECUTED" : "PREVIEW ONLY — nothing created or linked",
+        groupsInThisBatch: groups.length,
+        results,
+      });
     } catch (err) {
-      res.status(500).json({ success: false, message: err.message });
+      console.error("backfillDonors error:", err);
+      res.status(500).json({ success: false, message: err.message || "Server error" });
     }
   },
 
