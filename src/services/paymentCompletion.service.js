@@ -106,7 +106,7 @@ async function sendDonationWhatsAppReceipt(donation, { force = false } = {}) {
   // Bare number: both approved templates print the currency symbol and "/-"
   // themselves, so "2,500" here becomes "₹2,500/-" in the delivered message.
   const amountText = Number(donation.amount || 0).toLocaleString("en-IN");
-  const donorName = donation.donorName || "Devotee";
+  const donorName = donation.donorName || "Donor";
   const sevaText = donation.sevaName || donation.type || "Seva";
   const filename = `Donation_Receipt_${String(donation.donorName || "Donor").replace(/\s+/g, "_")}.pdf`;
 

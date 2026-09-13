@@ -439,7 +439,7 @@ async function runPendingReminders() {
     try {
       await provider.send(
         donation.donorMobile,
-        donation.donorName || "Devotee",
+        donation.donorName || "Donor",
         donation.amount,
         donation.sevaName || donation.type || "your seva",
         {

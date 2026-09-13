@@ -160,7 +160,7 @@ function buildPendingFields({
     : `Once payment is completed, the amount will be allocated towards ${sevaPlain}`;
 
   return {
-    name: String(donorName || "Devotee").trim() || "Devotee",
+    name: String(donorName || "Donor").trim() || "Donor",
     amount: String(amount),
     seva,
     sevaPlain,

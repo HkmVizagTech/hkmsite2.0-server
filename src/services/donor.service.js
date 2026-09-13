@@ -31,7 +31,7 @@ async function findOrCreateDonor({ mobile, name, email, raisedByPreacherId }) {
   donor = await donorModel.create({
     donorId,
     mobile: cleanMobile,
-    name: name?.trim() || "Devotee",
+    name: name?.trim() || "Donor",
     email: email?.trim() || undefined,
     assignedPreacherId: raisedByPreacherId || undefined,
     firstRaisedByPreacherId: raisedByPreacherId || undefined,
