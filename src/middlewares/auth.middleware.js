@@ -81,4 +81,32 @@ const preacherModuleMiddleware = (moduleName) => async (req, res, next) => {
 	}
 };
 
-module.exports = { authMiddleware, adminMiddleware, donationsAdminMiddleware, blogsAdminMiddleware, preacherModuleMiddleware };
+// Separate from authMiddleware above — donor tokens carry {donorId, type:
+// "donor"} rather than {userId, role}, issued by donorAuth.controller.js's
+// verifyOtp. Checking `type === "donor"` explicitly means a staff token
+// can never be replayed against a donor-only route, and vice versa, even
+// though both are signed with the same JWT secret.
+const donorAuthMiddleware = (req, res, next) => {
+	let token;
+	const authHeader = req.headers.authorization;
+	if (authHeader && authHeader.startsWith("Bearer ")) {
+		token = authHeader.split(" ")[1];
+	} else if (req.cookies && req.cookies.donorToken) {
+		token = req.cookies.donorToken;
+	}
+	if (!token) {
+		return res.status(401).json({ message: "No token provided" });
+	}
+	try {
+		const decoded = jwt.verify(token, getJwtSecret());
+		if (decoded.type !== "donor") {
+			return res.status(401).json({ message: "Invalid session" });
+		}
+		req.donor = decoded;
+		next();
+	} catch (err) {
+		return res.status(401).json({ message: "Invalid or expired session" });
+	}
+};
+
+module.exports = { authMiddleware, adminMiddleware, donationsAdminMiddleware, blogsAdminMiddleware, preacherModuleMiddleware, donorAuthMiddleware };

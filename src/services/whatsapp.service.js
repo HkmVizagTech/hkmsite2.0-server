@@ -341,12 +341,28 @@ async function sendPendingWhatsapp(phone, donorName, amount, sevaName, options =
   return sendTemplateMessage(normalizedPhone, PENDING_TEMPLATE_NAME, components);
 }
 
+// Donor login OTP — sends a plain, button-free template (Flaxxa cannot
+// deliver dynamic button URLs, see fact 2 above; an OTP template with a
+// static "copy code" button would be fine too, but body-only is simplest
+// and avoids that whole class of failure). Template name is configurable
+// via env since it doesn't exist yet — set WAPI_OTP_TEMPLATE_NAME once
+// Meta approves it; nothing else here needs to change.
+const OTP_TEMPLATE_NAME = process.env.WAPI_OTP_TEMPLATE_NAME || "donor_login_otp";
+
+async function sendDonorOtp(phone, otpCode) {
+  const components = [
+    { type: "body", parameters: [{ type: "text", text: String(otpCode) }] },
+  ];
+  return sendTemplateMessage(phone, OTP_TEMPLATE_NAME, components);
+}
+
 module.exports = {
   isWhatsAppConfigured,
   sendTemplateMessage,
   sendTemplateMessageWithAttachment,
   sendTextMessage,
   sendPendingWhatsapp,
+  sendDonorOtp,
   normalizePhone,
   fetchHeaderImageJpeg,
 };

@@ -20,6 +20,14 @@ const donorSchema = new mongoose.Schema(
     // reflects who they're CURRENTLY assigned to; this records who first
     // brought them into the system, for reference).
     firstRaisedByPreacherId: { type: mongoose.Schema.Types.ObjectId, ref: "user" },
+
+    // ---- Donor login (mobile + WhatsApp OTP) ----
+    // The OTP itself is stored hashed (bcrypt, same as user passwords),
+    // never in plaintext, even though it's short-lived.
+    otpCodeHash: { type: String },
+    otpExpiresAt: { type: Date },
+    otpAttempts: { type: Number, default: 0 }, // wrong-code tries against the current OTP; capped to stop brute-forcing a 6-digit code
+    otpLastRequestedAt: { type: Date }, // for rate-limiting how often a new OTP can be requested
   },
   { timestamps: true, versionKey: false }
 );
