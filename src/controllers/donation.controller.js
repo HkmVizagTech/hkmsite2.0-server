@@ -832,6 +832,17 @@ const donationController = {
   // admin can review and send manually — separate from Needs Manual
   // Receipt, which is about missing receipt NUMBERS, not missing
   // deliveries of a receipt that already exists.
+  // TEMPORARY - size the donor-backfill scope before building/running it.
+  debugBackfillScope: async (req, res) => {
+    try {
+      const totalDonations = await donationModel.countDocuments({ status: "completed", donorMobile: { $exists: true, $ne: "" }, donorRecordId: { $exists: false } });
+      const distinctMobiles = await donationModel.distinct("donorMobile", { status: "completed", donorMobile: { $exists: true, $ne: "" }, donorRecordId: { $exists: false } });
+      res.status(200).json({ success: true, donationsNeedingBackfill: totalDonations, uniqueDonors: distinctMobiles.length });
+    } catch (err) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  },
+
   needsWhatsApp: async (req, res) => {
     try {
       const donations = await donationModel
