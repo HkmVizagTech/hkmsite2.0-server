@@ -18,7 +18,7 @@ const userController = {
 
     register: async (req, res) => {
         try {
-            const { name, email, password, role } = req.body;
+            const { name, email, password, role, allowedModules } = req.body;
             if (
                 typeof name !== "string" || typeof email !== "string" || typeof password !== "string" ||
                 !name || !email || !password
@@ -29,20 +29,33 @@ const userController = {
                 return res.status(400).json({ message: "Password must be at least 8 characters" });
             }
             // Only "user" (default/no admin access), "donations_admin" (scoped
-            // to /donations/admin only), or "blogs_admin" (scoped to writing/
-            // editing blog posts, with deletion requiring admin approval) can
+            // to /donations/admin only), "blogs_admin" (scoped to writing/
+            // editing blog posts, with deletion requiring admin approval), or
+            // "preacher" (scoped to whichever modules are granted below) can
             // be granted here — deliberately never "admin", so creating
             // another full admin always stays a separate, more deliberate
             // action rather than a dropdown on this form.
-            const allowedRoles = ["user", "donations_admin", "blogs_admin"];
+            const allowedRoles = ["user", "donations_admin", "blogs_admin", "preacher"];
             const resolvedRole = allowedRoles.includes(role) ? role : "user";
+
+            // Only meaningful when resolvedRole === "preacher". Validate
+            // against the real module list so a typo doesn't silently grant
+            // a module that no check anywhere actually looks for.
+            const VALID_PREACHER_MODULES = ["raise-receipt", "my-donors", "resend", "my-reports", "donor-assignment"];
+            const resolvedModules = resolvedRole === "preacher" && Array.isArray(allowedModules)
+                ? allowedModules.filter((m) => VALID_PREACHER_MODULES.includes(m))
+                : [];
+
             const existing = await userModel.findOne({ email });
             if (existing) {
                 return res.status(409).json({ message: "Email already registered" });
             }
             const hash = await bcrypt.hash(password, 10);
-            const user = await userModel.create({ name, email, password: hash, role: resolvedRole, mustChangePassword: true });
-            res.status(201).json({ message: "User registered successfully", user: { _id: user._id, name: user.name, email: user.email, role: user.role } });
+            const user = await userModel.create({
+                name, email, password: hash, role: resolvedRole, mustChangePassword: true,
+                allowedModules: resolvedModules,
+            });
+            res.status(201).json({ message: "User registered successfully", user: { _id: user._id, name: user.name, email: user.email, role: user.role, allowedModules: user.allowedModules } });
         } catch (err) {
             console.error('user.login error', err);
             res.status(500).json({ message: "Server error" });
@@ -113,7 +126,7 @@ const userController = {
             });
             // Also return the token so clients can use Authorization header if needed
             res.status(200).json({
-                user: { _id: user._id, name: user.name, email: user.email, role: user.role, mustChangePassword: !!user.mustChangePassword },
+                user: { _id: user._id, name: user.name, email: user.email, role: user.role, mustChangePassword: !!user.mustChangePassword, allowedModules: user.allowedModules || [] },
                 token,
             });
         } catch (err) {

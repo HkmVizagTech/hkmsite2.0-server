@@ -65,6 +65,11 @@ const donationSchema = new mongoose.Schema({
   manualPaymentMode: { type: String, enum: ["upi", "bank", "cash", "cheque"], default: undefined },
   manualEntryNote: { type: String, trim: true },
   manualEnteredBy: { type: mongoose.Schema.Types.ObjectId, ref: "user" },
+  // Links this donation to a stable Donor identity record (created/found
+  // by donor.service.js) — powers preacher "My Donors" views and, later,
+  // the donor's own login portal showing their full donation history.
+  donorRecordId: { type: mongoose.Schema.Types.ObjectId, ref: "donor" },
+  donorId: { type: String }, // denormalized copy of the Donor's donorId for fast display/filtering without a lookup
   subscriptionId: { type: String },
   isRecurring: { type: Boolean, default: false },
   lastPaymentDate: { type: Date },
@@ -142,6 +147,8 @@ donationSchema.index({ status: 1 });
 donationSchema.index({ razorpayOrderId: 1 });
 donationSchema.index({ donorMobile: 1 });
 donationSchema.index({ utrNumber: 1 });
+donationSchema.index({ donorRecordId: 1 });
+donationSchema.index({ manualEnteredBy: 1 });
 
 const donationModel = mongoose.model("donation", donationSchema);
 

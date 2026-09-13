@@ -55,4 +55,30 @@ const blogsAdminMiddleware = (req, res, next) => {
 	next();
 };
 
-module.exports = { authMiddleware, adminMiddleware, donationsAdminMiddleware, blogsAdminMiddleware };
+// Scoped access for the preacher dashboard, per-module. Unlike the other
+// scoped middlewares above (which only check req.user.role from the JWT),
+// this does a fresh DB lookup — a preacher's allowedModules can change at
+// any time (admin revokes a module), and that should take effect
+// immediately, not just the next time they log in and get a new token.
+// Full admins always pass, regardless of module.
+const preacherModuleMiddleware = (moduleName) => async (req, res, next) => {
+	if (req.user.role === "admin") return next();
+	if (req.user.role !== "preacher") {
+		return res.status(403).json({ message: "Preacher access required" });
+	}
+	try {
+		const { userModel } = require("../models/user.model");
+		const user = await userModel.findById(req.user.userId).select("status allowedModules role");
+		if (!user || user.role !== "preacher" || user.status !== "active") {
+			return res.status(403).json({ message: "Preacher account not active" });
+		}
+		if (!user.allowedModules || !user.allowedModules.includes(moduleName)) {
+			return res.status(403).json({ message: `You don't have access to this module (${moduleName}). Ask an admin to grant it.` });
+		}
+		next();
+	} catch (err) {
+		res.status(500).json({ message: "Server error checking preacher access" });
+	}
+};
+
+module.exports = { authMiddleware, adminMiddleware, donationsAdminMiddleware, blogsAdminMiddleware, preacherModuleMiddleware };

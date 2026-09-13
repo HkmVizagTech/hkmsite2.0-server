@@ -489,6 +489,27 @@ const donationController = {
         dob: dob || undefined,
       });
 
+      // Link (or create) this donor's stable identity record. If a
+      // preacher raised this receipt, they become the donor's assigned
+      // preacher (only when the donor is brand new — an existing donor
+      // keeps whoever they're currently assigned to, even if a different
+      // preacher happens to raise this particular receipt for them).
+      if (donation.donorMobile) {
+        try {
+          const { findOrCreateDonor } = require("../services/donor.service");
+          const raisedByPreacherId = req.user?.role === "preacher" ? req.user.userId : undefined;
+          const donorRecord = await findOrCreateDonor({
+            mobile: donation.donorMobile,
+            name: donation.donorName,
+            email: donation.donorEmail,
+            raisedByPreacherId,
+          });
+          await donationModel.findByIdAndUpdate(donation._id, { donorRecordId: donorRecord._id, donorId: donorRecord.donorId });
+        } catch (e) {
+          console.error("Donor record linking failed (non-fatal):", e && e.message ? e.message : e);
+        }
+      }
+
       const { markDonationCompleted, sendDonationWhatsAppReceipt } = require("../services/paymentCompletion.service");
       await markDonationCompleted({ donationId: donation._id });
 

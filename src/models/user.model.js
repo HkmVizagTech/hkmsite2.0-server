@@ -6,7 +6,14 @@ const userSchema = new mongoose.Schema({
     name: { type: String, required: true },
     email: { type: String, required: true, unique: true },
     password: { type: String, required: true },
-    role: { type: String, enum: ["user", "donations_admin", "blogs_admin", "admin"], default: "user" },
+    role: { type: String, enum: ["user", "donations_admin", "blogs_admin", "preacher", "admin"], default: "user" },
+    // Only meaningful for role="preacher" — which modules of the preacher
+    // dashboard this specific person has been granted, so access is
+    // configured per-person at creation time rather than being a fixed
+    // set of capabilities baked into the "preacher" role itself.
+    // Valid values: "raise-receipt", "my-donors", "resend", "my-reports",
+    // "donor-assignment".
+    allowedModules: { type: [String], default: [] },
     status: { type: String, enum: ["active", "inactive"], default: "active" },
     // Set true whenever an admin creates an account on someone's behalf
     // (register / register-admin) — they're logging in with a password

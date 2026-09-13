@@ -1,13 +1,13 @@
 const express = require("express");
 const { donationController } = require("../controllers/donation.controller");
-const { authMiddleware, adminMiddleware } = require("../middlewares/auth.middleware");
+const { authMiddleware, adminMiddleware, preacherModuleMiddleware } = require("../middlewares/auth.middleware");
 
 const donationRouter = express.Router();
 
 donationRouter.post("/", donationController.create);
 
 donationRouter.get("/", authMiddleware, adminMiddleware, donationController.list);
-donationRouter.post("/manual", authMiddleware, adminMiddleware, donationController.createManual);
+donationRouter.post("/manual", authMiddleware, preacherModuleMiddleware("raise-receipt"), donationController.createManual);
 donationRouter.get("/stats", authMiddleware, adminMiddleware, donationController.stats);
 donationRouter.get("/audit-pending", authMiddleware, adminMiddleware, donationController.auditPending);
 donationRouter.get("/utm-stats", authMiddleware, adminMiddleware, donationController.getUtmStats);
