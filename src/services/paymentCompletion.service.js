@@ -406,6 +406,31 @@ async function runPostCompletionPipeline(donationId, paymentId) {
   // of after a third-party round trip.
   invalidateDonationCaches(donation);
 
+  // Link (or create) this donor's stable identity record — same donor.
+  // service.js used by manual entry, now wired into the regular payment
+  // pipeline too, so donations coming through the actual website (not
+  // just preacher-raised manual receipts) also get a Donor ID and show
+  // up in preacher search / the future donor login portal. No preacher
+  // is involved in a regular website donation, so assignedPreacherId is
+  // left unset for a brand-new donor here (stays unassigned until a
+  // preacher first raises something for them, or an admin assigns one).
+  if (donation.donorMobile && !donation.donorRecordId) {
+    try {
+      const { findOrCreateDonor } = require("./donor.service");
+      const donorRecord = await findOrCreateDonor({
+        mobile: donation.donorMobile,
+        name: donation.donorName,
+        email: donation.donorEmail,
+      });
+      await donationModel.findByIdAndUpdate(donation._id, { donorRecordId: donorRecord._id, donorId: donorRecord.donorId });
+      // The WhatsApp/receipt step below re-fetches this donation fresh
+      // from the DB, so this write is what makes it see the donorId —
+      // not worth also mutating the in-memory `donation` object here.
+    } catch (err) {
+      console.error("Donor record linking failed (non-fatal):", String(donationId), err && err.message ? err.message : err);
+    }
+  }
+
   // DCC sync MUST complete (success or failure) before WhatsApp is
   // attempted — WhatsApp needs the receipt number DCC generates to build
   // the PDF at all. This whole pipeline already runs detached from the
