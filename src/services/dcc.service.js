@@ -58,11 +58,63 @@ const DCC_SEVA_MAPPINGS = parseJsonEnv("DCC_SEVA_MAPPINGS", []);
 // the real DCC configuration and override via DCC_SEVA_MAPPINGS if they
 // differ, no code deploy needed to fix.
 const DEFAULT_NAME_BASED_SEVA_MAPPINGS = [
-  // ---- Janmashtami festival sevas (FIRST — must match before generic) ----
+  // ---- Sri Radhashtami festival sevas (FIRST — must match before
+  // Janmashtami/generic, since several seva names overlap) ----
+  // Real DCC codes from the temple's SevaCodes sheet (uploaded 2026-09-13).
+  // Cultural Program (3) → Sri Radhastami (12). Only the 4 sevas actually
+  // live on /radhashtami are mapped — Mandapa Seva, Special Cake Offering
+  // Seva, and Yajamana Seva have real DCC codes too (38, 103, 40) but
+  // aren't offered as donation options on the page yet, so left out here
+  // by explicit choice until they're added.
+  //
+  // NAIVEDYA GAP: /radhashtami's 5th seva ("Naivedya Seva") has NO DCC
+  // code in the provided sheet at all - not mapped here. Until a real
+  // code is provided, it falls through to the Janmashtami "naivedhya"
+  // entry below (sevaSubCategoryCode 74) via that entry's own
+  // festivalSlug scoping - WRONG for a Radhashtami donation, but at
+  // least no longer silently cross-matching an unrelated festival's
+  // code by accident like the others were.
+  {
+    sevaNameIncludes: ["annadana", "anna daan", "anna-daan", "annadaan"],
+    festivalSlug: "radhashtami",
+    sevaCategory: 3,
+    sevaSubCategory: 12,
+    sevaSubCategoryCode: 37,
+  },
+  {
+    sevaNameIncludes: ["gau seva", "go seva", "cow", "goshala"],
+    festivalSlug: "radhashtami",
+    sevaCategory: 3,
+    sevaSubCategory: 12,
+    sevaSubCategoryCode: 137,
+  },
+  {
+    sevaNameIncludes: ["pushpalankara", "pushpa alankara", "pushpanjali"],
+    festivalSlug: "radhashtami",
+    sevaCategory: 3,
+    sevaSubCategory: 12,
+    sevaSubCategoryCode: 39,
+  },
+  {
+    sevaNameIncludes: ["abhishekam", "abhisheka", "abhishek"],
+    festivalSlug: "radhashtami",
+    sevaCategory: 3,
+    sevaSubCategory: 12,
+    sevaSubCategoryCode: 50,
+  },
+
+  // ---- Janmashtami festival sevas (must match before generic) ----
   // Real DCC codes from SevaList2026.pdf. All SKJ sevas use
   // Cultural Program (3) → Sri Krishna Janmashtami (10).
-  // Annadana/Gau Seva have festivalSlug filter so Janmashtami donations
-  // get SKJ codes instead of the generic ANGE/GOSE below.
+  // EVERY entry below now has festivalSlug:"janmashtami" explicitly -
+  // most of them (all but annadana/gau seva) were missing this scoping
+  // until now, meaning they were silently matching ANY donation with a
+  // similarly-named seva regardless of which festival it came from
+  // (found while adding Radhashtami mappings above: Radhashtami's
+  // Abhishekam/Pushpalankara sevas share enough of the same substring
+  // text that they were very likely already getting Janmashtami's DCC
+  // codes instead of a correct one - worth checking already-processed
+  // Radhashtami donations against DCC for this).
   {
     sevaNameIncludes: ["annadana", "anna daan", "anna-daan", "annadaan"],
     festivalSlug: "janmashtami",
@@ -79,42 +131,49 @@ const DEFAULT_NAME_BASED_SEVA_MAPPINGS = [
   },
   {
     sevaNameIncludes: ["makhan mishri", "makhan-mishri"],
+    festivalSlug: "janmashtami",
     sevaCategory: 3,
     sevaSubCategory: 10,
     sevaSubCategoryCode: 93,
   },
   {
     sevaNameIncludes: ["abhisheka", "abhishek"],
+    festivalSlug: "janmashtami",
     sevaCategory: 3,
     sevaSubCategory: 10,
     sevaSubCategoryCode: 31,
   },
   {
     sevaNameIncludes: ["tulasi archana", "tulasi-archana", "tulsi archana"],
+    festivalSlug: "janmashtami",
     sevaCategory: 3,
     sevaSubCategory: 10,
     sevaSubCategoryCode: 72,
   },
   {
     sevaNameIncludes: ["pushpalankara", "pushpa alankara", "pushpanjali"],
+    festivalSlug: "janmashtami",
     sevaCategory: 3,
     sevaSubCategory: 10,
     sevaSubCategoryCode: 29,
   },
   {
     sevaNameIncludes: ["naivedhya", "naivedya"],
+    festivalSlug: "janmashtami",
     sevaCategory: 3,
     sevaSubCategory: 10,
     sevaSubCategoryCode: 74,
   },
   {
     sevaNameIncludes: ["vastrabharana", "vastra abharana", "vastra-abharana"],
+    festivalSlug: "janmashtami",
     sevaCategory: 3,
     sevaSubCategory: 10,
     sevaSubCategoryCode: 75,
   },
   {
     sevaNameIncludes: ["mandapa", "mandap"],
+    festivalSlug: "janmashtami",
     sevaCategory: 3,
     sevaSubCategory: 10,
     sevaSubCategoryCode: 28,
@@ -122,6 +181,7 @@ const DEFAULT_NAME_BASED_SEVA_MAPPINGS = [
   {
     // Chappan Bhog → uses Naivedya code (no separate DCC entry)
     sevaNameIncludes: ["chappan bhog", "chappan-bhog", "56 bhog"],
+    festivalSlug: "janmashtami",
     sevaCategory: 3,
     sevaSubCategory: 10,
     sevaSubCategoryCode: 74,
@@ -129,6 +189,7 @@ const DEFAULT_NAME_BASED_SEVA_MAPPINGS = [
   {
     // Japa Yagna → uses Annadana code (no separate DCC entry)
     sevaNameIncludes: ["japa yagna", "japa-yagna", "japa yagya"],
+    festivalSlug: "janmashtami",
     sevaCategory: 3,
     sevaSubCategory: 10,
     sevaSubCategoryCode: 27,
