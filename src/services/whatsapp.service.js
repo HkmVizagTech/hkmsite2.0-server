@@ -341,19 +341,35 @@ async function sendPendingWhatsapp(phone, donorName, amount, sevaName, options =
   return sendTemplateMessage(normalizedPhone, PENDING_TEMPLATE_NAME, components);
 }
 
-// Donor login OTP — sends a plain, button-free template (Flaxxa cannot
-// deliver dynamic button URLs, see fact 2 above; an OTP template with a
-// static "copy code" button would be fine too, but body-only is simplest
-// and avoids that whole class of failure). Template name is configurable
-// via env since it doesn't exist yet — set WAPI_OTP_TEMPLATE_NAME once
-// Meta approves it; nothing else here needs to change.
-const OTP_TEMPLATE_NAME = process.env.WAPI_OTP_TEMPLATE_NAME || "donor_login_otp";
+// Common utility template — deliberately generic rather than a narrow
+// OTP-only Authentication-category template. Utility category is more
+// flexible (Meta allows real message text, not just a bare code + their
+// own boilerplate) and this ONE approved template can be reused for any
+// future one-off transactional message (OTP today, other account
+// notifications later) without needing a separate template submitted
+// and approved for each new use case.
+//
+// The template's body should be just "{{1}}" — a single free-text
+// variable — so the CALLER supplies the complete message, and this
+// function stays a thin, generic sender rather than being OTP-specific.
+// No buttons on this template — Flaxxa cannot deliver a dynamic button
+// URL (see fact 2 at the top of this file); a body-only template sidesteps
+// that whole class of failure entirely.
+// Template name is configurable via env since it doesn't exist yet — set
+// WAPI_UTILITY_TEMPLATE_NAME once Meta approves it; nothing else here
+// needs to change.
+const UTILITY_TEMPLATE_NAME = process.env.WAPI_UTILITY_TEMPLATE_NAME || "hkm_utility_notification";
+
+async function sendUtilityMessage(phone, messageText) {
+  const components = [
+    { type: "body", parameters: [{ type: "text", text: String(messageText) }] },
+  ];
+  return sendTemplateMessage(phone, UTILITY_TEMPLATE_NAME, components);
+}
 
 async function sendDonorOtp(phone, otpCode) {
-  const components = [
-    { type: "body", parameters: [{ type: "text", text: String(otpCode) }] },
-  ];
-  return sendTemplateMessage(phone, OTP_TEMPLATE_NAME, components);
+  const message = `${otpCode} is your OTP to log in to your Hare Krishna Movement Vizag donor account. Valid for 10 minutes. Do not share this code with anyone.`;
+  return sendUtilityMessage(phone, message);
 }
 
 module.exports = {
@@ -363,6 +379,7 @@ module.exports = {
   sendTextMessage,
   sendPendingWhatsapp,
   sendDonorOtp,
+  sendUtilityMessage,
   normalizePhone,
   fetchHeaderImageJpeg,
 };
