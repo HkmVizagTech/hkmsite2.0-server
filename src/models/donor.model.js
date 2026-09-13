@@ -11,7 +11,7 @@ const donorSchema = new mongoose.Schema(
     // Generated once, on first creation, never changes.
     donorId: { type: String, required: true, unique: true },
     mobile: { type: String, required: true, unique: true, index: true },
-    name: { type: String, required: true },
+    name: { type: String, required: true, index: true },
     email: { type: String },
     assignedPreacherId: { type: mongoose.Schema.Types.ObjectId, ref: "user" },
     // Set when a preacher raises a receipt for a brand-new donor —

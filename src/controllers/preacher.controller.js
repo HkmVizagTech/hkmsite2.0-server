@@ -2,6 +2,37 @@ const { donorModel } = require("../models/donor.model");
 const { donationModel } = require("../models/donation.model");
 
 const preacherController = {
+  // GET /preacher/search-donor?q=<mobile, name, or donor ID>
+  // Searches ALL donors sitewide (not scoped to just this preacher's own
+  // assigned donors) - a donor may have first been raised by a different
+  // preacher, or come in through the website directly, and any preacher
+  // with the raise-receipt module should still be able to find them and
+  // record a new donation without accidentally creating a duplicate
+  // Donor record. This does NOT reassign the donor - assignedPreacherId
+  // only changes on a donor's very first donation ever.
+  searchDonor: async (req, res) => {
+    try {
+      const q = String(req.query.q || "").trim();
+      if (q.length < 3) return res.status(200).json({ success: true, donors: [] });
+
+      const digitsOnly = q.replace(/\D/g, "");
+      const conditions = [
+        { name: { $regex: q, $options: "i" } },
+        { donorId: { $regex: q, $options: "i" } },
+      ];
+      if (digitsOnly.length >= 3) conditions.push({ mobile: { $regex: digitsOnly } });
+
+      const donors = await donorModel.find({ $or: conditions }).limit(10).lean();
+      res.status(200).json({
+        success: true,
+        donors: donors.map((d) => ({ _id: d._id, donorId: d.donorId, name: d.name, mobile: d.mobile, email: d.email })),
+      });
+    } catch (err) {
+      console.error("preacher.searchDonor error:", err);
+      res.status(500).json({ success: false, message: err.message || "Server error" });
+    }
+  },
+
   // GET /preacher/my-donors — donors currently assigned to this preacher,
   // with a rollup of their total giving and donation count.
   myDonors: async (req, res) => {

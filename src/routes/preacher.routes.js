@@ -8,6 +8,7 @@ const preacherRouter = express.Router();
 // grant — a preacher only reaches what an admin has explicitly given
 // them access to. Full admins can always reach everything too (enforced
 // inside preacherModuleMiddleware itself).
+preacherRouter.get("/search-donor", authMiddleware, preacherModuleMiddleware("raise-receipt"), preacherController.searchDonor);
 preacherRouter.get("/my-donors", authMiddleware, preacherModuleMiddleware("my-donors"), preacherController.myDonors);
 preacherRouter.get("/my-donors/:donorRecordId/donations", authMiddleware, preacherModuleMiddleware("my-donors"), preacherController.donorDonations);
 preacherRouter.get("/my-reports", authMiddleware, preacherModuleMiddleware("my-reports"), preacherController.myReports);
