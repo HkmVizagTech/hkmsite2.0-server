@@ -152,6 +152,7 @@ async function generateReceiptBuffer(donationId) {
     amount: `${Number(donation.amount).toLocaleString("en-IN")}/-`,
     transactionNumber: donation.razorpayPaymentId || donation.transactionId || "---",
     sevakName: donation.sevakName || "---",
+    donorId: donation.donorId || "---",
   };
 
   // ALL values decide whether the Unicode font is needed — not a hand-picked

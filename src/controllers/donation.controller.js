@@ -832,6 +832,19 @@ const donationController = {
   // admin can review and send manually — separate from Needs Manual
   // Receipt, which is about missing receipt NUMBERS, not missing
   // deliveries of a receipt that already exists.
+  // TEMPORARY - download a donation's receipt PDF directly, to visually
+  // verify the new donorId field renders correctly on a real record.
+  debugReceiptPdf: async (req, res) => {
+    try {
+      const { generateReceiptBuffer } = require("../services/receipt.service");
+      const pdfBytes = await generateReceiptBuffer(req.params.id);
+      res.setHeader("Content-Type", "application/pdf");
+      res.send(Buffer.from(pdfBytes));
+    } catch (err) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  },
+
   needsWhatsApp: async (req, res) => {
     try {
       const donations = await donationModel
