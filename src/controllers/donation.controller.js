@@ -904,6 +904,24 @@ const donationController = {
     }
   },
 
+  // TEMPORARY - issue a donor JWT directly, for testing the donor portal
+  // end-to-end while the real OTP template is still pending Meta
+  // approval. Admin-gated so this can't be used to impersonate a donor
+  // in production once removed... but remove it anyway once verified.
+  debugDonorToken: async (req, res) => {
+    try {
+      const jwt = require("jsonwebtoken");
+      const { getJwtSecret } = require("../utils/utils");
+      const { donorModel } = require("../models/donor.model");
+      const donor = await donorModel.findOne({ mobile: req.query.mobile });
+      if (!donor) return res.status(404).json({ success: false, message: "No donor with that mobile." });
+      const token = jwt.sign({ donorId: donor._id, type: "donor" }, getJwtSecret(), { expiresIn: "1h" });
+      res.status(200).json({ success: true, token, donorId: donor.donorId, name: donor.name });
+    } catch (err) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  },
+
   needsWhatsApp: async (req, res) => {
     try {
       const donations = await donationModel
