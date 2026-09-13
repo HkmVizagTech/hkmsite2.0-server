@@ -904,6 +904,20 @@ const donationController = {
     }
   },
 
+  // TEMPORARY - check for pre-existing Radhashtami donations that may
+  // have been wrongly DCC-coded before the festivalSlug scoping fix.
+  debugRadhCheck: async (req, res) => {
+    try {
+      const donations = await donationModel
+        .find({ sourcePage: "radhashtami" })
+        .select("donorName sevaName amount status dccSyncStatus createdAt dccPayload")
+        .lean();
+      res.status(200).json({ success: true, count: donations.length, donations });
+    } catch (err) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  },
+
   needsWhatsApp: async (req, res) => {
     try {
       const donations = await donationModel
