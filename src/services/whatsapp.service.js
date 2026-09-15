@@ -82,15 +82,17 @@ function assertDelivered(payload, context) {
   if (wamid) return payload;
 
   const status = payload && payload.status;
+  const rawBody = JSON.stringify(payload);
   const detail =
-    (payload && (payload.error || payload.message)) ||
+    (payload && (payload.error || payload.message || payload.errors)) ||
     "Meta rejected the send (message_wamid was null)";
 
   const err = new Error(
     `WhatsApp send failed for ${context}: ${detail}` +
       (status ? ` [flaxxa status: ${status}]` : "") +
       ". Common causes: the template has a dynamic {{1}} URL button (unsupported by Flaxxa)," +
-      " a required header parameter was not supplied, or the template/language pair is wrong."
+      " a required header parameter was not supplied, or the template/language pair is wrong." +
+      ` RAW: ${rawBody}`
   );
   err.response = payload;
   throw err;
