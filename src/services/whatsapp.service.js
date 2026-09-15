@@ -372,7 +372,7 @@ async function sendDonorOtp(phone, otpCode) {
   const components = [
     { type: "body", parameters: [{ type: "text", text: String(otpCode) }] },
   ];
-  return sendTemplateMessage(phone, OTP_TEMPLATE_NAME, components);
+  return sendTemplateMessage(phone, OTP_TEMPLATE_NAME, components, "en_US");
 }
 
 module.exports = {

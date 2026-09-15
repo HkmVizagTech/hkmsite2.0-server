@@ -32,6 +32,7 @@ const { mediaRouter } = require("./src/routes/media.routes");
 const { volunteerRouter } = require("./src/routes/volunteer.routes");
 const { whatsappWebhookRouter } = require("./src/routes/whatsappWebhook.routes");
 const app = express();
+app.set('trust proxy', 1);
 
 const allowedOrigins = new Set([
   process.env.FRONTEND_URL,
