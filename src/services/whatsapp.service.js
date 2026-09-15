@@ -368,8 +368,11 @@ async function sendUtilityMessage(phone, messageText) {
 }
 
 async function sendDonorOtp(phone, otpCode) {
-  const message = `${otpCode} is your OTP to log in to your Hare Krishna Movement Vizag donor account. Valid for 10 minutes. Do not share this code with anyone.`;
-  return sendUtilityMessage(phone, message);
+  const OTP_TEMPLATE_NAME = process.env.WAPI_OTP_TEMPLATE_NAME || "otp";
+  const components = [
+    { type: "body", parameters: [{ type: "text", text: String(otpCode) }] },
+  ];
+  return sendTemplateMessage(phone, OTP_TEMPLATE_NAME, components);
 }
 
 module.exports = {
