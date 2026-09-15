@@ -41,11 +41,12 @@ async function issueOtpForDonor(donor, res) {
   const otpCode = String(Math.floor(100000 + Math.random() * 900000)); // 6 digits
   const otpCodeHash = hashOtp(otpCode);
 
-  // TEMPORARY timing instrumentation - measuring exactly where the
-  // reported multi-second delay goes.
-  const t0 = Date.now();
+  // Confirmed live (2026-09-15): the WhatsApp template send below takes
+  // ~2.3s on its own — 97% of this whole function's time — versus ~70ms
+  // for the DB write after it. That's Flaxxa/Meta's own API processing
+  // and queueing the message; nothing in our code adds meaningful
+  // latency here. Not something we can speed up from this side.
   await sendDonorOtp(donor.mobile, otpCode);
-  const t1 = Date.now();
 
   // Only persist the OTP after a confirmed send — a failed/rejected send
   // (see whatsapp.service.js's assertDelivered) throws before reaching here,
@@ -56,13 +57,8 @@ async function issueOtpForDonor(donor, res) {
     otpAttempts: 0,
     otpLastRequestedAt: new Date(),
   });
-  const t2 = Date.now();
 
-  return res.status(200).json({
-    success: true,
-    message: "OTP sent via WhatsApp.",
-    _debugTiming: { whatsappCallMs: t1 - t0, dbWriteMs: t2 - t1 },
-  });
+  return res.status(200).json({ success: true, message: "OTP sent via WhatsApp." });
 }
 
 const donorAuthController = {
