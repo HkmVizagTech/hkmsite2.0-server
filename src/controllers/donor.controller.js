@@ -20,7 +20,11 @@ const donorController = {
       res.status(200).json({
         success: true,
         donor: {
-          donorId: donor.donorId,
+          // DCC's own DonorNumber (e.g. "D49822") is the real, authoritative
+          // ID once it exists - our self-generated donorId is only a
+          // fallback for a donor whose first donation hasn't synced to DCC
+          // yet (a pending payment, or a manual entry not yet synced).
+          donorId: donor.dccDonorNumber || donor.donorId,
           name: donor.name,
           mobile: donor.mobile,
           email: donor.email,

@@ -525,6 +525,22 @@ async function syncDonationToDcc(donationOrId, gatewayPaymentId) {
         : {}),
     });
 
+    // DCC's own response is the AUTHORITATIVE donor identifier — DonorNumber
+    // (e.g. "D49822") is DCC's real, official ID for this donor in their
+    // CRM, completely separate from the sequential HKM-YYYY-NNNNN ID we
+    // generate ourselves as a fallback before DCC has ever seen this donor.
+    // Once we have DCC's real number, it should be preferred everywhere a
+    // donor's ID is shown (dashboard, receipts, admin/preacher search).
+    const dccDonorNumber = dccResponse?.DonorNumber || null;
+    if (dccDonorNumber && lock.donorRecordId) {
+      try {
+        const { donorModel } = require("../models/donor.model");
+        await donorModel.findByIdAndUpdate(lock.donorRecordId, { dccDonorNumber });
+      } catch (e) {
+        console.error("Could not save dccDonorNumber to Donor record (non-fatal):", lock.donorRecordId, e.message);
+      }
+    }
+
     return { ok: true, dccResponse, receiptNumber };
   } catch (error) {
     await donationModel.findByIdAndUpdate(lock._id, {

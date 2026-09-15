@@ -8,8 +8,20 @@ const mongoose = require("mongoose");
 const donorSchema = new mongoose.Schema(
   {
     // Human-friendly ID shown to the donor and staff, e.g. "HKM-2026-00001".
-    // Generated once, on first creation, never changes.
+    // Generated once, on first creation, never changes. Acts as a fallback
+    // identifier only until DCC has synced at least one donation for this
+    // donor — see dccDonorNumber below, which is the REAL, authoritative
+    // one once it exists.
     donorId: { type: String, required: true, unique: true },
+    // DCC's own official donor number (e.g. "D49822"), returned as
+    // DonorNumber in their addDonation API response. This is DCC's real
+    // CRM identifier for this donor — should be preferred everywhere a
+    // donor's ID is shown once it's known. Not set until their first
+    // donation successfully syncs to DCC (a donor who's only ever had a
+    // pending/failed payment, or whose only donation is a manual entry
+    // that hasn't synced yet, won't have this - donorId above covers
+    // that gap).
+    dccDonorNumber: { type: String, index: true, sparse: true },
     mobile: { type: String, required: true, unique: true, index: true },
     name: { type: String, required: true, index: true },
     email: { type: String },
