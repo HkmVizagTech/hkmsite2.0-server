@@ -22,8 +22,24 @@ async function processJob(job) {
           } else {
             console.log('Worker: Donation already processed for order', orderId);
           }
-        } else {
-          console.warn('Worker: Donation not found for order:', orderId);
+          break;
+        }
+        // Not a donation — the temple shop shares this Razorpay account and
+        // therefore this webhook. Mirrors the inline fallback in
+        // payment.controller.js so the queued and inline paths never drift.
+        {
+          const { confirmShopOrderPaid, sendOrderWhatsApp } = require('../src/controllers/shopOrder.controller');
+          const shopResult = await confirmShopOrderPaid({ razorpayOrderId: orderId, paymentId: payment.id });
+          if (shopResult.ok && shopResult.order) {
+            if (shopResult.skipped) {
+              console.log('Worker: Shop order already confirmed for order', orderId);
+            } else {
+              console.log('Worker: Shop order marked paid:', shopResult.order.orderNumber);
+              setImmediate(() => sendOrderWhatsApp(shopResult.order));
+            }
+          } else {
+            console.warn('Worker: No donation or shop order found for order:', orderId);
+          }
         }
         break;
       }
@@ -32,6 +48,22 @@ async function processJob(job) {
         if (!payment) break;
         const orderId = payment.order_id;
         if (!orderId) break;
+
+        // Shop orders share this webhook — an unpaid shop order never
+        // decremented stock, so failing it needs no inventory restore.
+        {
+          const { shopOrderModel } = require('../src/models/shopOrder.model');
+          const shopOrder = await shopOrderModel.findOne({ razorpayOrderId: orderId });
+          if (shopOrder) {
+            if (shopOrder.paymentStatus === 'pending') {
+              shopOrder.paymentStatus = 'failed';
+              shopOrder.statusHistory.push({ status: 'payment_failed', note: 'Razorpay reported payment.failed', at: new Date() });
+              await shopOrder.save();
+              console.log('Worker: Shop order marked failed:', shopOrder.orderNumber);
+            }
+            break;
+          }
+        }
 
         const donation = await donationModel.findOne({ razorpayOrderId: orderId });
         if (!donation) {

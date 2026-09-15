@@ -13,7 +13,6 @@ const { donationRouter } = require("./src/routes/donation.routes");
 const { preacherRouter } = require("./src/routes/preacher.routes");
 const { donorAuthRouter } = require("./src/routes/donorAuth.routes");
 const { donorRouter } = require("./src/routes/donor.routes");
-const { donorIssueAdminRouter } = require("./src/routes/donorIssueAdmin.routes");
 const { donationPageRouter } = require("./src/routes/donationPage.routes");
 const { donationAdminRouter } = require("./src/routes/donationAdmin.routes");
 const { festivalDonationRouter } = require("./src/routes/festivalDonation.routes");
@@ -32,6 +31,8 @@ const { campaignerRouter } = require("./src/routes/campaigner.routes");
 const { mediaRouter } = require("./src/routes/media.routes");
 const { volunteerRouter } = require("./src/routes/volunteer.routes");
 const { whatsappWebhookRouter } = require("./src/routes/whatsappWebhook.routes");
+const { shopRouter } = require("./src/routes/shop.routes");
+const { shopAdminRouter } = require("./src/routes/shopAdmin.routes");
 const app = express();
 app.set('trust proxy', 1);
 
@@ -107,7 +108,10 @@ app.use("/donations", donationRouter);
 app.use("/preacher", preacherRouter);
 app.use("/donor-auth", donorAuthRouter);
 app.use("/donor", donorRouter);
-app.use("/admin/donor-issues", donorIssueAdminRouter);
+// Temple shop: /shop is the public storefront + customer order history,
+// /shop-admin is staff-only product, stock and order management.
+app.use("/shop", shopRouter);
+app.use("/shop-admin", shopAdminRouter);
 app.use("/donation-page", donationPageRouter);
 app.use("/donations-admin", donationAdminRouter);
 app.use("/blogs", blogRouter);

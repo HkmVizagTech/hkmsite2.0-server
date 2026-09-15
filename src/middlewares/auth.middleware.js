@@ -55,6 +55,18 @@ const blogsAdminMiddleware = (req, res, next) => {
 	next();
 };
 
+// Scoped access for the temple shop admin — a shop_admin account can manage
+// products, stock, categories, orders and shop settings, and nothing else.
+// Deliberately cannot reach donations: the shop takes money on the same
+// Razorpay account, but shop sales are NOT donations and a shop manager has
+// no business in the 80G receipt trail.
+const shopAdminMiddleware = (req, res, next) => {
+	if (req.user.role !== "admin" && req.user.role !== "shop_admin") {
+		return res.status(403).json({ message: "Shop admin access required" });
+	}
+	next();
+};
+
 // Scoped access for the preacher dashboard, per-module. Unlike the other
 // scoped middlewares above (which only check req.user.role from the JWT),
 // this does a fresh DB lookup — a preacher's allowedModules can change at
@@ -109,4 +121,4 @@ const donorAuthMiddleware = (req, res, next) => {
 	}
 };
 
-module.exports = { authMiddleware, adminMiddleware, donationsAdminMiddleware, blogsAdminMiddleware, preacherModuleMiddleware, donorAuthMiddleware };
+module.exports = { authMiddleware, adminMiddleware, donationsAdminMiddleware, blogsAdminMiddleware, shopAdminMiddleware, preacherModuleMiddleware, donorAuthMiddleware };

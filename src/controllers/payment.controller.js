@@ -80,8 +80,28 @@ async function processWebhookEventInline(event) {
       const completedDonation = await completeDonation({ orderId, paymentId: payment.id });
       if (completedDonation) {
         console.log('Donation marked completed for order', orderId);
-      } else {
-        console.warn('Donation not found for order:', orderId);
+        break;
+      }
+      // Not a donation — the temple SHOP sells through this same Razorpay
+      // account, so its payments arrive at this same webhook URL. Without
+      // this fallback a shop payment would only be logged as "donation not
+      // found", and the order would sit unpaid forever whenever the devotee
+      // closed the tab before the browser's verify call ran (routine with
+      // UPI app switches). confirmShopOrderPaid is idempotent, so this is
+      // safe even when verify already confirmed the very same payment.
+      {
+        const { confirmShopOrderPaid, sendOrderWhatsApp } = require('./shopOrder.controller');
+        const shopResult = await confirmShopOrderPaid({ razorpayOrderId: orderId, paymentId: payment.id });
+        if (shopResult.ok && shopResult.order) {
+          if (shopResult.skipped) {
+            console.log('Shop order already confirmed for order', orderId);
+          } else {
+            console.log('Shop order marked paid:', shopResult.order.orderNumber);
+            setImmediate(() => sendOrderWhatsApp(shopResult.order));
+          }
+        } else {
+          console.warn('No donation or shop order found for order:', orderId);
+        }
       }
       break;
     }
@@ -90,6 +110,22 @@ async function processWebhookEventInline(event) {
       if (!payment) break;
       const orderId = payment.order_id;
       if (!orderId) break;
+      // Shop orders share this webhook too — a failed attempt just marks the
+      // order failed so it stops showing as "awaiting payment". Stock was
+      // never decremented for an unpaid order, so nothing needs restoring.
+      {
+        const { shopOrderModel } = require('../models/shopOrder.model');
+        const shopOrder = await shopOrderModel.findOne({ razorpayOrderId: orderId });
+        if (shopOrder) {
+          if (shopOrder.paymentStatus === 'pending') {
+            shopOrder.paymentStatus = 'failed';
+            shopOrder.statusHistory.push({ status: 'payment_failed', note: 'Razorpay reported payment.failed', at: new Date() });
+            await shopOrder.save();
+            console.log('Shop order marked failed:', shopOrder.orderNumber);
+          }
+          break;
+        }
+      }
       // Only mark as failed if there's no captured payment on this order
       // (Razorpay can send payment.failed for one attempt while a retry
       // succeeds — we don't want to overwrite a completed donation).

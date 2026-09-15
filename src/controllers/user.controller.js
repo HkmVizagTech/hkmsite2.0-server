@@ -30,12 +30,14 @@ const userController = {
             }
             // Only "user" (default/no admin access), "donations_admin" (scoped
             // to /donations/admin only), "blogs_admin" (scoped to writing/
-            // editing blog posts, with deletion requiring admin approval), or
-            // "preacher" (scoped to whichever modules are granted below) can
-            // be granted here — deliberately never "admin", so creating
-            // another full admin always stays a separate, more deliberate
-            // action rather than a dropdown on this form.
-            const allowedRoles = ["user", "donations_admin", "blogs_admin", "preacher"];
+            // editing blog posts, with deletion requiring admin approval),
+            // "shop_admin" (scoped to /admin/shop — products, stock and
+            // orders, with no access to donations), or "preacher" (scoped to
+            // whichever modules are granted below) can be granted here —
+            // deliberately never "admin", so creating another full admin
+            // always stays a separate, more deliberate action rather than a
+            // dropdown on this form.
+            const allowedRoles = ["user", "donations_admin", "blogs_admin", "shop_admin", "preacher"];
             const resolvedRole = allowedRoles.includes(role) ? role : "user";
 
             // Only meaningful when resolvedRole === "preacher". Validate

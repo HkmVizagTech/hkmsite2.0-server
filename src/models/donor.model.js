@@ -46,6 +46,11 @@ const donorSchema = new mongoose.Schema(
       },
       default: undefined,
     },
+    // How this person first entered the system. Shop customers get a Donor
+    // record too (one person, one login, one saved address — whether they
+    // donate, buy a book, or both), but they have NOT donated, and donor
+    // reports//counts must be able to tell the two apart.
+    createdVia: { type: String, enum: ["donation", "shop"], default: "donation", index: true },
     assignedPreacherId: { type: mongoose.Schema.Types.ObjectId, ref: "user" },
     // Set when a preacher raises a receipt for a brand-new donor —
     // distinguishes "assigned because this preacher brought them in" from
