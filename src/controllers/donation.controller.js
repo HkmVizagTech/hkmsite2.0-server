@@ -904,6 +904,18 @@ const donationController = {
     }
   },
 
+  // TEMPORARY - investigate reported Donor ID / receipt number confusion
+  debugDonorRecord: async (req, res) => {
+    try {
+      const { donorModel } = require("../models/donor.model");
+      const donor = await donorModel.findOne({ mobile: req.query.mobile }).lean();
+      const donations = await donationModel.find({ donorMobile: req.query.mobile }).select("donorName receiptNumber donorId donorRecordId amount createdAt status manualEntry sourcePage").lean();
+      res.status(200).json({ success: true, donor, donations });
+    } catch (err) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  },
+
   needsWhatsApp: async (req, res) => {
     try {
       const donations = await donationModel
