@@ -904,6 +904,60 @@ const donationController = {
     }
   },
 
+  // POST /donations/backfill-dcc-donor-numbers?limit=200&execute=true
+  // Backfills the real DCC DonorNumber onto existing Donor records that
+  // predate this fix. For each Donor missing dccDonorNumber, checks their
+  // linked donations for any already-synced dccResponse.DonorNumber and
+  // copies it over. Same skip=0-when-executing correctness rule as the
+  // other backfills in this file (a fixed/incrementing skip would skip
+  // over unprocessed donors once earlier ones drop out of the filter).
+  backfillDccDonorNumbers: async (req, res) => {
+    try {
+      const limit = Math.min(300, Math.max(1, parseInt(req.query.limit, 10) || 200));
+      const execute = req.query.execute === "true";
+
+      const { donorModel } = require("../models/donor.model");
+      const donors = await donorModel
+        .find({ dccDonorNumber: { $exists: false } })
+        .sort({ _id: 1 })
+        .limit(limit)
+        .lean();
+
+      const results = [];
+      for (const donor of donors) {
+        const donation = await donationModel
+          .findOne({ donorRecordId: donor._id, "dccResponse.DonorNumber": { $exists: true, $ne: null } })
+          .select("dccResponse")
+          .lean();
+
+        const entry = { donorId: donor.donorId, name: donor.name, mobile: donor.mobile };
+        if (!donation) {
+          entry.action = "NO_SYNCED_DONATION_FOUND";
+        } else {
+          const dccDonorNumber = donation.dccResponse.DonorNumber;
+          entry.dccDonorNumber = dccDonorNumber;
+          if (execute) {
+            await donorModel.findByIdAndUpdate(donor._id, { dccDonorNumber });
+            entry.action = "BACKFILLED";
+          } else {
+            entry.action = "WOULD_BACKFILL";
+          }
+        }
+        results.push(entry);
+      }
+
+      res.status(200).json({
+        success: true,
+        mode: execute ? "EXECUTED" : "PREVIEW ONLY — nothing changed",
+        checkedThisBatch: donors.length,
+        results,
+      });
+    } catch (err) {
+      console.error("backfillDccDonorNumbers error:", err);
+      res.status(500).json({ success: false, message: err.message || "Server error" });
+    }
+  },
+
   needsWhatsApp: async (req, res) => {
     try {
       const donations = await donationModel
