@@ -45,6 +45,12 @@
 // 5. META ACCEPTS ONLY image/jpeg AND image/png FOR IMAGE HEADERS.
 //    The seva banners in R2 are .webp, so they are converted with sharp
 //    before being attached.
+//
+// 6. ON "STATELESS" BUTTONS. The ban in fact 2 is specifically about
+//    DYNAMIC {{1}} URL buttons (Flaxxa drops the button's substitution
+//    parameter). AUTHENTICATION templates carry a COPY_CODE button with NO
+//    parameters — it must be included in components for Meta to accept the
+//    send, and it passes through Flaxxa fine (see sendDonorOtp).
 // ---------------------------------------------------------------------------
 
 const WAPI_BASE = "https://wapi.flaxxa.com";
@@ -371,8 +377,13 @@ async function sendDonorOtp(phone, otpCode) {
   const OTP_TEMPLATE_NAME = process.env.WAPI_OTP_TEMPLATE_NAME || "otp";
   const components = [
     { type: "body", parameters: [{ type: "text", text: String(otpCode) }] },
+    // AUTHENTICATION-category templates must include their copy-code button
+    // in the send request or Meta rejects the message. This button carries
+    // NO parameters (unlike a dynamic {{1}} URL button — the one case
+    // Flaxxa provably drops), so it passes through the WAPI cleanly.
+    { type: "button", sub_type: "COPY_CODE", index: "0" },
   ];
-  return sendTemplateMessage(phone, OTP_TEMPLATE_NAME, components, "en_US");
+  return sendTemplateMessage(phone, OTP_TEMPLATE_NAME, components, "en");
 }
 
 module.exports = {
