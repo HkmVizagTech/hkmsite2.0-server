@@ -13,6 +13,27 @@ const donorSchema = new mongoose.Schema(
     mobile: { type: String, required: true, unique: true, index: true },
     name: { type: String, required: true, index: true },
     email: { type: String },
+    // Donor-level PAN, entered once from the login portal (My Profile) so it
+    // can be reused as the default for future 80G-eligible donations. This is
+    // separate from donation.panNumber, which stays the per-donation value
+    // actually printed on that donation's certificate — editing the profile
+    // PAN here never rewrites history on past donations.
+    panNumber: { type: String, trim: true, uppercase: true },
+    // Saved delivery address for Maha Prasadam courier, so a returning donor
+    // isn't retyping it on every seva booking. Same shape as
+    // donation.prasadamAddress; kept as a plain subdocument (no _id) since
+    // a donor only ever has one saved address at a time.
+    savedAddress: {
+      _id: false,
+      type: {
+        street: { type: String, trim: true },
+        city: { type: String, trim: true },
+        state: { type: String, trim: true },
+        pincode: { type: String, trim: true },
+        country: { type: String, trim: true, default: "India" },
+      },
+      default: undefined,
+    },
     assignedPreacherId: { type: mongoose.Schema.Types.ObjectId, ref: "user" },
     // Set when a preacher raises a receipt for a brand-new donor —
     // distinguishes "assigned because this preacher brought them in" from
