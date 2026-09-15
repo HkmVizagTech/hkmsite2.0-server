@@ -15,6 +15,7 @@ donationRouter.get("/utm-transactions", authMiddleware, adminMiddleware, donatio
 donationRouter.get("/report", authMiddleware, adminMiddleware, donationController.getReport);
 donationRouter.get("/whatsapp-audit", authMiddleware, adminMiddleware, donationController.whatsappAudit);
 donationRouter.get("/needs-manual-receipt", authMiddleware, adminMiddleware, donationController.needsManualReceipt);
+donationRouter.post("/backfill-dcc-donor-numbers", authMiddleware, adminMiddleware, donationController.backfillDccDonorNumbers);
 donationRouter.get("/needs-whatsapp", authMiddleware, adminMiddleware, donationController.needsWhatsApp);
 donationRouter.post("/backfill-donors", authMiddleware, adminMiddleware, donationController.backfillDonors);
 // Bulk resend for a window of receipts that never went out (provider outage).

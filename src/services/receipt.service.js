@@ -132,6 +132,19 @@ async function generateReceiptBuffer(donationId) {
     if (campaigner?.name) enrolledByName = campaigner.name;
   }
 
+  // DCC's own DonorNumber (e.g. "D49822") is the real, authoritative donor
+  // ID once it exists — donation.donorId is only a denormalized copy of
+  // our self-generated fallback, set at donor-linking time and never
+  // updated once DCC assigns a real number. Look up the current Donor
+  // record fresh so the receipt always shows whichever one is correct
+  // right now, not whatever was true the moment this donation was linked.
+  let displayDonorId = donation.donorId || "---";
+  if (donation.donorRecordId) {
+    const { donorModel } = require("../models/donor.model");
+    const donorRecord = await donorModel.findById(donation.donorRecordId).select("dccDonorNumber donorId").lean();
+    if (donorRecord) displayDonorId = donorRecord.dccDonorNumber || donorRecord.donorId || displayDonorId;
+  }
+
   const nameText = (donation.donorName || "").toUpperCase();
   const receiptText = (donation.receiptNumber || "").split("|").join(" | ");
 
@@ -152,7 +165,7 @@ async function generateReceiptBuffer(donationId) {
     amount: `${Number(donation.amount).toLocaleString("en-IN")}/-`,
     transactionNumber: donation.razorpayPaymentId || donation.transactionId || "---",
     sevakName: donation.sevakName || "---",
-    donorId: donation.donorId || "---",
+    donorId: displayDonorId,
   };
 
   // ALL values decide whether the Unicode font is needed — not a hand-picked

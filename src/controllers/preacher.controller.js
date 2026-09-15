@@ -19,13 +19,16 @@ const preacherController = {
       const conditions = [
         { name: { $regex: q, $options: "i" } },
         { donorId: { $regex: q, $options: "i" } },
+        { dccDonorNumber: { $regex: q, $options: "i" } },
       ];
       if (digitsOnly.length >= 3) conditions.push({ mobile: { $regex: digitsOnly } });
 
       const donors = await donorModel.find({ $or: conditions }).limit(10).lean();
       res.status(200).json({
         success: true,
-        donors: donors.map((d) => ({ _id: d._id, donorId: d.donorId, name: d.name, mobile: d.mobile, email: d.email })),
+        // DCC's DonorNumber is the real, authoritative ID once it exists;
+        // donorId is only a fallback until DCC has synced a donation.
+        donors: donors.map((d) => ({ _id: d._id, donorId: d.dccDonorNumber || d.donorId, name: d.name, mobile: d.mobile, email: d.email })),
       });
     } catch (err) {
       console.error("preacher.searchDonor error:", err);
@@ -49,7 +52,7 @@ const preacherController = {
 
       const result = donors.map((d) => ({
         _id: d._id,
-        donorId: d.donorId,
+        donorId: d.dccDonorNumber || d.donorId,
         name: d.name,
         mobile: d.mobile,
         email: d.email,
