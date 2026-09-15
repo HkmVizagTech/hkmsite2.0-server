@@ -26,8 +26,16 @@ async function main() {
   const otpCode = String(Math.floor(100000 + Math.random() * 900000));
 
   const components = [
+    // Auth templates: Meta rewrites the copy-code button to a URL button at
+    // approval time, so the send payload must be sub_type "url" with the
+    // SAME code passed in BOTH the body and the button parameters.
     { type: "body", parameters: [{ type: "text", text: otpCode }] },
-    { type: "button", sub_type: "COPY_CODE", index: "0" },
+    {
+      type: "button",
+      sub_type: "url",
+      index: "0",
+      parameters: [{ type: "text", text: otpCode }],
+    },
   ];
 
   console.log("template  :", templateName);

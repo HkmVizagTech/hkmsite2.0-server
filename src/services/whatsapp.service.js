@@ -46,11 +46,13 @@
 //    The seva banners in R2 are .webp, so they are converted with sharp
 //    before being attached.
 //
-// 6. ON "STATELESS" BUTTONS. The ban in fact 2 is specifically about
-//    DYNAMIC {{1}} URL buttons (Flaxxa drops the button's substitution
-//    parameter). AUTHENTICATION templates carry a COPY_CODE button with NO
-//    parameters — it must be included in components for Meta to accept the
-//    send, and it passes through Flaxxa fine (see sendDonorOtp).
+// 6. AUTHENTICATION (OTP) TEMPLATES: Meta rewrites the copy-code button
+//    into a URL button at APPROVAL time, so the send payload must be
+//    sub_type "url" with the SAME one-time code passed in both the body
+//    and the button parameters (see sendDonorOtp — verified live 2026-09).
+//    sub_type "COPY_CODE" is rejected (#132018), and omitting the button
+//    returns #131008 required-parameter-missing. This is the ONE case where
+//    a {{1}}-bearing button parameter DOES flow through Flaxxa fine.
 // ---------------------------------------------------------------------------
 
 const WAPI_BASE = "https://wapi.flaxxa.com";
@@ -379,11 +381,17 @@ async function sendDonorOtp(phone, otpCode) {
   const OTP_TEMPLATE_NAME = process.env.WAPI_OTP_TEMPLATE_NAME || "otp";
   const components = [
     { type: "body", parameters: [{ type: "text", text: String(otpCode) }] },
-    // AUTHENTICATION-category templates must include their copy-code button
-    // in the send request or Meta rejects the message. This button carries
-    // NO parameters (unlike a dynamic {{1}} URL button — the one case
-    // Flaxxa provably drops), so it passes through the WAPI cleanly.
-    { type: "button", sub_type: "COPY_CODE", index: "0" },
+    // AUTHENTICATION templates: Meta rewrites the copy-code button to a URL
+    // button at approval time, so the send must use sub_type "url" with the
+    // SAME code in both the body and the button parameters. sub_type
+    // "COPY_CODE" only exists for marketing/utility coupon buttons and Meta
+    // rejects it here (#132018); omitting the button gives #131008.
+    {
+      type: "button",
+      sub_type: "url",
+      index: "0",
+      parameters: [{ type: "text", text: String(otpCode) }],
+    },
   ];
   return sendTemplateMessage(phone, OTP_TEMPLATE_NAME, components, "en");
 }
