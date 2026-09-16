@@ -102,6 +102,50 @@ const donorAuthController = {
     }
   },
 
+  // POST /donor-auth/lookup { mobile }
+  // Public helper for the donation checkout form — lets a donor who has
+  // donated before (but hasn't logged in) pre-fill their details by typing
+  // just their mobile number. Returns only identity/profile fields the
+  // donor would type themselves anyway (name, email, PAN, saved address);
+  // never exposes donation history, IDs or payment data. If there's no Donor
+  // record for the number (no completed donation yet), returns a clean 404
+  // so the form can show a friendly "continue manually" message instead of
+  // an error page. Deliberately read-only — no OTP is sent or session
+  // created, so a typo'd/unknown number just gets the not-found message.
+  lookupDonor: async (req, res) => {
+    try {
+      const mobile = cleanMobile(req.body.mobile);
+      if (mobile.length !== 10) {
+        return res.status(400).json({ success: false, message: "Please enter a valid 10-digit mobile number." });
+      }
+
+      const donor = await donorModel
+        .findOne({ mobile })
+        .select("name mobile email panNumber savedAddress")
+        .lean();
+      if (!donor) {
+        return res.status(404).json({
+          success: false,
+          message: "We couldn't find any donation on this number. You can still donate — just fill in your details below.",
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        donor: {
+          name: donor.name,
+          mobile: donor.mobile,
+          email: donor.email || "",
+          panNumber: donor.panNumber || "",
+          savedAddress: donor.savedAddress || undefined,
+        },
+      });
+    } catch (err) {
+      console.error("donorAuth.lookupDonor error:", err && err.message ? err.message : err);
+      res.status(500).json({ success: false, message: "Could not look up your details. Please try again." });
+    }
+  },
+
   // POST /donor-auth/verify-otp { mobile, otp }
   verifyOtp: async (req, res) => {
     try {

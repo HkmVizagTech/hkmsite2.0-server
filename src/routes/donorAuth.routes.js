@@ -41,6 +41,11 @@ const shopOtpRateLimit = rateLimit({
 
 donorAuthRouter.post("/send-otp", otpRateLimit, donorAuthController.sendOtp);
 donorAuthRouter.post("/shop/send-otp", shopOtpRateLimit, donorAuthController.sendShopOtp);
+// Lookup is read-only and does NOT send any WhatsApp message, so the strict
+// OTP limiter is more than enough — it just keeps someone from hammering the
+// endpoint to enumerate which numbers have donated. Same limit shape as
+// send-otp so both entry points behave predictably under load.
+donorAuthRouter.post("/lookup", otpRateLimit, donorAuthController.lookupDonor);
 // Verification is shared: once a record exists, a shop customer and a donor
 // are the same kind of session, proven the same way.
 donorAuthRouter.post("/verify-otp", verifyRateLimit, donorAuthController.verifyOtp);
