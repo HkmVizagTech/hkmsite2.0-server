@@ -51,6 +51,10 @@ const productSchema = new mongoose.Schema(
     weightGrams: { type: Number },
     status: { type: String, enum: ["active", "draft"], default: "draft", index: true },
     featured: { type: Boolean, default: false },
+    // "Free delivery" flag — carrying this item never incurs the flat
+    // shipping charge, regardless of cart size. Lives on the product (not
+    // the variant): a size doesn't change whether an item ships free.
+    freeShipping: { type: Boolean, default: false },
     tags: { type: [String], default: [] },
     // Manual ordering on the catalog; lower sorts first, ties fall back to
     // newest-first.

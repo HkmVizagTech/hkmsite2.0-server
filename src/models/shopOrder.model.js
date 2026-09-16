@@ -18,6 +18,10 @@ const orderItemSchema = new mongoose.Schema(
     mrp: { type: Number },
     quantity: { type: Number, required: true, min: 1 },
     lineTotal: { type: Number, required: true },
+    // Whether "free delivery" applied to this line at purchase time —
+    // snapshotted like the rest, so an admin later un-flagging a product
+    // never rewrites the shipping maths an old order displays.
+    freeShipping: { type: Boolean, default: false },
   },
   { _id: false, versionKey: false }
 );

@@ -39,9 +39,21 @@ async function getShopSettings() {
 // The single source of truth for shipping cost. Used by both the checkout
 // API and the cart summary the customer sees, so the number quoted and the
 // number charged can never drift apart.
-function calculateShipping(subtotal, settings) {
+//
+// Two independent rules waive shipping:
+//   1. A line item flagged "free delivery" (product.freeShipping) never pays
+//      the flat charge. If EVERY line in the cart is flagged, the whole
+//      order ships free whatever the subtotal.
+//   2. The subtotal threshold (freeShippingAbove) — the classic "free
+//      delivery over ₹X".
+// A cart mixing flagged and unflagged items still pays the flat charge
+// unless the threshold is met — the closest sensible approximation to
+// per-item shipping with a single flat rule.
+function calculateShipping(subtotal, settings, items = []) {
   const flat = Number(settings?.flatShippingCharge) || 0;
   const freeAbove = Number(settings?.freeShippingAbove) || 0;
+  const freeCount = items.filter((i) => i && i.freeShipping).length;
+  if (items.length > 0 && freeCount === items.length) return 0;
   if (freeAbove > 0 && subtotal >= freeAbove) return 0;
   return flat;
 }
