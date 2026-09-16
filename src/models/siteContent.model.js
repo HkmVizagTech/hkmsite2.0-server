@@ -24,6 +24,11 @@ const siteContentSchema = new mongoose.Schema(
       morningHours: { type: String, default: "4:30 AM - 1:00 PM" },
       eveningHours: { type: String, default: "4:00 PM - 8:30 PM" },
     },
+    navbar: {
+      // "auto" = pick the current major festival from the Vaishnava calendar;
+      // "none" = hide the highlight; any registered festival key forces it.
+      majorFestival: { type: String, default: "auto" },
+    },
     updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "user" },
   },
   { timestamps: true, versionKey: false }
