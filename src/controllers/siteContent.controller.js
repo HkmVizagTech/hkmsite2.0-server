@@ -15,14 +15,15 @@ const siteContentController = {
     }
   },
 
-  // ADMIN - update any subset of hero/about/contact
+  // ADMIN - update any subset of hero/about/contact/navbar
   update: async (req, res) => {
     try {
-      const { hero, about, contact } = req.body;
+      const { hero, about, contact, navbar } = req.body;
       const patch = { updatedBy: req.user?.userId };
       if (hero) patch.hero = hero;
       if (about) patch.about = about;
       if (contact) patch.contact = contact;
+      if (navbar) patch.navbar = navbar;
 
       const content = await siteContentModel.findOneAndUpdate(
         { key: "main" },
