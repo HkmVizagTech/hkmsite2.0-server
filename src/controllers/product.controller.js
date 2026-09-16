@@ -52,6 +52,7 @@ function publicProductShape(product) {
     priceMax: range.max,
     inStock: stock > 0,
     featured: !!product.featured,
+    freeShipping: !!product.freeShipping,
     tags: product.tags || [],
     weightGrams: product.weightGrams,
     variants: (product.variants || []).map((v) => ({
@@ -286,6 +287,7 @@ const productController = {
         weightGrams: body.weightGrams ? Number(body.weightGrams) : undefined,
         status: body.status === "active" ? "active" : "draft",
         featured: !!body.featured,
+        freeShipping: !!body.freeShipping,
         tags: Array.isArray(body.tags) ? body.tags : [],
         sortOrder: Number(body.sortOrder) || 0,
         createdBy: req.user.userId,
@@ -313,6 +315,7 @@ const productController = {
       if (body.weightGrams !== undefined) updates.weightGrams = body.weightGrams ? Number(body.weightGrams) : undefined;
       if (body.status !== undefined) updates.status = body.status === "active" ? "active" : "draft";
       if (body.featured !== undefined) updates.featured = !!body.featured;
+      if (body.freeShipping !== undefined) updates.freeShipping = !!body.freeShipping;
       if (body.tags !== undefined) updates.tags = Array.isArray(body.tags) ? body.tags : [];
       if (body.sortOrder !== undefined) updates.sortOrder = Number(body.sortOrder) || 0;
       // The slug is only regenerated on explicit request — silently changing

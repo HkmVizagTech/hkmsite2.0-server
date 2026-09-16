@@ -93,6 +93,7 @@ async function buildCartFromRequest(rawItems) {
       mrp: purchasable.mrp,
       quantity,
       lineTotal,
+      freeShipping: !!product.freeShipping,
     });
   }
 
@@ -226,7 +227,7 @@ const shopOrderController = {
       const cart = await buildCartFromRequest(req.body.items);
       if (cart.error) return res.status(400).json({ success: false, message: cart.error });
 
-      const shippingCharge = cart.items.length ? calculateShipping(cart.subtotal, settings) : 0;
+      const shippingCharge = cart.items.length ? calculateShipping(cart.subtotal, settings, cart.items) : 0;
       res.status(200).json({
         success: true,
         items: cart.items,
@@ -281,7 +282,7 @@ const shopOrderController = {
         });
       }
 
-      const shippingCharge = calculateShipping(cart.subtotal, settings);
+      const shippingCharge = calculateShipping(cart.subtotal, settings, cart.items);
       const total = Math.round((cart.subtotal + shippingCharge) * 100) / 100;
       if (total < 1) return res.status(400).json({ success: false, message: "Order total is too low." });
 
