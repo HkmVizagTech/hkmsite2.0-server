@@ -3,11 +3,19 @@ require("dotenv").config();
 const { app } = require("./app");
 const { connectDb } = require("./src/config/db");
 const { startReconciliationJob } = require("./src/jobs/reconcilePendingDonations");
+const { ensureDefaultShopCategories } = require("./src/services/shopBootstrap.service");
 const PORT = process.env.PORT || 8080;
 
 const startServer =async()=>{
     try {
         await connectDb()
+
+        // Seed default shop categories on boot so a fresh/empty DB ships
+        // with a usable catalog. Errors are logged and swallowed — the
+        // server still starts even if the seed hiccups.
+        ensureDefaultShopCategories().catch((err) => {
+            console.error("Shop category bootstrap failed (non-fatal):", err && err.message ? err.message : err);
+        });
 
         app.listen( PORT,()=>{
             console.log(`server connected on port ${PORT}`);
