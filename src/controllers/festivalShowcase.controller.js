@@ -6,7 +6,7 @@ const festivalShowcaseController = {
     try {
       const showcases = await festivalShowcaseModel
         .find({ active: true })
-        .sort({ featured: -1, eventDate: -1 })
+        .sort({ featured: -1, featuredOrder: 1, eventDate: -1 })
         .select("-createdBy -active");
       res.json(showcases);
     } catch (err) {
@@ -36,7 +36,7 @@ const festivalShowcaseController = {
     try {
       const showcases = await festivalShowcaseModel
         .find()
-        .sort({ featured: -1, updatedAt: -1 })
+        .sort({ featured: -1, featuredOrder: 1, updatedAt: -1 })
         .populate("createdBy", "name email");
       res.json(showcases);
     } catch (err) {

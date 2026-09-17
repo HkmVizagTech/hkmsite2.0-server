@@ -45,6 +45,7 @@ const festivalShowcaseSchema = new mongoose.Schema(
       default: "upcoming",
     },
     featured: { type: Boolean, default: false }, // highlight biggest festivals (Janmashtami, Radhashtami…)
+    featuredOrder: { type: Number, default: 0 }, // asc — lower numbers appear first among featured ones
     active: { type: Boolean, default: true },
     ctaLabel: { type: String, default: "Donate Now" },
     ctaHref: { type: String }, // link to the festival's donation page, e.g. /festival/janmashtami
