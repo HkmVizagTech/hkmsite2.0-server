@@ -520,11 +520,31 @@ const shopOrderController = {
       }
 
       if (tracking) {
-        order.tracking = {
+        // Fill the customer-facing tracking URL automatically from the
+        // courier registry when the admin didn't paste one by hand, and
+        // guess the courier from the number's format when they didn't pick
+        // one. Both are conveniences only — an explicit admin value always
+        // wins over an auto-built URL.
+        const trackingService = require("../services/tracking.service");
+        const newTracking = {
           courier: tracking.courier || order.tracking?.courier,
           trackingNumber: tracking.trackingNumber || order.tracking?.trackingNumber,
           url: tracking.url || order.tracking?.url,
         };
+        if (!newTracking.courier && newTracking.trackingNumber) {
+          newTracking.courier = trackingService.detectCourier(newTracking.trackingNumber) || undefined;
+        }
+        if (!newTracking.url && newTracking.courier && newTracking.trackingNumber) {
+          newTracking.url =
+            trackingService.buildTrackingUrl(newTracking.courier, newTracking.trackingNumber) || undefined;
+        }
+        order.tracking = newTracking;
+      }
+
+      // Remember when the parcel actually left, so the auto-tracking job
+      // knows how long to keep polling the courier for this order.
+      if (fulfilmentStatus === "shipped" && order.fulfilmentStatus === "shipped" && !order.shippedAt) {
+        order.shippedAt = new Date();
       }
       if (adminNote !== undefined) order.adminNote = adminNote;
       if (needsAttention !== undefined) order.needsAttention = !!needsAttention;

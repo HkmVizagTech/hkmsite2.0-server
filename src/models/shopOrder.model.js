@@ -94,6 +94,10 @@ const shopOrderSchema = new mongoose.Schema(
       trackingNumber: { type: String },
       url: { type: String },
     },
+    // When the parcel actually left. Set by the admin PATCH the first time
+    // the order moves to "shipped"; the auto-tracking job uses it to decide
+    // how long to keep polling the courier for this order.
+    shippedAt: { type: Date },
     adminNote: { type: String },
     statusHistory: {
       type: [
