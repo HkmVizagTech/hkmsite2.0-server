@@ -5,6 +5,7 @@ const { connectDb } = require("./src/config/db");
 const { startReconciliationJob } = require("./src/jobs/reconcilePendingDonations");
 const { startTrackingSyncJob } = require("./src/jobs/trackingSync");
 const { ensureDefaultShopCategories } = require("./src/services/shopBootstrap.service");
+const { ensureDefaultFestivalDonations } = require("./src/services/festivalDonationBootstrap.service");
 const PORT = process.env.PORT || 8080;
 
 const startServer =async()=>{
@@ -16,6 +17,14 @@ const startServer =async()=>{
         // server still starts even if the seed hiccups.
         ensureDefaultShopCategories().catch((err) => {
             console.error("Shop category bootstrap failed (non-fatal):", err && err.message ? err.message : err);
+        });
+
+        // Seed the canonical festival-donation campaigns (Radhashtami,
+        // Govardhan Puja, Ekadashi) and deactivate test/junk records so the
+        // home/donations "Festival Donations" section always shows real
+        // campaigns. Idempotent; errors are logged and swallowed.
+        ensureDefaultFestivalDonations().catch((err) => {
+            console.error("Festival-donation bootstrap failed (non-fatal):", err && err.message ? err.message : err);
         });
 
         app.listen( PORT,()=>{

@@ -3,11 +3,24 @@ const { festivalDonationModel } = require("../models/festivalDonation.model");
 const festivalDonationController = {
   publicList: async (req, res) => {
     try {
-      const festivals = await festivalDonationModel.find({}, 'title slug description images active donationOptions meta createdAt');
-      if (!festivals || festivals.length === 0) {
+      // Only active campaigns appear on the public home/donations sections;
+      // test/inactive records are kept in the DB but excluded. Titles/slugs
+      // are trimmed so hand-typed trailing space ("Testing on the server ")
+      // can never surface as a blank-ish card title.
+      const festivals = await festivalDonationModel.find(
+        { active: true, slug: { $ne: "" }, title: { $ne: "" } },
+        'title slug description images active donationOptions meta createdAt'
+      ).sort({ createdAt: 1 });
+      const clean = festivals.map((f) => {
+        const doc = f.toObject();
+        if (doc.title) doc.title = String(doc.title).trim();
+        if (doc.slug) doc.slug = String(doc.slug).trim();
+        return doc;
+      });
+      if (!clean || clean.length === 0) {
         return res.json({ message: "Currently there are no festivals" });
       }
-      res.json(festivals);
+      res.json(clean);
     } catch (err) {
       console.error('festivalDonationController.publicList error:', err);
       res.status(500).json({ message: "Server error" });
