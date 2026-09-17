@@ -25,9 +25,12 @@ const siteContentSchema = new mongoose.Schema(
       eveningHours: { type: String, default: "4:00 PM - 8:30 PM" },
     },
     navbar: {
-      // "auto" = pick the current major festival from the Vaishnava calendar;
-      // "none" = hide the highlight; any registered festival key forces it.
-      majorFestival: { type: String, default: "auto" },
+      // "none" = hide the highlight (default); "auto" = pick the current
+      // major festival from the Vaishnava calendar; any registered festival
+      // key forces it. Kept in sync with the client default in Navbar.tsx /
+      // lib/majorFestival.ts — auto-highlighting previously left stale
+      // festivals (e.g. Radhashtami for weeks around its date) in the nav.
+      majorFestival: { type: String, default: "none" },
     },
     updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "user" },
   },
