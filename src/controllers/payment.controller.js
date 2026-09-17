@@ -35,6 +35,18 @@ const RAZORPAY_ACCOUNTS = {
     key_secret: () => process.env.RAZORPAY_TOUCHSTONE_KEY_SECRET,
     webhook_secret: () => process.env.RAZORPAY_TOUCHSTONE_WEBHOOK_SECRET,
   },
+  // Temple shop sales. Kept separate from donations so shop settlements
+  // and donation settlements land in distinct accounts. Set
+  // RAZORPAY_SHOP_KEY_ID/KEY_SECRET (and RAZORPAY_SHOP_WEBHOOK_SECRET once
+  // the account's webhook is created in its own Razorpay dashboard). Until
+  // the keys are present, createRazorpayInstance('shop') returns null and
+  // shopOrder.controller falls back to the donations account so the
+  // storefront keeps working.
+  shop: {
+    key_id: () => process.env.RAZORPAY_SHOP_KEY_ID,
+    key_secret: () => process.env.RAZORPAY_SHOP_KEY_SECRET,
+    webhook_secret: () => process.env.RAZORPAY_SHOP_WEBHOOK_SECRET,
+  },
 };
 
 const normalizeAccount = (account) => (
@@ -82,13 +94,14 @@ async function processWebhookEventInline(event) {
         console.log('Donation marked completed for order', orderId);
         break;
       }
-      // Not a donation — the temple SHOP sells through this same Razorpay
-      // account, so its payments arrive at this same webhook URL. Without
-      // this fallback a shop payment would only be logged as "donation not
-      // found", and the order would sit unpaid forever whenever the devotee
-      // closed the tab before the browser's verify call ran (routine with
-      // UPI app switches). confirmShopOrderPaid is idempotent, so this is
-      // safe even when verify already confirmed the very same payment.
+      // Not a donation — the temple SHOP may sell through this same Razorpay
+      // account (its /payments/webhook/shop route posts to this same inline
+      // processor when it uses its own account). Without this fallback a shop
+      // payment would only be logged as "donation not found", and the order
+      // would sit unpaid forever whenever the devotee closed the tab before
+      // the browser's verify call ran (routine with UPI app switches).
+      // confirmShopOrderPaid is idempotent, so this is safe even when verify
+      // already confirmed the very same payment.
       {
         const { confirmShopOrderPaid, sendOrderWhatsApp } = require('./shopOrder.controller');
         const shopResult = await confirmShopOrderPaid({ razorpayOrderId: orderId, paymentId: payment.id });
@@ -110,9 +123,10 @@ async function processWebhookEventInline(event) {
       if (!payment) break;
       const orderId = payment.order_id;
       if (!orderId) break;
-      // Shop orders share this webhook too — a failed attempt just marks the
-      // order failed so it stops showing as "awaiting payment". Stock was
-      // never decremented for an unpaid order, so nothing needs restoring.
+      // Shop orders can arrive here too (whichever Razorpay account they run
+      // through) — a failed attempt just marks the order failed so it stops
+      // showing as "awaiting payment". Stock was never decremented for an
+      // unpaid order, so nothing needs restoring.
       {
         const { shopOrderModel } = require('../models/shopOrder.model');
         const shopOrder = await shopOrderModel.findOne({ razorpayOrderId: orderId });

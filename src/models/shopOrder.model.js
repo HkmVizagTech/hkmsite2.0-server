@@ -75,9 +75,10 @@ const shopOrderSchema = new mongoose.Schema(
     },
     razorpayOrderId: { type: String, index: true },
     razorpayPaymentId: { type: String },
-    // Which Razorpay account took the money. Shop orders run on the same
-    // account as donations, but this is recorded per-order because that's a
-    // runtime choice, not a permanent fact — the same reason
+    // Which Razorpay account took the money. Shop orders now settle through
+    // their own account by default, but this is recorded per-order because
+    // it's a runtime choice that can fall back to donations during
+    // switch-over, not a permanent fact — the same reason
     // donation.paymentAccount exists.
     paymentAccount: { type: String },
     paidAt: { type: Date },

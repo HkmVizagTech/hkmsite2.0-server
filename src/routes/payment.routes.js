@@ -37,11 +37,12 @@ paymentRouter.post('/verify', express.json(), paymentController.verifyPayment);
 // orderId itself is the access token (long random string from Razorpay).
 paymentRouter.get('/status/:orderId', express.json(), paymentController.checkStatus);
 
-// Three distinct URLs, one per Razorpay account -- each account's own
+// Four distinct URLs, one per Razorpay account -- each account's own
 // dashboard gets its own webhook secret tied unambiguously to its URL.
 paymentRouter.post('/webhook', express.raw({ type: '*/*' }), paymentController.webhookFor('default'));
 paymentRouter.post('/webhook/donations', express.raw({ type: '*/*' }), paymentController.webhookFor('donations'));
 paymentRouter.post('/webhook/touchstone', express.raw({ type: '*/*' }), paymentController.webhookFor('touchstone'));
+paymentRouter.post('/webhook/shop', express.raw({ type: '*/*' }), paymentController.webhookFor('shop'));
 
 paymentRouter.post('/reconcile/:donationId', authMiddleware, adminMiddleware, express.json(), paymentController.reconcile);
 paymentRouter.get('/audit-subscriptions', authMiddleware, adminMiddleware, paymentController.auditSubscriptions);

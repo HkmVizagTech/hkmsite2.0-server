@@ -24,9 +24,10 @@ async function processJob(job) {
           }
           break;
         }
-        // Not a donation — the temple shop shares this Razorpay account and
-        // therefore this webhook. Mirrors the inline fallback in
-        // payment.controller.js so the queued and inline paths never drift.
+        // Not a donation — the temple shop may run through its own Razorpay
+        // account (/payments/webhook/shop) or share this one. Mirrors the
+        // inline fallback in payment.controller.js so the queued and inline
+        // paths never drift.
         {
           const { confirmShopOrderPaid, sendOrderWhatsApp } = require('../src/controllers/shopOrder.controller');
           const shopResult = await confirmShopOrderPaid({ razorpayOrderId: orderId, paymentId: payment.id });
