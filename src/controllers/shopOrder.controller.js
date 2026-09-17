@@ -5,21 +5,31 @@ const { getShopSettings, calculateShipping } = require("../models/shopSettings.m
 const { donorModel } = require("../models/donor.model");
 const { getNextSequence } = require("../utils/counter");
 
-// Which Razorpay account the shop sells through. Per the temple's decision
-// this is the SAME account that takes donations — but it is resolved through
-// a named env var rather than hard-coded, because "shop money and donation
-// money share an account" is a business decision that can be reversed
-// (separate trust, separate settlement) without touching this code.
+// Which Razorpay account the shop sells through. Shop sales now settle
+// through their own account, separate from donations, so the two money
+// streams are cleanly separable. Override with SHOP_RAZORPAY_ACCOUNT if the
+// business decision ever changes again.
 //
-// Crucially, sharing the ACCOUNT does not mean sharing the PIPELINE: a shop
-// order never runs completeDonation(), never syncs to DCC, never gets an 80G
+// The account is resolved through a named env var rather than hard-coded,
+// and until the shop account's keys (RAZORPAY_SHOP_KEY_ID/KEY_SECRET) are
+// present in the environment this falls back to the donations account so the
+// storefront keeps working during the switch-over.
+//
+// Crucially, a separate ACCOUNT does not change the PIPELINE: a shop order
+// never runs completeDonation(), never syncs to DCC, never gets an 80G
 // receipt number, and never sends the donation receipt template. A book sale
 // is not a donation and must never produce a donation receipt.
-const SHOP_ACCOUNT = process.env.SHOP_RAZORPAY_ACCOUNT || "donations";
+const SHOP_ACCOUNT = process.env.SHOP_RAZORPAY_ACCOUNT || "shop";
 
 function resolveShopRazorpay() {
   const { createRazorpayInstance } = require("./payment.controller");
-  return createRazorpayInstance(SHOP_ACCOUNT) || createRazorpayInstance("default");
+  const shop = createRazorpayInstance(SHOP_ACCOUNT);
+  if (shop) return shop;
+  console.warn(
+    `Shop Razorpay account "${SHOP_ACCOUNT}" is not configured — falling back to the donations account. ` +
+      `Set RAZORPAY_SHOP_KEY_ID and RAZORPAY_SHOP_KEY_SECRET to sell through the separate shop account.`
+  );
+  return createRazorpayInstance("donations") || createRazorpayInstance("default");
 }
 
 async function generateOrderNumber() {

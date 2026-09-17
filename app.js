@@ -93,6 +93,7 @@ const WEBHOOK_PATHS = new Set([
   "/payments/webhook",
   "/payments/webhook/donations",
   "/payments/webhook/touchstone",
+  "/payments/webhook/shop",
 ]);
 const globalJson = express.json({ limit: '10mb' }); // increased for rich CKEditor HTML payloads
 app.use((req, res, next) => {

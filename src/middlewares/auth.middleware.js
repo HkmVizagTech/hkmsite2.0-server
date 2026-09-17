@@ -57,9 +57,9 @@ const blogsAdminMiddleware = (req, res, next) => {
 
 // Scoped access for the temple shop admin — a shop_admin account can manage
 // products, stock, categories, orders and shop settings, and nothing else.
-// Deliberately cannot reach donations: the shop takes money on the same
-// Razorpay account, but shop sales are NOT donations and a shop manager has
-// no business in the 80G receipt trail.
+// Deliberately cannot reach donations: shop sales may settle through their
+// own Razorpay account, but either way they are NOT donations and a shop
+// manager has no business in the 80G receipt trail.
 const shopAdminMiddleware = (req, res, next) => {
 	if (req.user.role !== "admin" && req.user.role !== "shop_admin") {
 		return res.status(403).json({ message: "Shop admin access required" });
