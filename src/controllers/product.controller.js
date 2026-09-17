@@ -77,8 +77,27 @@ const productController = {
   // progress and must not be reachable by guessing a URL.
   listProducts: async (req, res) => {
     try {
-      const { category, search, sort = "featured", page = 1, limit = 24, inStockOnly } = req.query;
+      const { category, search, sort = "featured", page = 1, limit = 24, inStockOnly, ids } = req.query;
       const filter = { status: "active" };
+
+      // ?ids=a,b,c — direct fetch by id for the "Saved for later" section.
+      // Only well-formed ids make it into the query; anything else would
+      // throw a Mongo cast error. Nothing valid at all → empty page.
+      if (ids && String(ids).trim()) {
+        const idList = String(ids)
+          .split(",")
+          .map((s) => s.trim())
+          .filter((s) => /^[0-9a-fA-F]{24}$/.test(s));
+        if (idList.length === 0) {
+          return res.status(200).json({
+            success: true,
+            products: [],
+            pagination: { page: 1, limit: 0, total: 0, pages: 0 },
+          });
+        }
+        filter._id = { $in: idList };
+      }
+
       if (category && category !== "all") filter.category = category;
       if (search && String(search).trim()) {
         const term = String(search).trim();
@@ -106,23 +125,50 @@ const productController = {
       const pageNum = Math.max(1, Number(page) || 1);
       const perPage = Math.min(60, Math.max(1, Number(limit) || 24));
 
+      // "In stock only" must live in the Mongo filter (not a post-fetch
+      // filter) so totals and page counts stay correct.
+      if (String(inStockOnly) === "true") {
+        filter.$and = [
+          ...(filter.$and || []),
+          {
+            $or: [
+              { hasVariants: false, stock: { $gt: 0 } },
+              { hasVariants: true, "variants.stock": { $gt: 0 } },
+            ],
+          },
+        ];
+      }
+
+      // Price sorts are finished in memory (variant prices live inside an
+      // array, so Mongo can't sort on them) — which means ALL matching rows
+      // must be fetched before the page is sliced. Slicing in Mongo first
+      // made every page re-shuffle the same few rows, so items would
+      // duplicate on one page and vanish from the next.
+      const memoryPriceSort = sort === "price-asc" || sort === "price-desc";
+      const baseQuery = productModel.find(filter).sort(sortSpec);
+      if (memoryPriceSort) baseQuery.limit(200); // sane ceiling for a temple shop
+      else baseQuery.skip((pageNum - 1) * perPage).limit(perPage);
+
       const [rows, total] = await Promise.all([
-        productModel.find(filter).sort(sortSpec).skip((pageNum - 1) * perPage).limit(perPage).lean(),
+        baseQuery.lean(),
         productModel.countDocuments(filter),
       ]);
 
       let products = rows.map(publicProductShape);
       // Out-of-stock items stay visible (so a devotee can see the temple
       // stocks it at all) but always sort last — nobody wants a grid whose
-      // first row can't be bought.
+      // first row can't be bought. The sorts below are stable, so the
+      // chosen ordering is preserved inside each group.
       products.sort((a, b) => Number(b.inStock) - Number(a.inStock));
-      if (String(inStockOnly) === "true") products = products.filter((p) => p.inStock);
 
       // Variant products can't be sorted by price in Mongo (the price lives
-      // inside the array), so price sorts are finished off in memory on the
-      // page we just fetched.
+      // inside the array), so price sorts are finished off in memory.
       if (sort === "price-asc") products.sort((a, b) => a.priceMin - b.priceMin);
       if (sort === "price-desc") products.sort((a, b) => b.priceMax - a.priceMax);
+
+      if (memoryPriceSort) {
+        products = products.slice((pageNum - 1) * perPage, pageNum * perPage);
+      }
 
       res.status(200).json({
         success: true,
