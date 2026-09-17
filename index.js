@@ -3,6 +3,7 @@ require("dotenv").config();
 const { app } = require("./app");
 const { connectDb } = require("./src/config/db");
 const { startReconciliationJob } = require("./src/jobs/reconcilePendingDonations");
+const { startTrackingSyncJob } = require("./src/jobs/trackingSync");
 const { ensureDefaultShopCategories } = require("./src/services/shopBootstrap.service");
 const PORT = process.env.PORT || 8080;
 
@@ -22,6 +23,12 @@ const startServer =async()=>{
         })
 
         startReconciliationJob();
+
+        // Auto-tracking sync: watch courier feeds (Delhivery / DTDC /
+        // Bluedart / India Post) for shipped orders and flip them to
+        // Delivered when the courier reports delivery. Disable with
+        // TRACKING_SYNC_ENABLED=false.
+        startTrackingSyncJob();
 
         // In-process scheduler for pending-transaction WhatsApp reminders.
         // Mirrors the Annadana/Subhojanam reminder flow so pending donations
