@@ -42,6 +42,7 @@ function publicProductShape(product) {
     slug: product.slug,
     shortDescription: product.shortDescription,
     description: product.description,
+    productInfo: product.productInfo || "",
     category: product.category,
     images: product.images || [],
     hasVariants: !!product.hasVariants,
@@ -323,6 +324,7 @@ const productController = {
         slug: await uniqueSlug(body.slug || body.name),
         shortDescription: body.shortDescription,
         description: body.description,
+        productInfo: body.productInfo || "",
         category: body.category,
         images: Array.isArray(body.images) ? body.images.filter(Boolean) : [],
         hasVariants,
@@ -356,6 +358,7 @@ const productController = {
       if (body.name !== undefined) updates.name = String(body.name).trim();
       if (body.shortDescription !== undefined) updates.shortDescription = body.shortDescription;
       if (body.description !== undefined) updates.description = body.description;
+      if (body.productInfo !== undefined) updates.productInfo = body.productInfo || "";
       if (body.category !== undefined) updates.category = body.category;
       if (body.images !== undefined) updates.images = Array.isArray(body.images) ? body.images.filter(Boolean) : [];
       if (body.weightGrams !== undefined) updates.weightGrams = body.weightGrams ? Number(body.weightGrams) : undefined;
