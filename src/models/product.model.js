@@ -29,6 +29,11 @@ const productSchema = new mongoose.Schema(
     slug: { type: String, required: true, unique: true, index: true },
     shortDescription: { type: String, trim: true },
     description: { type: String },
+    // Rich-text (CKEditor HTML) "Product Information" block shown below the
+    // description on the product page — the label:value rows like "Book
+    // Name: Bhagavad Gita As It Is". Stored as HTML so an admin can bold the
+    // side headings and key words exactly how they want them to appear.
+    productInfo: { type: String, default: "" },
     // Stores the category's slug (see shopCategory.model.js), not its _id,
     // so the catalog can filter straight from a ?category= query string
     // without an extra lookup.
