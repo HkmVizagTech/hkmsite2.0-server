@@ -1360,11 +1360,17 @@ const donationController = {
 
       const statusLabel = (r) => r.prasadamStatus || "pending";
 
+      // Column order mirrors the admin Prasadam tab table exactly (Donor →
+      // Amount → Address → Seva/Source → Status → Courier → Date), with
+      // internal ops fields (Notes/Receipt/Payment ID) trailing at the end.
+      // Every cell goes through csvEscape so commas in names/addresses
+      // can't shift the columns.
       const headers = [
-        "Donor Name", "Mobile", "Email", "Amount", "Seva", "Source Page",
-        "Delivery Address", "Pincode", "Prasadam Status", "Courier", "Tracking Number",
-        "Dispatched At", "Delivered At", "Notes", "Receipt Number", "Payment ID", "Donated On",
+        "Donor Name", "Mobile", "Email", "Amount", "Delivery Address",
+        "Seva", "Source Page", "Prasadam Status", "Courier", "Tracking Number",
+        "Dispatched At", "Delivered At", "Donated On", "Notes", "Receipt Number", "Payment ID",
       ];
+      const istTime = (d) => (d ? new Date(d).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) : "");
       const csv = [
         headers.join(","),
         ...rows.map((r) =>
@@ -1373,20 +1379,19 @@ const donationController = {
             r.donorMobile || "",
             r.donorEmail || "",
             r.amount,
+            formatAddress(r.prasadamAddress),
             r.sevaName || r.type || "",
             r.sourcePage || "",
-            csvEscape(formatAddress(r.prasadamAddress)),
-            r.prasadamAddress?.pincode || "",
             statusLabel(r),
             r.prasadamCourier || "",
             r.prasadamTrackingNumber || "",
-            r.prasadamDispatchedAt ? new Date(r.prasadamDispatchedAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) : "",
-            r.prasadamDeliveredAt ? new Date(r.prasadamDeliveredAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) : "",
-            csvEscape(r.prasadamNotes || ""),
+            istTime(r.prasadamDispatchedAt),
+            istTime(r.prasadamDeliveredAt),
+            istTime(r.createdAt),
+            r.prasadamNotes || "",
             r.receiptNumber || "",
             r.razorpayPaymentId || r.razorpayOrderId || "",
-            r.createdAt ? new Date(r.createdAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) : "",
-          ].join(",")
+          ].map(csvEscape).join(",")
         ),
       ].join("\n");
 
