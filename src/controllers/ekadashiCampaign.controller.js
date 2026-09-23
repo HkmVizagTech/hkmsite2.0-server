@@ -1,9 +1,8 @@
 const { ekadashiCampaignModel } = require("../models/ekadashiCampaign.model");
 
 /**
- * Default Ekadashi campaign content — pre-populated with the current Shayani
- * Ekadashi data so the /ekadashi page always renders valid content even before
- * an admin has opened the editor.
+ * Default Ekadashi campaign content — festival-agnostic so the /ekadashi page
+ * always renders valid content even before an admin has opened the editor.
  */
 
 const DEFAULT_CAMPAIGN = {
@@ -234,6 +233,25 @@ const DEFAULT_CAMPAIGN = {
   },
 };
 
+// Legacy campaigns were saved under the "Shayani Ekadashi" name. Any copy
+// still carrying it is rewritten to the record's current campaignName so the
+// rename propagates to SSR, the admin editor and every rendered section.
+function normalizeLegacyNames(content) {
+  if (!content || typeof content !== "object") return content;
+  const name = String(content.campaignName || "Ekadashi").trim() || "Ekadashi";
+  const rewrite = (v) => {
+    if (typeof v === "string") return v.replace(/Shayani Ekadashi/g, name);
+    if (Array.isArray(v)) return v.map(rewrite);
+    if (v && typeof v === "object") {
+      const out = {};
+      for (const [k, val] of Object.entries(v)) out[k] = rewrite(val);
+      return out;
+    }
+    return v;
+  };
+  return rewrite(content);
+}
+
 /** Shallow + deep merge for nested objects and arrays. */
 function deepMerge(target, source) {
   const result = { ...target };
@@ -252,7 +270,7 @@ function deepMerge(target, source) {
 }
 
 function mergeWithDefaults(content) {
-  return deepMerge(DEFAULT_CAMPAIGN, content || {});
+  return normalizeLegacyNames(deepMerge(DEFAULT_CAMPAIGN, content || {}));
 }
 
 const ekadashiCampaignController = {

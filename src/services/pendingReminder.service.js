@@ -217,6 +217,10 @@ const FESTIVAL_PAGES = new Set([
   "janmashtami",
   "janmashtami3",
   "donations/janmashtami2",
+  // /ekadashi is the reusable Ekadashi campaign page; "shayani-ekadashi" is
+  // its pre-rename slug, kept so pending records from the old page still link
+  // back correctly.
+  "ekadashi",
   "shayani-ekadashi",
   "special-occasion",
   "subhojanam",
@@ -237,7 +241,8 @@ const CAMPAIGN_LABELS = {
   janmashtami: "Sri Krishna Janmashtami",
   janmashtami3: "Sri Krishna Janmashtami",
   "donations/janmashtami2": "Sri Krishna Janmashtami",
-  "shayani-ekadashi": "Shayani Ekadashi",
+  "ekadashi": "Ekadashi",
+  "shayani-ekadashi": "Shayani Ekadashi", // legacy pending records only
   chaturmas: "Chaturmas",
   "special-occasion": "Special Occasion Seva",
 };
