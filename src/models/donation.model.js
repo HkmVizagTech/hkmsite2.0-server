@@ -52,6 +52,23 @@ const donationSchema = new mongoose.Schema({
     city: String,
     pincode: String,
   },
+  // Maha Prasadam courier tracking (admin → Donations → Prasadam tab).
+  // Dispatch lifecycle: new requests default to "pending"; admin marks them
+  // "dispatched" when the box leaves, then "delivered" once confirmed. When
+  // a donor can't be reached or the courier fails, "cancelled" retires the
+  // request without touching the donation's payment status. courierName /
+  // trackingNumber / dispatchedAt / deliveredAt are the dispatch audit
+  // trail; notes holds anything admin wants to record about this request.
+  prasadamStatus: {
+    type: String,
+    enum: ["pending", "dispatched", "delivered", "cancelled"],
+    default: undefined, // stays undefined (not "pending") on old records pre-dating tracking
+  },
+  prasadamCourier: { type: String, trim: true },
+  prasadamTrackingNumber: { type: String, trim: true },
+  prasadamDispatchedAt: { type: Date },
+  prasadamDeliveredAt: { type: Date },
+  prasadamNotes: { type: String, trim: true },
   razorpayOrderId: { type: String },
   razorpayPaymentId: { type: String },
   // Manual entry support — for donations that arrived OUTSIDE the website
@@ -148,6 +165,9 @@ donationSchema.index({ razorpayOrderId: 1 });
 donationSchema.index({ donorMobile: 1 });
 donationSchema.index({ utrNumber: 1 });
 donationSchema.index({ donorRecordId: 1 });
+// Prasadam tab queries always filter wantPrasadam + status, so a compound
+// index keeps the courier list fast as the request volume grows.
+donationSchema.index({ wantPrasadam: 1, status: 1, "prasadamAddress.pincode": 1 });
 donationSchema.index({ manualEnteredBy: 1 });
 
 const donationModel = mongoose.model("donation", donationSchema);

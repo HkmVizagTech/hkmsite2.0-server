@@ -1,31 +1,30 @@
 const { ekadashiCampaignModel } = require("../models/ekadashiCampaign.model");
 
 /**
- * Default Ekadashi campaign content — pre-populated with the current Shayani
- * Ekadashi data so the /ekadashi page always renders valid content even before
- * an admin has opened the editor.
+ * Default Ekadashi campaign content — festival-agnostic so the /ekadashi page
+ * always renders valid content even before an admin has opened the editor.
  */
 
 const DEFAULT_CAMPAIGN = {
-  campaignName: "Shayani Ekadashi",
-  pageTitle: "Shayani Ekadashi Seva",
-  metaTitle: "Shayani Ekadashi Seva | Hare Krishna Vaikuntham Temple, Visakhapatnam",
+  campaignName: "Ekadashi",
+  pageTitle: "Ekadashi Seva",
+  metaTitle: "Ekadashi Seva | Hare Krishna Vaikuntham Temple, Visakhapatnam",
   metaDesc:
-    "Donate on Shayani Ekadashi (Ashadhi Ekadashi) as Lord Vishnu begins His four months of divine rest. Sponsor seva at the Hare Krishna Vaikuntham Temple on one of the year's most sacred days.",
-  ogTitle: "Shayani Ekadashi Seva — Hare Krishna Vaikuntham Temple",
+    "Ekadashi is the most sacred day of the Vedic calendar — a day of fasting and devotion dear to Lord Vishnu. Sponsor Ekadashi seva at the Hare Krishna Vaikuntham Temple and earn deep spiritual merit.",
+  ogTitle: "Ekadashi Seva — Hare Krishna Vaikuntham Temple",
   ogDesc:
-    "Offer seva on Shayani Ekadashi at the Hare Krishna Vaikuntham Temple. Your donation sustains daily worship, sacred bhog, and festive arrangements during Chaturmas.",
+    "Offer seva on Ekadashi at the Hare Krishna Vaikuntham Temple, Visakhapatnam. Your donation sustains daily worship, sacred bhog, and festive arrangements on this holiest of days.",
   ogImage:
-    "https://pub-32ade8e1209149f980ffe2aa4ddc6c99.r2.dev/ekadashi-posters/ad%20poster%201%2016-9%20%20final%20.jpg.webp",
+    "https://pub-32ade8e1209149f980ffe2aa4ddc6c99.r2.dev/media-library/1790154963930-1790154963675-ekadashidesk.webp",
   heroImage:
-    "https://pub-32ade8e1209149f980ffe2aa4ddc6c99.r2.dev/ekadashi-posters/ad%20poster%201%2016-9%20%20final%20.jpg.webp",
+    "https://pub-32ade8e1209149f980ffe2aa4ddc6c99.r2.dev/media-library/1790154963930-1790154963675-ekadashidesk.webp",
   heroImageMobile:
-    "https://pub-32ade8e1209149f980ffe2aa4ddc6c99.r2.dev/ekadashi-posters/poster%202%20final%20.jpg.webp",
+    "https://pub-32ade8e1209149f980ffe2aa4ddc6c99.r2.dev/media-library/1790154964558-1790154963685-ekadashimob.webp",
   heroTagline: "A seva initiative of Hare Krishna Movement Visakhapatnam",
-  heroHeading1: "Shayani Ekadashi",
+  heroHeading1: "Ekadashi",
   heroHeading2: "Seva",
   heroDesc:
-    "Donate on Shayani Ekadashi (Ashadhi Ekadashi) as Lord Vishnu begins His four months of divine rest, and offer seva at the Hare Krishna Vaikuntham Temple on one of the year's most sacred days.",
+    "Ekadashi — the eleventh day of the lunar fortnight — is one of the most sacred days of the year, a day of fasting and devotion beloved by Lord Vishnu. Offer seva at the Hare Krishna Vaikuntham Temple and earn deep spiritual merit on this holiest of days.",
   formHeading: "Donate for Ekadashi Seva",
   formSubheading:
     "Your donation on this sacred day supports special puja arrangements, sacred bhog, and temple seva performed at the Hare Krishna Vaikuntham Temple.",
@@ -156,50 +155,50 @@ const DEFAULT_CAMPAIGN = {
 
   significancePoints: [
     {
-      title: "Divine Rest Begins",
-      text: "Lord Vishnu enters His four-month period of Yog Nidra (divine sleep) on Shayani Ekadashi. Donations made on this day are believed to reach the Lord directly during this sacred time.",
+      title: "The Most Sacred Day",
+      text: "Ekadashi, the eleventh lunar day, is deeply dear to Lord Vishnu. Fasting, prayer, and acts of charity performed on Ekadashi are revered throughout the Vaishnava tradition as a sure path to spiritual purification and the Lord's grace.",
     },
     {
-      title: "Purification of Sins",
-      text: "Scriptures state that charity performed on Shayani Ekadashi purifies past karmas and brings prosperity to the giver's household throughout Chaturmas.",
+      title: "Merit Multiplied",
+      text: "Scriptures declare that the merit earned on Ekadashi is magnified manifold — far beyond ordinary days. Every prayer offered and every gift given on this sacred day carries exceptional spiritual weight.",
     },
     {
-      title: "Auspicious Beginnings",
-      text: "Any auspicious ceremony or seva performed on this day carries manifold merit. The spiritual vibrations of the temple are especially elevated during this period.",
+      title: "Purification and Prosperity",
+      text: "Charity and penance performed on Ekadashi are said to purify past karmas and bring peace and prosperity to the giver's family and household for generations.",
     },
     {
-      title: "Special Grace Throughout Chaturmas",
-      text: "Devotees who serve with sincerity during Shayani Ekadashi are believed to receive Lord Vishnu's special grace throughout the four months of Chaturmas.",
+      title: "A Year of Sacred Days",
+      text: "From Ashadhi (Shayani) and Kamika to Kartik, Putrada, and Mokshada, each Ekadashi of the year holds its own glory. Observing and serving on these days is praised as a complete spiritual practice.",
     },
   ],
 
   whyDonateSections: [
     {
       title: "A Sacred Opportunity to Serve",
-      text: "As Lord Vishnu enters His divine rest, devotees are given a rare window to earn deep spiritual merit through seva. Your contribution on this day helps sustain the daily worship, festive arrangements, and upkeep of the Hare Krishna Vaikuntham Temple, allowing you to take part in the Lord's service even from a distance.",
+      text: "On Ekadashi, devotees fast, chant, and gather at the feet of the Lord. Your contribution on this holy day helps sustain the daily worship, festive arrangements, and upkeep of the Hare Krishna Vaikuntham Temple, allowing you to take part in the Lord's service even from a distance.",
     },
     {
       title: "Seva That Reaches the Lord Directly",
-      text: "Every rupee offered on Shayani Ekadashi goes toward special puja arrangements, sacred bhog preparation, decoration of the Deities, and the temple's daily rituals. Donating on this day is considered a direct offering placed at the Lord's lotus feet, carrying significance beyond an ordinary act of charity.",
+      text: "Every rupee offered on Ekadashi goes toward special puja arrangements, sacred bhog preparation, decoration of the Deities, and the temple's daily rituals. Donating on this day is considered a direct offering placed at the Lord's lotus feet — far beyond an ordinary act of charity.",
     },
     {
       title: "Blessings for You and Your Family",
-      text: "Scriptures state that charity performed on Ekadashi, especially Shayani Ekadashi, purifies past karmas and brings prosperity to the giver's household. As the Lord begins His four months of Yog Nidra, devotees who serve with sincerity during this period are believed to receive His special grace throughout Chaturmas.",
+      text: "Scriptures state that charity performed on Ekadashi purifies past karmas and brings prosperity to the giver's household. By serving the Lord and His devotees on this sacred day, you and your family become partakers of the divine grace it brings.",
     },
     {
       title: "Be Part of the Temple's Ongoing Worship",
-      text: "The Hare Krishna Vaikuntham Temple continues its daily seva through the support of devotees like you. Your Shayani Ekadashi donation ensures that the worship, bhog, and celebrations at the temple continue uninterrupted, connecting you to the temple's spiritual mission even if you cannot visit in person.",
+      text: "The Hare Krishna Vaikuntham Temple continues its daily seva through the support of devotees like you. Your Ekadashi donation ensures that the worship, bhog, and celebrations at the temple continue uninterrupted, connecting you to the temple's spiritual mission even if you cannot visit in person.",
     },
   ],
 
   faqs: [
     {
-      q: "What is Shayani Ekadashi?",
-      a: "Shayani Ekadashi (also known as Ashadhi Ekadashi) is one of the most sacred Ekadashi days in the Hindu calendar. It marks the day Lord Vishnu enters His four-month period of divine sleep (Yog Nidra) on the cosmic ocean. Donations and seva performed on this day are considered extremely auspicious.",
+      q: "What is Ekadashi?",
+      a: "Ekadashi is the eleventh day of each lunar fortnight and one of the most sacred days in the Vedic calendar. Dedicated to Lord Vishnu, it is a day of fasting, prayer, charity, and worship. Every Ekadashi of the year — from Ashadhi (Shayani) and Kamika to Kartik, Putrada, and Mokshada — is considered highly auspicious, each with its own glory.",
     },
     {
-      q: "Why should I donate on Shayani Ekadashi?",
-      a: "Donating on Shayani Ekadashi is believed to purify past karmas and bring prosperity. As the Lord begins His divine rest, your seva sustains the temple's worship and carries special spiritual merit throughout the four months of Chaturmas.",
+      q: "Why should I donate on Ekadashi?",
+      a: "Ekadashi is a day of exceptional spiritual merit. Donations and seva performed on this day are believed to purify past karmas and bring prosperity. Your offering sustains the temple's worship and carries deep blessings for you and your family.",
     },
     {
       q: "How will my donation be used?",
@@ -234,6 +233,25 @@ const DEFAULT_CAMPAIGN = {
   },
 };
 
+// Legacy campaigns were saved under the "Shayani Ekadashi" name. Any copy
+// still carrying it is rewritten to the record's current campaignName so the
+// rename propagates to SSR, the admin editor and every rendered section.
+function normalizeLegacyNames(content) {
+  if (!content || typeof content !== "object") return content;
+  const name = String(content.campaignName || "Ekadashi").trim() || "Ekadashi";
+  const rewrite = (v) => {
+    if (typeof v === "string") return v.replace(/Shayani Ekadashi/g, name);
+    if (Array.isArray(v)) return v.map(rewrite);
+    if (v && typeof v === "object") {
+      const out = {};
+      for (const [k, val] of Object.entries(v)) out[k] = rewrite(val);
+      return out;
+    }
+    return v;
+  };
+  return rewrite(content);
+}
+
 /** Shallow + deep merge for nested objects and arrays. */
 function deepMerge(target, source) {
   const result = { ...target };
@@ -252,7 +270,7 @@ function deepMerge(target, source) {
 }
 
 function mergeWithDefaults(content) {
-  return deepMerge(DEFAULT_CAMPAIGN, content || {});
+  return normalizeLegacyNames(deepMerge(DEFAULT_CAMPAIGN, content || {}));
 }
 
 const ekadashiCampaignController = {

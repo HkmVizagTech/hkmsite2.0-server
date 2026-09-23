@@ -1119,6 +1119,242 @@ const donationController = {
       res.status(500).json({ message: "Server error", error: err.message });
     }
   },
+
+  // ─── Maha Prasadam courier tracking ───────────────────────────────────
+  // Powers the Prasadam tab in /admin/donations: every donation where the
+  // donor opted for Maha Prasadam delivery, with admin-managed dispatch
+  // status (pending → dispatched → delivered, or cancelled), courier
+  // details, and a CSV download for the courier run.
+
+  // GET /donations/prasadam-requests?status=&q=&page=&limit=
+  // Lists donations with wantPrasadam=true, newest first. Default shows only
+  // completed payments (only those actually get a courier box); pass
+  // status=all to include pending/failed payments too.
+  listPrasadamRequests: async (req, res) => {
+    try {
+      const { status, q } = req.query;
+      const filter = { wantPrasadam: true };
+
+      if (status && status !== "all") {
+        if (status === "not_dispatched") {
+          // Work queue: completed payments that haven't left the temple yet.
+          filter.status = "completed";
+          filter.$or = [
+            { prasadamStatus: { $exists: false } },
+            { prasadamStatus: null },
+            { prasadamStatus: "pending" },
+          ];
+        } else if (status === "pending") {
+          // Old records pre-dating tracking have no prasadamStatus at all —
+          // they ARE pending, so include them alongside explicit pendings.
+          filter.$or = [
+            { prasadamStatus: "pending" },
+            { prasadamStatus: { $exists: false } },
+            { prasadamStatus: null },
+          ];
+        } else {
+          filter.prasadamStatus = status;
+        }
+      } else {
+        filter.status = "completed";
+      }
+
+      if (q) {
+        const re = new RegExp(String(q).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+        filter.$or = [
+          { donorName: re },
+          { donorMobile: re },
+          { donorEmail: re },
+          { "prasadamAddress.pincode": re },
+          { prasadamTrackingNumber: re },
+        ];
+      }
+
+      const page = Math.max(1, parseInt(req.query.page || "1", 10));
+      const limit = Math.min(200, Math.max(1, parseInt(req.query.limit || "20", 10)));
+      const skip = (page - 1) * limit;
+
+      const projection = {
+        donorName: 1, donorEmail: 1, donorMobile: 1, amount: 1, status: 1,
+        wantPrasadam: 1, prasadamAddress: 1,
+        prasadamStatus: 1, prasadamCourier: 1, prasadamTrackingNumber: 1,
+        prasadamDispatchedAt: 1, prasadamDeliveredAt: 1, prasadamNotes: 1,
+        sevaName: 1, type: 1, sourcePage: 1, createdAt: 1,
+        razorpayOrderId: 1, razorpayPaymentId: 1, receiptNumber: 1,
+      };
+
+      const [total, requests, counts] = await Promise.all([
+        donationModel.countDocuments(filter),
+        donationModel
+          .find(filter)
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(limit)
+          .select(projection)
+          .lean(),
+        // Tab badges — computed on the full completed-payment set so the
+        // numbers don't shift meaning when a text filter is active.
+        donationModel.aggregate([
+          { $match: { wantPrasadam: true, status: "completed" } },
+          { $group: { _id: "$prasadamStatus", count: { $sum: 1 } } },
+        ]),
+      ]);
+
+      const badgeCounts = { all: 0, pending: 0, dispatched: 0, delivered: 0, cancelled: 0 };
+      for (const row of counts) {
+        const key = row._id || "pending"; // old records predate the field → treat as pending
+        if (badgeCounts[key] !== undefined) badgeCounts[key] += row.count;
+        badgeCounts.all += row.count;
+      }
+
+      res.status(200).json({ requests, total, page, limit, badgeCounts });
+    } catch (err) {
+      console.error("donation.listPrasadamRequests error:", err);
+      res.status(500).json({ success: false, message: "Failed to fetch prasadam requests" });
+    }
+  },
+
+  // PUT /donations/:id/prasadam-status
+  // Admin marks a request dispatched (with courier + tracking number) or
+  // delivered/cancelled. Timestamps are set server-side; rejected outright
+  // for non-prasadam donations so a misclick elsewhere can't forge a record.
+  updatePrasadamStatus: async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { prasadamStatus, prasadamCourier, prasadamTrackingNumber, prasadamNotes } = req.body || {};
+
+      const PRASADAM_STATUSES = ["pending", "dispatched", "delivered", "cancelled"];
+      if (!PRASADAM_STATUSES.includes(prasadamStatus)) {
+        return res.status(400).json({ success: false, message: "prasadamStatus must be one of: pending, dispatched, delivered, cancelled" });
+      }
+
+      const donation = await donationModel.findById(id);
+      if (!donation) return res.status(404).json({ success: false, message: "Donation not found" });
+      if (!donation.wantPrasadam) {
+        return res.status(400).json({ success: false, message: "This donation has no Maha Prasadam request to track." });
+      }
+
+      donation.prasadamStatus = prasadamStatus;
+      if (prasadamCourier !== undefined) donation.prasadamCourier = String(prasadamCourier || "").trim();
+      if (prasadamTrackingNumber !== undefined) donation.prasadamTrackingNumber = String(prasadamTrackingNumber || "").trim();
+      if (prasadamNotes !== undefined) donation.prasadamNotes = String(prasadamNotes || "").trim();
+
+      const now = new Date();
+      if (prasadamStatus === "dispatched") {
+        donation.prasadamDispatchedAt = now;
+        // Delivered timestamp can't survive a move back to dispatched.
+        donation.prasadamDeliveredAt = undefined;
+      } else if (prasadamStatus === "delivered") {
+        // Allow marking delivered directly (courier confirmed verbally).
+        if (!donation.prasadamDispatchedAt) donation.prasadamDispatchedAt = now;
+        donation.prasadamDeliveredAt = now;
+      } else if (prasadamStatus === "pending" || prasadamStatus === "cancelled") {
+        donation.prasadamDispatchedAt = undefined;
+        donation.prasadamDeliveredAt = undefined;
+      }
+
+      await donation.save();
+      res.status(200).json({ success: true, message: `Prasadam request marked ${prasadamStatus}`, donation });
+    } catch (err) {
+      console.error("donation.updatePrasadamStatus error:", err);
+      res.status(500).json({ success: false, message: err.message || "Failed to update prasadam status" });
+    }
+  },
+
+  // GET /donations/prasadam-export — CSV for the courier dispatch run:
+  // one row per completed donation that opted for Maha Prasadam, honoring
+  // the same status/q filters as the list endpoint (without pagination).
+  exportPrasadamCsv: async (req, res) => {
+    try {
+      const { status, q } = req.query;
+      const filter = { wantPrasadam: true, status: "completed" };
+
+      if (status && status !== "all") {
+        if (status === "not_dispatched" || status === "pending") {
+          // Both filters mean "not sent yet" — old records pre-dating
+          // tracking have no prasadamStatus at all but ARE pending.
+          filter.$or = [
+            { prasadamStatus: "pending" },
+            { prasadamStatus: { $exists: false } },
+            { prasadamStatus: null },
+          ];
+        } else {
+          filter.prasadamStatus = status;
+        }
+      }
+
+      if (q) {
+        const re = new RegExp(String(q).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+        filter.$or = [
+          { donorName: re },
+          { donorMobile: re },
+          { donorEmail: re },
+          { "prasadamAddress.pincode": re },
+          { prasadamTrackingNumber: re },
+        ];
+      }
+
+      const rows = await donationModel
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .select(
+          "donorName donorEmail donorMobile amount sevaName type sourcePage prasadamAddress prasadamStatus prasadamCourier prasadamTrackingNumber prasadamDispatchedAt prasadamDeliveredAt prasadamNotes receiptNumber razorpayOrderId razorpayPaymentId createdAt"
+        )
+        .limit(5000)
+        .lean();
+
+      const csvEscape = (val) => {
+        const str = val === null || val === undefined ? "" : String(val);
+        return /[",\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+      };
+
+      const formatAddress = (a) => {
+        if (!a) return "";
+        return [a.doorNo, a.house, a.street, a.area, a.city, a.state, a.pincode, a.country]
+          .filter(Boolean)
+          .join(", ");
+      };
+
+      const statusLabel = (r) => r.prasadamStatus || "pending";
+
+      const headers = [
+        "Donor Name", "Mobile", "Email", "Amount", "Seva", "Source Page",
+        "Delivery Address", "Pincode", "Prasadam Status", "Courier", "Tracking Number",
+        "Dispatched At", "Delivered At", "Notes", "Receipt Number", "Payment ID", "Donated On",
+      ];
+      const csv = [
+        headers.join(","),
+        ...rows.map((r) =>
+          [
+            r.donorName || "",
+            r.donorMobile || "",
+            r.donorEmail || "",
+            r.amount,
+            r.sevaName || r.type || "",
+            r.sourcePage || "",
+            csvEscape(formatAddress(r.prasadamAddress)),
+            r.prasadamAddress?.pincode || "",
+            statusLabel(r),
+            r.prasadamCourier || "",
+            r.prasadamTrackingNumber || "",
+            r.prasadamDispatchedAt ? new Date(r.prasadamDispatchedAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) : "",
+            r.prasadamDeliveredAt ? new Date(r.prasadamDeliveredAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) : "",
+            csvEscape(r.prasadamNotes || ""),
+            r.receiptNumber || "",
+            r.razorpayPaymentId || r.razorpayOrderId || "",
+            r.createdAt ? new Date(r.createdAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) : "",
+          ].join(",")
+        ),
+      ].join("\n");
+
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="prasadam-dispatch-${new Date().toISOString().slice(0, 10)}.csv"`);
+      res.status(200).send(csv);
+    } catch (err) {
+      console.error("donation.exportPrasadamCsv error:", err);
+      res.status(500).json({ success: false, message: "Failed to export prasadam CSV" });
+    }
+  },
 };
 
 module.exports = { donationController };
