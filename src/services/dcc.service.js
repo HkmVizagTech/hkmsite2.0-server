@@ -194,6 +194,57 @@ const DEFAULT_NAME_BASED_SEVA_MAPPINGS = [
     sevaSubCategory: 10,
     sevaSubCategoryCode: 27,
   },
+  // ---- Govardhan Puja festival sevas ----
+  // /govardhan-puja (component GovardhanPujaClient) sends
+  // festivalSlug:"govardhan-puja" + sevaName = the seva title. Codes below are
+  // the real DCC sub-category codes from SevaList2026 ("Govardhan Puja",
+  // SevaCategoryId 3 / SevaSubCategoryId 6) — scoped so they apply only to
+  // Govardhan Puja donations.
+  // NOTE: "Govardhan Seva" (the main worship sponsor) has no literal DCC
+  // entry — mapped to Yajamana Seva (9); swap if the temple prefers another.
+  {
+    sevaNameIncludes: ["govardhan seva"],
+    festivalSlug: "govardhan-puja",
+    sevaCategory: 3,
+    sevaSubCategory: 6,
+    sevaSubCategoryCode: 9,
+  },
+  {
+    sevaNameIncludes: ["gau seva", "go seva", "cow", "goshala"],
+    festivalSlug: "govardhan-puja",
+    sevaCategory: 3,
+    sevaSubCategory: 6,
+    sevaSubCategoryCode: 131,
+  },
+  {
+    sevaNameIncludes: ["bhog seva", "rajbhog"],
+    festivalSlug: "govardhan-puja",
+    sevaCategory: 3,
+    sevaSubCategory: 6,
+    sevaSubCategoryCode: 79,
+  },
+  {
+    sevaNameIncludes: ["alankar seva", "pushpalankara", "alankara seva"],
+    festivalSlug: "govardhan-puja",
+    sevaCategory: 3,
+    sevaSubCategory: 6,
+    sevaSubCategoryCode: 8,
+  },
+  {
+    sevaNameIncludes: ["annakoot", "annakuta", "annakoota"],
+    festivalSlug: "govardhan-puja",
+    sevaCategory: 3,
+    sevaSubCategory: 6,
+    sevaSubCategoryCode: 11,
+  },
+  {
+    sevaNameIncludes: ["vaishnav bhojan", "vaishnava bhojan", "sadhu bhojan"],
+    festivalSlug: "govardhan-puja",
+    sevaCategory: 3,
+    sevaSubCategory: 6,
+    // Feeding devotees → Annadana Seva (no separate Vaishnav Bhojan entry)
+    sevaSubCategoryCode: 6,
+  },
   // ---- Pitru Paksha festival sevas ----
   // /pitru-paksha now sends the SAME `type` code as the standalone seva
   // pages, so these match the regular seva DCC codes (ANGE / GOSE / MNSO-S /
