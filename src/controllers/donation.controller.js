@@ -1126,28 +1126,27 @@ const donationController = {
   // status (pending → dispatched → delivered, or cancelled), courier
   // details, and a CSV download for the courier run.
 
-  // GET /donations/prasadam-requests?status=&q=&page=&limit=
-  // Lists donations with wantPrasadam=true, newest first. Default shows only
-  // completed payments (only those actually get a courier box); pass
-  // status=all to include pending/failed payments too.
+  // GET /donations/prasadam-requests?status=&q=&from=&to=&seva=&sourcePage=&page=&limit=
+  // Lists prasadam opt-ins (wantPrasadam=true, completed payments only — only
+  // those actually get a courier box), newest first. The standalone /donations
+  // page family is EXCLUDED: that page has its own dedicated admin and its
+  // donors are not this panel's business, so they never show up here.
   listPrasadamRequests: async (req, res) => {
     try {
-      const { status, q } = req.query;
-      const filter = { wantPrasadam: true };
+      const { status, q, seva, sourcePage } = req.query;
+      const filter = {
+        wantPrasadam: true,
+        status: "completed",
+        ...EXCLUDE_DONATIONS_PAGE,
+        ...buildDateRangeMatch(req.query.from, req.query.to),
+      };
 
+      let statusOr = null;
       if (status && status !== "all") {
-        if (status === "not_dispatched") {
-          // Work queue: completed payments that haven't left the temple yet.
-          filter.status = "completed";
-          filter.$or = [
-            { prasadamStatus: { $exists: false } },
-            { prasadamStatus: null },
-            { prasadamStatus: "pending" },
-          ];
-        } else if (status === "pending") {
-          // Old records pre-dating tracking have no prasadamStatus at all —
-          // they ARE pending, so include them alongside explicit pendings.
-          filter.$or = [
+        if (status === "not_dispatched" || status === "pending") {
+          // Work queue: not sent yet. Old records pre-dating tracking have no
+          // prasadamStatus at all — they ARE pending, so include them.
+          statusOr = [
             { prasadamStatus: "pending" },
             { prasadamStatus: { $exists: false } },
             { prasadamStatus: null },
@@ -1155,19 +1154,29 @@ const donationController = {
         } else {
           filter.prasadamStatus = status;
         }
-      } else {
-        filter.status = "completed";
       }
+
+      if (seva) filter.sevaName = seva;
+      if (sourcePage) filter.sourcePage = sourcePage;
 
       if (q) {
         const re = new RegExp(String(q).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-        filter.$or = [
+        const searchOr = [
           { donorName: re },
           { donorMobile: re },
           { donorEmail: re },
           { "prasadamAddress.pincode": re },
           { prasadamTrackingNumber: re },
         ];
+        // statusOr and searchOr are both $or clauses — merging needs $and,
+        // otherwise one silently overwrites the other.
+        if (statusOr) {
+          filter.$and = [{ $or: statusOr }, { $or: searchOr }];
+        } else {
+          filter.$or = searchOr;
+        }
+      } else if (statusOr) {
+        filter.$or = statusOr;
       }
 
       const page = Math.max(1, parseInt(req.query.page || "1", 10));
@@ -1183,7 +1192,12 @@ const donationController = {
         razorpayOrderId: 1, razorpayPaymentId: 1, receiptNumber: 1,
       };
 
-      const [total, requests, counts] = await Promise.all([
+      // Dropdown options for the seva / page filters — distinct values
+      // across ALL prasadam opt-ins (excluding /donations), so the option
+      // lists stay stable no matter what is currently filtered.
+      const optMatch = { wantPrasadam: true, status: "completed", ...EXCLUDE_DONATIONS_PAGE };
+
+      const [total, requests, counts, sevaAgg, pageAgg] = await Promise.all([
         donationModel.countDocuments(filter),
         donationModel
           .find(filter)
@@ -1192,11 +1206,21 @@ const donationController = {
           .limit(limit)
           .select(projection)
           .lean(),
-        // Tab badges — computed on the full completed-payment set so the
-        // numbers don't shift meaning when a text filter is active.
+        // Tab badges — computed on the full opt-in set so the numbers don't
+        // shift meaning when filters are active.
         donationModel.aggregate([
-          { $match: { wantPrasadam: true, status: "completed" } },
+          { $match: optMatch },
           { $group: { _id: "$prasadamStatus", count: { $sum: 1 } } },
+        ]),
+        donationModel.aggregate([
+          { $match: optMatch },
+          { $group: { _id: "$sevaName" } },
+          { $sort: { _id: 1 } },
+        ]),
+        donationModel.aggregate([
+          { $match: optMatch },
+          { $group: { _id: "$sourcePage" } },
+          { $sort: { _id: 1 } },
         ]),
       ]);
 
@@ -1207,7 +1231,17 @@ const donationController = {
         badgeCounts.all += row.count;
       }
 
-      res.status(200).json({ requests, total, page, limit, badgeCounts });
+      res.status(200).json({
+        requests,
+        total,
+        page,
+        limit,
+        badgeCounts,
+        filterOptions: {
+          sevas: sevaAgg.map((r) => r._id).filter(Boolean),
+          pages: pageAgg.map((r) => r._id).filter(Boolean),
+        },
+      });
     } catch (err) {
       console.error("donation.listPrasadamRequests error:", err);
       res.status(500).json({ success: false, message: "Failed to fetch prasadam requests" });
@@ -1263,11 +1297,17 @@ const donationController = {
 
   // GET /donations/prasadam-export — CSV for the courier dispatch run:
   // one row per completed donation that opted for Maha Prasadam, honoring
-  // the same status/q filters as the list endpoint (without pagination).
+  // the same status/q/seva/sourcePage/date filters as the list endpoint
+  // (without pagination). /donations family excluded — same as the list.
   exportPrasadamCsv: async (req, res) => {
     try {
-      const { status, q } = req.query;
-      const filter = { wantPrasadam: true, status: "completed" };
+      const { status, q, seva, sourcePage } = req.query;
+      const filter = {
+        wantPrasadam: true,
+        status: "completed",
+        ...EXCLUDE_DONATIONS_PAGE,
+        ...buildDateRangeMatch(req.query.from, req.query.to),
+      };
 
       if (status && status !== "all") {
         if (status === "not_dispatched" || status === "pending") {
@@ -1282,6 +1322,9 @@ const donationController = {
           filter.prasadamStatus = status;
         }
       }
+
+      if (seva) filter.sevaName = seva;
+      if (sourcePage) filter.sourcePage = sourcePage;
 
       if (q) {
         const re = new RegExp(String(q).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
