@@ -21,6 +21,12 @@ donationRouter.post("/backfill-donors", authMiddleware, adminMiddleware, donatio
 // Bulk resend for a window of receipts that never went out (provider outage).
 // Declared before the "/:id/..." routes so it can never be read as an id.
 donationRouter.post("/resend-recent-whatsapp", authMiddleware, adminMiddleware, donationController.resendRecentWhatsApp);
+// Maha Prasadam courier tracking (admin → Donations → Prasadam tab).
+// Declared before the "/:id/..." routes so "prasadam-requests" and
+// "prasadam-export" can never be parsed as an :id.
+donationRouter.get("/prasadam-requests", authMiddleware, adminMiddleware, donationController.listPrasadamRequests);
+donationRouter.get("/prasadam-export", authMiddleware, adminMiddleware, donationController.exportPrasadamCsv);
+donationRouter.put("/:id/prasadam-status", authMiddleware, adminMiddleware, donationController.updatePrasadamStatus);
 donationRouter.get("/:id", authMiddleware, adminMiddleware, donationController.get);
 donationRouter.post("/:id/resend-receipt", authMiddleware, adminMiddleware, donationController.resendReceipt);
 donationRouter.put("/:id/receipt-number", authMiddleware, adminMiddleware, donationController.patchReceiptNumber);
