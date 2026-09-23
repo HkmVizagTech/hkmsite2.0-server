@@ -194,6 +194,48 @@ const DEFAULT_NAME_BASED_SEVA_MAPPINGS = [
     sevaSubCategory: 10,
     sevaSubCategoryCode: 27,
   },
+  // ---- Pitru Paksha festival sevas ----
+  // /pitru-paksha now sends the SAME `type` code as the standalone seva
+  // pages, so these match the regular seva DCC codes (ANGE / GOSE / MNSO-S /
+  // MNSO-B). Scoped to festivalSlug:"pitru-paksha" so no other page's
+  // donation can cross-match these entries (both conditions must hold).
+  {
+    festivalSlug: "pitru-paksha",
+    type: ["ANNADAAN"],
+    sevaCategory: 1,
+    sevaSubCategory: 1,
+    sevaSubCategoryCode: "ANGE",
+  },
+  {
+    festivalSlug: "pitru-paksha",
+    type: ["VAISHNAV BHOJAN"],
+    sevaCategory: 1,
+    sevaSubCategory: 1,
+    // TODO: real "Vaishnav Bhojan" seva code once provided — Sadhu Bhojan
+    // intentionally reuses the Annadana code (ANGE) for now.
+    sevaSubCategoryCode: "ANGE",
+  },
+  {
+    festivalSlug: "pitru-paksha",
+    type: ["GO SEVA"],
+    sevaCategory: 20,
+    sevaSubCategory: 76,
+    sevaSubCategoryCode: "GOSE",
+  },
+  {
+    festivalSlug: "pitru-paksha",
+    type: ["SQFT"],
+    sevaCategory: 24,
+    sevaSubCategory: 117,
+    sevaSubCategoryCode: "MNSO-S",
+  },
+  {
+    festivalSlug: "pitru-paksha",
+    type: ["BRICK"],
+    sevaCategory: 24,
+    sevaSubCategory: 118,
+    sevaSubCategoryCode: "MNSO-B",
+  },
   // ---- Generic seva mappings (non-festival) ----
   {
     sevaNameIncludes: ["annadana", "anna daan", "anna-daan", "annadaan", "sadhu bhojan", "sadhu vaishnav bhojan"],
