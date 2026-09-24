@@ -32,6 +32,22 @@ const siteContentSchema = new mongoose.Schema(
       // festivals (e.g. Radhashtami for weeks around its date) in the nav.
       majorFestival: { type: String, default: "none" },
     },
+    festival: {
+      // Hero banners for the /festival index page. The festival title is
+      // baked into the artwork, so the page renders the image standalone.
+      // Editable under Admin → Content → Festivals; matched on the client by
+      // lib/festivalShowcase.ts FESTIVAL_PAGE_BANNER.
+      bannerDesktop: {
+        type: String,
+        default:
+          "https://pub-32ade8e1209149f980ffe2aa4ddc6c99.r2.dev/media-library/1790229048498-1790229047458-festivaldesk.webp",
+      },
+      bannerMobile: {
+        type: String,
+        default:
+          "https://pub-32ade8e1209149f980ffe2aa4ddc6c99.r2.dev/media-library/1790229047831-1790229047198-Festivalmob.webp",
+      },
+    },
     updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "user" },
   },
   { timestamps: true, versionKey: false }
