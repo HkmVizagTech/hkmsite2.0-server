@@ -100,15 +100,37 @@ function assertDelivered(payload, context) {
   throw err;
 }
 
+// Nothing here may hang indefinitely. When Flaxxa's origin went down behind
+// Cloudflare (522), an un-timed-out fetch left OTP requests hanging for
+// MINUTES — the donor saw a dead spinner and the logs filled with nothing
+// until the socket finally gave up. A bounded wait turns a provider outage
+// into a fast, explainable error instead.
+const WAPI_TIMEOUT_MS = Number(process.env.WAPI_TIMEOUT_MS || 15000);
+
 async function callWapi(path, body) {
   const token = process.env.WAPI_TOKEN;
   if (!token) throw new Error("WAPI_TOKEN is not set");
 
-  const res = await fetch(`${WAPI_BASE}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ token, ...body }),
-  });
+  let res;
+  try {
+    res = await fetch(`${WAPI_BASE}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, ...body }),
+      signal: AbortSignal.timeout(WAPI_TIMEOUT_MS),
+    });
+  } catch (err) {
+    // AbortError/TimeoutError and undici's bare "fetch failed" are both
+    // unreachable-provider cases; name them so callers and logs can tell
+    // them apart from a message Meta actually rejected.
+    const reason = err && err.name === "TimeoutError"
+      ? `timed out after ${WAPI_TIMEOUT_MS}ms`
+      : (err && err.message) || String(err);
+    const wrapped = new Error(`WhatsApp provider unreachable (${WAPI_BASE}): ${reason}`);
+    wrapped.cause = err;
+    wrapped.providerUnreachable = true;
+    throw wrapped;
+  }
 
   const raw = await res.text();
   let parsed;
@@ -119,10 +141,22 @@ async function callWapi(path, body) {
   }
 
   if (!res.ok) {
-    const message = (parsed && parsed.message) || raw || `WAPI request failed with status ${res.status}`;
+    // When the provider is down its edge (Cloudflare) answers with a full
+    // HTML error page. Using that as the error message dumped a hundred lines
+    // of markup into the logs per failed send and buried everything else, so
+    // an HTML body is reported as what it actually is and the raw text is
+    // capped either way.
+    const looksLikeHtml = /^\s*<(?:!doctype|html)/i.test(raw);
+    const message = looksLikeHtml
+      ? `WhatsApp provider returned an HTTP ${res.status} error page (provider outage, not a rejected message)`
+      : (parsed && parsed.message) || (raw ? raw.slice(0, 300) : "") || `WAPI request failed with status ${res.status}`;
+
     const err = new Error(message);
     err.status = res.status;
-    err.response = parsed;
+    err.response = looksLikeHtml ? { status: res.status, html: true } : parsed;
+    // 5xx and Cloudflare's 52x are the provider failing, not Meta rejecting
+    // this particular message — callers word those differently.
+    if (looksLikeHtml || res.status >= 500) err.providerUnreachable = true;
     throw err;
   }
 
@@ -202,6 +236,10 @@ async function postTemplateWithAttachment(normalizedPhone, templateName, compone
     headers: form.getHeaders(),
     maxBodyLength: Infinity,
     maxContentLength: Infinity,
+    // Same reasoning as callWapi: an unreachable provider must fail fast
+    // rather than hold the request open. Longer than the JSON timeout because
+    // this one is uploading a PDF.
+    timeout: Number(process.env.WAPI_UPLOAD_TIMEOUT_MS || 45000),
   });
 
   return assertDelivered(response.data, `template "${templateName}" (+${contentType}) -> ${normalizedPhone}`);

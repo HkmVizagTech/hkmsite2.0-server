@@ -41,51 +41,62 @@ async function issueOtpForDonor(donor, res) {
   const otpCode = String(Math.floor(100000 + Math.random() * 900000)); // 6 digits
   const otpCodeHash = hashOtp(otpCode);
 
-  // ── Store, answer, THEN send. ──────────────────────────────────────────
+  // ── Send FIRST, then store, then answer. ───────────────────────────────
   //
-  // The WhatsApp template send takes ~2.3s of Flaxxa/Meta queueing (measured
-  // live 2026-09-15) against ~70ms for the DB write. Awaiting it before
-  // answering meant the donor watched a spinner for that whole time before
-  // the OTP screen even appeared — the single slowest thing in the login.
+  // This ordering is deliberate and must stay this way. It was briefly
+  // inverted (store + answer immediately, send in the background) to hide the
+  // ~2.3s the WhatsApp send costs, and that was a mistake on two counts:
   //
-  // Nothing here is answered dishonestly: the code is valid the instant it is
-  // stored, and what follows is delivery, not issuance.
+  //   1. The response stopped meaning anything. "OTP sent" was returned
+  //      before a single byte had left, so when the send then failed the
+  //      donor sat waiting for a code that was never going to arrive.
+  //   2. A background send does not survive a deploy. The container
+  //      restarting between the response and the send drops it silently —
+  //      nothing reaches WhatsApp, and nothing shows in the provider's
+  //      outbox either, because the request was never made.
   //
-  // The old order bought one real guarantee — never store an OTP the donor
-  // didn't receive. That is kept, just enforced after the fact: if the send
-  // throws (whatsapp.service's assertDelivered treats a null wamid as a
-  // failure), the stored code is wiped immediately, the reason is recorded,
-  // and the cooldown is lifted so they can retry at once instead of waiting
-  // out 60s for a message that never went. verify-otp reads that reason back,
-  // so someone who never got a code is told exactly that rather than
-  // "incorrect OTP".
+  // Waiting is the honest thing to do: the donor is told the code is sent
+  // only once the provider has actually accepted it, and any failure comes
+  // back on THIS response where the UI can show it. The couple of seconds is
+  // worth that. The timeout inside whatsapp.service keeps the wait bounded.
+  await sendDonorOtp(donor.mobile, otpCode);
+
+  // Only persist the OTP after a confirmed send — a failed/rejected send
+  // (see whatsapp.service.js's assertDelivered) throws before reaching here,
+  // so no OTP is stored for a code the person never actually received.
   await donorModel.findByIdAndUpdate(donor._id, {
     otpCodeHash,
     otpExpiresAt: new Date(Date.now() + OTP_TTL_MS),
     otpAttempts: 0,
     otpLastRequestedAt: new Date(),
-    $unset: { otpSendError: "", otpSendFailedAt: "" },
   });
 
-  res.status(200).json({ success: true, message: "OTP sent via WhatsApp." });
-
-  try {
-    await sendDonorOtp(donor.mobile, otpCode);
-  } catch (err) {
-    const message = err && err.message ? err.message : String(err);
-    console.error("donorAuth: OTP WhatsApp send failed for", donor.mobile, message);
-    try {
-      await donorModel.findByIdAndUpdate(donor._id, {
-        otpSendError: message,
-        otpSendFailedAt: new Date(),
-        $unset: { otpCodeHash: "", otpExpiresAt: "", otpLastRequestedAt: "" },
-      });
-    } catch (cleanupErr) {
-      // Nothing left to tell the client — the response has already gone out.
-      console.error("donorAuth: could not clear the undelivered OTP:", cleanupErr && cleanupErr.message);
-    }
-  }
+  return res.status(200).json({ success: true, message: "OTP sent via WhatsApp." });
 }
+
+// A failed send is nearly always one of two things, and they need different
+// words: the WhatsApp provider being unreachable (an outage on their side —
+// nothing the donor can fix by retyping) versus Meta rejecting this specific
+// message. Saying "please try again" for an outage sends people in circles.
+const otpFailureMessage = (err) => {
+  const raw = String((err && err.message) || err || "").toLowerCase();
+  const providerDown =
+    raw.includes("timed out") ||
+    raw.includes("timeout") ||
+    raw.includes("fetch failed") ||
+    raw.includes("econn") ||
+    raw.includes("enotfound") ||
+    raw.includes("socket hang up") ||
+    raw.includes("network") ||
+    raw.includes("502") ||
+    raw.includes("503") ||
+    raw.includes("522") ||
+    raw.includes("cloudflare");
+
+  return providerDown
+    ? "Our WhatsApp provider isn't responding right now, so the code couldn't be sent. Please try again in a few minutes."
+    : "We couldn't send the code to this number on WhatsApp. Please check the number, or contact us if it keeps failing.";
+};
 
 const donorAuthController = {
   // POST /donor-auth/send-otp { mobile }
@@ -112,7 +123,7 @@ const donorAuthController = {
       return await issueOtpForDonor(donor, res);
     } catch (err) {
       console.error("donorAuth.sendOtp error:", err && err.message ? err.message : err);
-      res.status(500).json({ success: false, message: "Could not send OTP. Please try again." });
+      res.status(502).json({ success: false, message: otpFailureMessage(err) });
     }
   },
 
@@ -142,7 +153,7 @@ const donorAuthController = {
       return await issueOtpForDonor(donor, res);
     } catch (err) {
       console.error("donorAuth.sendShopOtp error:", err && err.message ? err.message : err);
-      res.status(500).json({ success: false, message: "Could not send OTP. Please try again." });
+      res.status(502).json({ success: false, message: otpFailureMessage(err) });
     }
   },
 
@@ -201,20 +212,6 @@ const donorAuthController = {
 
       const donor = await donorModel.findOne({ mobile });
       if (!donor || !donor.otpCodeHash || !donor.otpExpiresAt) {
-        // A recent delivery failure is the far more useful answer than
-        // "request a new OTP" — it tells someone staring at an empty WhatsApp
-        // that the message genuinely never left, not that they mistyped.
-        const failedRecently =
-          donor &&
-          donor.otpSendFailedAt &&
-          Date.now() - donor.otpSendFailedAt.getTime() < OTP_TTL_MS;
-        if (failedRecently) {
-          return res.status(400).json({
-            success: false,
-            message:
-              "We couldn't deliver your code on WhatsApp. Please tap Resend, or contact us if it keeps failing.",
-          });
-        }
         return res.status(400).json({ success: false, message: "Please request a new OTP." });
       }
 
@@ -236,13 +233,7 @@ const donorAuthController = {
 
       // Success — clear the OTP so it can't be reused, issue a session.
       await donorModel.findByIdAndUpdate(donor._id, {
-        $unset: {
-          otpCodeHash: "",
-          otpExpiresAt: "",
-          otpLastRequestedAt: "",
-          otpSendError: "",
-          otpSendFailedAt: "",
-        },
+        $unset: { otpCodeHash: "", otpExpiresAt: "", otpLastRequestedAt: "" },
         otpAttempts: 0,
       });
 
