@@ -48,7 +48,9 @@ const festivalShowcaseSchema = new mongoose.Schema(
     featuredOrder: { type: Number, default: 0 }, // asc — lower numbers appear first among featured ones
     active: { type: Boolean, default: true },
     ctaLabel: { type: String, default: "Donate Now" },
-    ctaHref: { type: String }, // link to the festival's donation page, e.g. /festival/janmashtami
+    ctaHref: { type: String }, // link to the festival's donation page, e.g. /janmashtami
+    donateEnabled: { type: Boolean, default: true }, // master switch for the festival's donate button(s)
+    customLink: { type: String, default: "" }, // full link for "Explore Festival" — /foo or https://…; blank keeps /festivals/<slug>
     gallery: [{ type: String }],
     schedule: [scheduleItemSchema],
     details: [detailSectionSchema], // rich recap sections (used once the festival has happened)
