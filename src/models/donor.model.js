@@ -66,6 +66,13 @@ const donorSchema = new mongoose.Schema(
     otpExpiresAt: { type: Date },
     otpAttempts: { type: Number, default: 0 }, // wrong-code tries against the current OTP; capped to stop brute-forcing a 6-digit code
     otpLastRequestedAt: { type: Date }, // for rate-limiting how often a new OTP can be requested
+    // Why the last OTP never reached this donor. Set only when the WhatsApp
+    // send fails AFTER the code was stored and the request already answered
+    // (see issueOtpForDonor) — it is what lets verify-otp say "the message
+    // couldn't be delivered" instead of the misleading "invalid code".
+    // Cleared on every new request and on successful login.
+    otpSendError: { type: String },
+    otpSendFailedAt: { type: Date },
   },
   { timestamps: true, versionKey: false }
 );

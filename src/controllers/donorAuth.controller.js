@@ -41,24 +41,50 @@ async function issueOtpForDonor(donor, res) {
   const otpCode = String(Math.floor(100000 + Math.random() * 900000)); // 6 digits
   const otpCodeHash = hashOtp(otpCode);
 
-  // Confirmed live (2026-09-15): the WhatsApp template send below takes
-  // ~2.3s on its own — 97% of this whole function's time — versus ~70ms
-  // for the DB write after it. That's Flaxxa/Meta's own API processing
-  // and queueing the message; nothing in our code adds meaningful
-  // latency here. Not something we can speed up from this side.
-  await sendDonorOtp(donor.mobile, otpCode);
-
-  // Only persist the OTP after a confirmed send — a failed/rejected send
-  // (see whatsapp.service.js's assertDelivered) throws before reaching here,
-  // so no OTP is stored for a code the person never actually received.
+  // ── Store, answer, THEN send. ──────────────────────────────────────────
+  //
+  // The WhatsApp template send takes ~2.3s of Flaxxa/Meta queueing (measured
+  // live 2026-09-15) against ~70ms for the DB write. Awaiting it before
+  // answering meant the donor watched a spinner for that whole time before
+  // the OTP screen even appeared — the single slowest thing in the login.
+  //
+  // Nothing here is answered dishonestly: the code is valid the instant it is
+  // stored, and what follows is delivery, not issuance.
+  //
+  // The old order bought one real guarantee — never store an OTP the donor
+  // didn't receive. That is kept, just enforced after the fact: if the send
+  // throws (whatsapp.service's assertDelivered treats a null wamid as a
+  // failure), the stored code is wiped immediately, the reason is recorded,
+  // and the cooldown is lifted so they can retry at once instead of waiting
+  // out 60s for a message that never went. verify-otp reads that reason back,
+  // so someone who never got a code is told exactly that rather than
+  // "incorrect OTP".
   await donorModel.findByIdAndUpdate(donor._id, {
     otpCodeHash,
     otpExpiresAt: new Date(Date.now() + OTP_TTL_MS),
     otpAttempts: 0,
     otpLastRequestedAt: new Date(),
+    $unset: { otpSendError: "", otpSendFailedAt: "" },
   });
 
-  return res.status(200).json({ success: true, message: "OTP sent via WhatsApp." });
+  res.status(200).json({ success: true, message: "OTP sent via WhatsApp." });
+
+  try {
+    await sendDonorOtp(donor.mobile, otpCode);
+  } catch (err) {
+    const message = err && err.message ? err.message : String(err);
+    console.error("donorAuth: OTP WhatsApp send failed for", donor.mobile, message);
+    try {
+      await donorModel.findByIdAndUpdate(donor._id, {
+        otpSendError: message,
+        otpSendFailedAt: new Date(),
+        $unset: { otpCodeHash: "", otpExpiresAt: "", otpLastRequestedAt: "" },
+      });
+    } catch (cleanupErr) {
+      // Nothing left to tell the client — the response has already gone out.
+      console.error("donorAuth: could not clear the undelivered OTP:", cleanupErr && cleanupErr.message);
+    }
+  }
 }
 
 const donorAuthController = {
@@ -175,6 +201,20 @@ const donorAuthController = {
 
       const donor = await donorModel.findOne({ mobile });
       if (!donor || !donor.otpCodeHash || !donor.otpExpiresAt) {
+        // A recent delivery failure is the far more useful answer than
+        // "request a new OTP" — it tells someone staring at an empty WhatsApp
+        // that the message genuinely never left, not that they mistyped.
+        const failedRecently =
+          donor &&
+          donor.otpSendFailedAt &&
+          Date.now() - donor.otpSendFailedAt.getTime() < OTP_TTL_MS;
+        if (failedRecently) {
+          return res.status(400).json({
+            success: false,
+            message:
+              "We couldn't deliver your code on WhatsApp. Please tap Resend, or contact us if it keeps failing.",
+          });
+        }
         return res.status(400).json({ success: false, message: "Please request a new OTP." });
       }
 
@@ -196,7 +236,13 @@ const donorAuthController = {
 
       // Success — clear the OTP so it can't be reused, issue a session.
       await donorModel.findByIdAndUpdate(donor._id, {
-        $unset: { otpCodeHash: "", otpExpiresAt: "", otpLastRequestedAt: "" },
+        $unset: {
+          otpCodeHash: "",
+          otpExpiresAt: "",
+          otpLastRequestedAt: "",
+          otpSendError: "",
+          otpSendFailedAt: "",
+        },
         otpAttempts: 0,
       });
 
