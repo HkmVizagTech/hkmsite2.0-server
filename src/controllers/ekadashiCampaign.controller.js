@@ -1,5 +1,3 @@
-const { ekadashiCampaignModel } = require("../models/ekadashiCampaign.model");
-
 /**
  * Default Ekadashi campaign content — festival-agnostic so the /ekadashi page
  * always renders valid content even before an admin has opened the editor.
@@ -233,91 +231,17 @@ const DEFAULT_CAMPAIGN = {
   },
 };
 
-// Legacy campaigns were saved under the "Shayani Ekadashi" name. Any copy
-// still carrying it is rewritten to the record's current campaignName so the
-// rename propagates to SSR, the admin editor and every rendered section.
-function normalizeLegacyNames(content) {
-  if (!content || typeof content !== "object") return content;
-  const name = String(content.campaignName || "Ekadashi").trim() || "Ekadashi";
-  const rewrite = (v) => {
-    if (typeof v === "string") return v.replace(/Shayani Ekadashi/g, name);
-    if (Array.isArray(v)) return v.map(rewrite);
-    if (v && typeof v === "object") {
-      const out = {};
-      for (const [k, val] of Object.entries(v)) out[k] = rewrite(val);
-      return out;
-    }
-    return v;
-  };
-  return rewrite(content);
-}
-
-/** Shallow + deep merge for nested objects and arrays. */
-function deepMerge(target, source) {
-  const result = { ...target };
-  for (const key of Object.keys(source || {})) {
-    if (
-      source[key] &&
-      typeof source[key] === "object" &&
-      !Array.isArray(source[key])
-    ) {
-      result[key] = deepMerge(result[key] || {}, source[key]);
-    } else if (source[key] !== undefined) {
-      result[key] = source[key];
-    }
-  }
-  return result;
-}
-
-function mergeWithDefaults(content) {
-  return normalizeLegacyNames(deepMerge(DEFAULT_CAMPAIGN, content || {}));
-}
+// The /ekadashi page is a single permanent, festival-agnostic page. Admin
+// editing was removed by request (2026-09) — every Ekadashi of the year
+// reuses this one fixed campaign, so nothing is read from or merged with a
+// database copy. A legacy "Shayani Ekadashi" record may still exist in the
+// DB, but this endpoint intentionally ignores it; the page always renders
+// the fixed generic Ekadashi content and banners below.
 
 const ekadashiCampaignController = {
-  /** Public: returns merged config. Creates a default record if none exists. */
+  /** Public: returns the fixed campaign content for the /ekadashi page. */
   get: async (req, res) => {
-    try {
-      let record = await ekadashiCampaignModel.findOne({ key: "ekadashi" }).lean();
-      if (!record) {
-        record = await ekadashiCampaignModel.create({ key: "ekadashi", content: DEFAULT_CAMPAIGN });
-        record = record.toObject();
-      }
-      return res.json(mergeWithDefaults(record.content));
-    } catch (err) {
-      console.error("ekadashiCampaignController.get error:", err);
-      return res.status(500).json({ message: "Server error" });
-    }
-  },
-
-  /** Admin: returns raw record (or default blob). */
-  getConfig: async (req, res) => {
-    try {
-      let record = await ekadashiCampaignModel.findOne({ key: "ekadashi" }).lean();
-      return res.json(mergeWithDefaults(record && record.content));
-    } catch (err) {
-      console.error("ekadashiCampaignController.getConfig error:", err);
-      return res.status(500).json({ message: "Server error" });
-    }
-  },
-
-  /** Admin: upsert the campaign config. */
-  update: async (req, res) => {
-    try {
-      const content = req.body && typeof req.body === "object" ? req.body : {};
-      const payload = { content };
-      if (req.user && req.user.userId) payload.updatedBy = req.user.userId;
-
-      const record = await ekadashiCampaignModel.findOneAndUpdate(
-        { key: "ekadashi" },
-        payload,
-        { new: true, upsert: true, setDefaultsOnInsert: true }
-      ).lean();
-
-      return res.json({ message: "Ekadashi campaign updated", config: mergeWithDefaults(record.content) });
-    } catch (err) {
-      console.error("ekadashiCampaignController.update error:", err);
-      return res.status(500).json({ message: "Server error" });
-    }
+    res.json(DEFAULT_CAMPAIGN);
   },
 };
 
