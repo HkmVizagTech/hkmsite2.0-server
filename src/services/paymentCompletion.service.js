@@ -472,6 +472,28 @@ async function runPostCompletionPipeline(donationId, paymentId) {
   } catch (e) {
     console.warn("Meta CAPI import failed (non-fatal):", e && e.message ? e.message : e);
   }
+
+  // Push the donor's updated snapshot to DRM so the admin dashboard shows
+  // this donation immediately instead of waiting for a manual sync.
+  //
+  // Deliberately LAST and deliberately un-awaited: by this point DCC has
+  // written the receipt number, so DRM receives the receipt too. Every one of
+  // the branches above is already non-fatal, and this one is the least
+  // important of them — a donation must never be affected by DRM being slow
+  // or down. drmNotify never throws, and DRM self-heals via the backfill
+  // import or the per-donor sync button if a push is missed.
+  //
+  // This one call covers every completion path: one-time donations, the first
+  // subscription charge, and every later recurring charge all reach here
+  // through completeDonation().
+  try {
+    const { notifyDrmOfDonation } = require("./drmNotify.service");
+    notifyDrmOfDonation(donationId).catch((e) => {
+      console.warn("DRM push failed (non-fatal):", e && e.message ? e.message : e);
+    });
+  } catch (e) {
+    console.warn("DRM push import failed (non-fatal):", e && e.message ? e.message : e);
+  }
 }
 
 // Full synchronous flow: mark completed + run pipeline.

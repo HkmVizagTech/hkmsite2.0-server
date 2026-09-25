@@ -16,6 +16,9 @@ internalRouter.use((req, res, next) => {
   next();
 });
 
+// Order matters: the literal /donors list must be registered before the
+// /donors/by-mobile/:mobile pattern so it isn't swallowed by it.
+internalRouter.get("/donors", internalController.listDonors);
 internalRouter.get("/donors/by-mobile/:mobile", internalController.getDonorByMobile);
 internalRouter.get("/donations/:id/receipt.pdf", internalController.getReceiptPdf);
 
