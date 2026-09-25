@@ -21,5 +21,6 @@ internalRouter.use((req, res, next) => {
 internalRouter.get("/donors", internalController.listDonors);
 internalRouter.get("/donors/by-mobile/:mobile", internalController.getDonorByMobile);
 internalRouter.get("/donations/:id/receipt.pdf", internalController.getReceiptPdf);
+internalRouter.post("/donations/:id/resend-receipt", internalController.resendReceipt);
 
 module.exports = { internalRouter };
