@@ -216,7 +216,13 @@ app.post("/api/internal/resend-receipts", handleResendReceipts);
 // DRM (donor relationship manager) to sync from. Same x-internal-secret
 // convention as the two endpoints above, enforced inside internalRouter
 // itself rather than here.
-app.use("/api/internal", internalRouter);
+// DRM internal service API on its own sub-path. This site's existing
+// /api/internal/send-pending-reminders and /api/internal/resend-receipts
+// endpoints are declared above, so ordering currently saves us - but the
+// router auth-guards everything under its mount point, so anything added
+// below this line would be silently rejected. A distinct prefix removes the
+// dependency on declaration order entirely.
+app.use("/api/internal/drm", internalRouter);
 
 app.get('/health', (req, res) => {
   const states = ['disconnected', 'connected', 'connecting', 'disconnecting'];
