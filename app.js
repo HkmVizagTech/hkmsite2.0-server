@@ -34,6 +34,7 @@ const { volunteerRouter } = require("./src/routes/volunteer.routes");
 const { whatsappWebhookRouter } = require("./src/routes/whatsappWebhook.routes");
 const { shopRouter } = require("./src/routes/shop.routes");
 const { shopAdminRouter } = require("./src/routes/shopAdmin.routes");
+const { internalRouter } = require("./src/routes/internal.routes");
 const app = express();
 app.set('trust proxy', 1);
 
@@ -210,6 +211,12 @@ const handleResendReceipts = async (req, res) => {
 
 app.get("/api/internal/resend-receipts", handleResendReceipts);
 app.post("/api/internal/resend-receipts", handleResendReceipts);
+
+// Read-only donor/donation/subscription/prasadam snapshot for the HKM Vizag
+// DRM (donor relationship manager) to sync from. Same x-internal-secret
+// convention as the two endpoints above, enforced inside internalRouter
+// itself rather than here.
+app.use("/api/internal", internalRouter);
 
 app.get('/health', (req, res) => {
   const states = ['disconnected', 'connected', 'connecting', 'disconnecting'];
