@@ -31,6 +31,15 @@ const siteContentSchema = new mongoose.Schema(
       // lib/majorFestival.ts — auto-highlighting previously left stale
       // festivals (e.g. Radhashtami for weeks around its date) in the nav.
       majorFestival: { type: String, default: "none" },
+      // A free-form nav link an admin can turn on separately from the major-
+      // festival highlight above — a name + destination URL, shown the same
+      // way in the nav (desktop link + mobile "More" sheet item). Both slots
+      // are independent and can be shown at the same time.
+      customLink: {
+        enabled: { type: Boolean, default: false },
+        label: { type: String, default: "" },
+        href: { type: String, default: "" },
+      },
     },
     festival: {
       // Hero banners for the /festival index page. The festival title is
