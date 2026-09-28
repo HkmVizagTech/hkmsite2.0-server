@@ -6,6 +6,11 @@ const { siteContentModel } = require("../models/siteContent.model");
 // subdocument is later replaced, so this has to be explicit here.)
 const DEFAULT_CONSTRUCTION_VIDEO_ID = "mPAt0gb__Hw";
 
+// The gallery is a single horizontal scroller; past a couple of dozen photos
+// nobody scrolls that far and the payload starts to matter. The admin can
+// remove old ones as new months are added.
+const MAX_CONSTRUCTION_PHOTOS = 24;
+
 /**
  * Pulls the 11-character video id out of any YouTube link an admin is likely
  * to paste. Shorts are what this is really for — the temple's monthly update
@@ -76,11 +81,26 @@ const siteContentController = {
               "That doesn't look like a YouTube link. Paste the Share link from the video — e.g. https://youtube.com/shorts/XXXXXXXXXXX",
           });
         }
-        patch.construction = {
-          videoUrl: url,
-          videoId: videoId || DEFAULT_CONSTRUCTION_VIDEO_ID,
-          updatedAt: new Date(),
-        };
+        // Dotted paths, not a whole-object assignment: `$set: { construction:
+        // {...} }` would REPLACE the subdocument, so a request carrying only
+        // the video would silently wipe the photo gallery. Each field is set
+        // on its own so the two can be saved independently.
+        patch["construction.videoUrl"] = url;
+        patch["construction.videoId"] = videoId || DEFAULT_CONSTRUCTION_VIDEO_ID;
+        patch["construction.updatedAt"] = new Date();
+
+        if (Array.isArray(construction.photos)) {
+          patch["construction.photos"] = construction.photos
+            .map((p) => ({
+              url: String(p?.url || "").trim(),
+              // Captions sit on top of the image, so an essay would spill out
+              // of the pill. Long ones are cut rather than rejected — the
+              // admin has already uploaded the photo by this point.
+              caption: String(p?.caption || "").trim().slice(0, 80),
+            }))
+            .filter((p) => p.url)
+            .slice(0, MAX_CONSTRUCTION_PHOTOS);
+        }
       }
 
       const content = await siteContentModel.findOneAndUpdate(

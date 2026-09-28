@@ -70,6 +70,30 @@ const siteContentSchema = new mongoose.Schema(
       // Defaults to the video that was hard-coded in ConstructionStatusSection,
       // so the page looks identical until someone changes it.
       videoId: { type: String, default: "mPAt0gb__Hw" },
+      // "Recent Site Photos" — the strip under the video. Managed in the same
+      // admin tab: upload an image, give it a caption, reorder or remove.
+      // Order here is the order on the page.
+      //
+      // Defaults to the five photos that were hard-coded in
+      // ConstructionStatusSection, so the gallery is unchanged until someone
+      // edits it. A function default is required — a shared array literal
+      // would be handed to every document by reference.
+      photos: {
+        type: [
+          {
+            _id: false,
+            url: { type: String, required: true },
+            caption: { type: String, default: "" },
+          },
+        ],
+        default: () => [
+          { url: "/assets/construction-update-1.jpg", caption: "Foundation & Ground Floor" },
+          { url: "/assets/construction-update-2.jpg", caption: "Structural Framework" },
+          { url: "/assets/construction-update-3.jpg", caption: "Column & Beam Work" },
+          { url: "/assets/construction-update-4.jpg", caption: "Multi-Level Construction" },
+          { url: "/assets/construction-update-5.jpg", caption: "Building Elevation" },
+        ],
+      },
       updatedAt: { type: Date },
     },
     updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "user" },
