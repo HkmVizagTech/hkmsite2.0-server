@@ -57,6 +57,21 @@ const siteContentSchema = new mongoose.Schema(
           "https://pub-32ade8e1209149f980ffe2aa4ddc6c99.r2.dev/media-library/1790229047831-1790229047198-Festivalmob.webp",
       },
     },
+    construction: {
+      // The monthly temple-construction update video, shown on the Square Foot
+      // and Brick Seva pages. Editable under Admin → Content → Construction so
+      // swapping it each month is a paste-and-save, not a code change + deploy.
+      //
+      // Both fields are kept: `videoUrl` is exactly what the admin pasted, so
+      // the form shows them their own link back; `videoId` is the 11-character
+      // YouTube id parsed out of it, which is the only thing the embed needs.
+      // Parsing happens once here on save rather than on every page render.
+      videoUrl: { type: String, default: "" },
+      // Defaults to the video that was hard-coded in ConstructionStatusSection,
+      // so the page looks identical until someone changes it.
+      videoId: { type: String, default: "mPAt0gb__Hw" },
+      updatedAt: { type: Date },
+    },
     updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "user" },
   },
   { timestamps: true, versionKey: false }
