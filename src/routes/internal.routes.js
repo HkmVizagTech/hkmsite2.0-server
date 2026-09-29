@@ -20,6 +20,12 @@ internalRouter.use((req, res, next) => {
 // /donors/by-mobile/:mobile pattern so it isn't swallowed by it.
 internalRouter.get("/donors", internalController.listDonors);
 internalRouter.get("/donors/by-mobile/:mobile", internalController.getDonorByMobile);
+// Offline donation entered in DRM. Delegates to the same "raise receipt" path
+// a preacher uses on this site, so DCC, the receipt number and the WhatsApp
+// send are all the existing ones. Declared before the "/donations/:id/..."
+// patterns so "offline" is never read as an id.
+internalRouter.post("/donations/offline", internalController.createOfflineDonation);
+
 internalRouter.get("/donations/:id/receipt.pdf", internalController.getReceiptPdf);
 internalRouter.post("/donations/:id/resend-receipt", internalController.resendReceipt);
 

@@ -291,6 +291,48 @@ const internalController = {
     }
   },
 
+
+  // POST /api/internal/drm/donations/offline
+  //
+  // Records a donation taken offline (cash, cheque, UPI, bank transfer) that
+  // was entered in DRM rather than on this site's own admin screen.
+  //
+  // It does NOT reimplement anything. It hands straight to
+  // donationController.createManual - the same "raise receipt" path a preacher
+  // uses here - so the donation goes through the identical DCC sync, receipt
+  // numbering and WhatsApp delivery. There is one receipt series on this site,
+  // and DRM never mints a number of its own.
+  //
+  // The only thing this wrapper changes is HOW the caller is authenticated:
+  // createManual's own route sits behind a preacher login, and DRM has a shared
+  // secret instead. Everything else - the required UTR, the duplicate-reference
+  // guard, the validation - is inherited untouched, so a bug fixed there is
+  // fixed for both callers.
+  createOfflineDonation: async (req, res) => {
+    const { donationController } = require("./donation.controller");
+
+    // Who typed it in DRM travels as a note rather than manualEnteredBy: that
+    // field references a user in THIS database, and a DRM user id would be a
+    // dangling reference.
+    const enteredByNote = req.body?.enteredByName
+      ? `Entered in DRM by ${String(req.body.enteredByName).slice(0, 80)}`
+      : "Entered in DRM";
+    const note = req.body?.manualEntryNote
+      ? `${req.body.manualEntryNote} (${enteredByNote})`
+      : enteredByNote;
+
+    // A minimal req standing in for the logged-in preacher request createManual
+    // normally receives. role "admin" (not "preacher") on purpose: a DRM entry
+    // has no preacher behind it, and passing one would wrongly assign this
+    // donor to whoever happened to be logged in.
+    const fakeReq = {
+      body: { ...req.body, manualEntryNote: note },
+      user: { role: "admin" },
+    };
+
+    return donationController.createManual(fakeReq, res);
+  },
+
   // GET /api/internal/donations/:id/receipt.pdf
   // Streams the same 80G receipt PDF a logged-in donor would get from
   // GET /donor/receipt/:donationId, so DRM can show/download the real
