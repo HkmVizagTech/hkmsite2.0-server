@@ -333,6 +333,123 @@ const internalController = {
     return donationController.createManual(fakeReq, res);
   },
 
+  // PUT /api/internal/drm/donations/:id/prasadam-status
+  //
+  // DRM is where the temple staff now work the prasadam dispatch list, so the
+  // status they set there has to reach this site too - otherwise the Prasadam
+  // tab here keeps showing boxes as pending long after they were delivered,
+  // and whoever opens it next re-couriers them.
+  //
+  // Delegates to donation.controller.updatePrasadamStatus, which owns the
+  // timestamp rules (dispatched clears deliveredAt, delivered backfills
+  // dispatchedAt, and so on). Duplicating those here is how the two copies
+  // would drift.
+  //
+  // DRM's vocabulary differs by one word: it says "shipped" where this site
+  // says "dispatched". Translating here rather than in DRM keeps the mapping
+  // next to the model it is mapping onto.
+  updatePrasadamStatus: async (req, res) => {
+    const { donationController } = require("./donation.controller");
+
+    const DRM_TO_SITE = {
+      pending: "pending",
+      shipped: "dispatched",
+      dispatched: "dispatched",
+      delivered: "delivered",
+      cancelled: "cancelled",
+    };
+    const incoming = String(req.body?.status || req.body?.prasadamStatus || "").toLowerCase();
+    const prasadamStatus = DRM_TO_SITE[incoming];
+    if (!prasadamStatus) {
+      return res.status(400).json({
+        success: false,
+        message: "status must be one of: pending, shipped, delivered, cancelled",
+      });
+    }
+
+    const who = req.body?.markedByName ? String(req.body.markedByName).slice(0, 80) : null;
+    const existingNote = req.body?.notes ? String(req.body.notes).slice(0, 400) : "";
+    const trail = who ? `Marked ${incoming} in DRM by ${who}` : `Marked ${incoming} in DRM`;
+
+    const fakeReq = {
+      params: { id: req.params.id },
+      body: {
+        prasadamStatus,
+        prasadamCourier: req.body?.courierName,
+        prasadamTrackingNumber: req.body?.trackingNumber,
+        prasadamNotes: existingNote ? `${existingNote} (${trail})` : trail,
+      },
+    };
+
+    return donationController.updatePrasadamStatus(fakeReq, res);
+  },
+
+  // GET /api/internal/drm/abandoned?since=&page=&limit=
+  //
+  // People who started a donation here and never finished it. The temple calls
+  // them: most abandoned payments are a failed UPI app or a distracted donor,
+  // not a change of heart, and a call recovers a good share of them.
+  //
+  // WHY minMinutes EXISTS: a donation sits in "pending" for the whole time the
+  // donor is on the payment page. Handing DRM a record that is ninety seconds
+  // old would mean calling someone who is still typing their UPI PIN. Default
+  // is an hour; DRM can ask for more.
+  //
+  // This does NOT decide whether the person later gave successfully - DRM holds
+  // every completed donation from both sites and is the only place that can
+  // answer that across sites, so the filtering happens there.
+  getAbandonedDonations: async (req, res) => {
+    try {
+      const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+      const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 200));
+      const minMinutes = Math.max(15, parseInt(req.query.minMinutes, 10) || 60);
+
+      const filter = {
+        status: { $in: ["pending", "failed"] },
+        createdAt: { $lte: new Date(Date.now() - minMinutes * 60 * 1000) },
+        donorMobile: { $exists: true, $ne: "" },
+      };
+      if (req.query.since) {
+        const since = new Date(req.query.since);
+        if (!Number.isNaN(since.getTime())) filter.createdAt.$gte = since;
+      }
+
+      const [rows, total] = await Promise.all([
+        donationModel
+          .find(filter)
+          .select("donorName donorMobile donorEmail amount sevaName type sourcePage status createdAt")
+          .sort({ createdAt: -1 })
+          .skip((page - 1) * limit)
+          .limit(limit)
+          .lean(),
+        donationModel.countDocuments(filter),
+      ]);
+
+      res.status(200).json({
+        success: true,
+        page,
+        limit,
+        total,
+        hasMore: page * limit < total,
+        donations: rows.map((d) => ({
+          externalId: String(d._id),
+          name: d.donorName || null,
+          mobile: d.donorMobile || null,
+          email: d.donorEmail || null,
+          amount: d.amount ?? null,
+          purpose: d.sevaName || d.type || null,
+          sourcePage: d.sourcePage || null,
+          status: d.status,
+          attemptedAt: d.createdAt,
+          sourceSite: "hkmv",
+        })),
+      });
+    } catch (err) {
+      console.error("internal.getAbandonedDonations error:", err);
+      res.status(500).json({ success: false, message: err.message || "Failed to list abandoned donations" });
+    }
+  },
+
   // GET /api/internal/donations/:id/receipt.pdf
   // Streams the same 80G receipt PDF a logged-in donor would get from
   // GET /donor/receipt/:donationId, so DRM can show/download the real

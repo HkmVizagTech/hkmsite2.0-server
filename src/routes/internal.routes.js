@@ -26,6 +26,16 @@ internalRouter.get("/donors/by-mobile/:mobile", internalController.getDonorByMob
 // patterns so "offline" is never read as an id.
 internalRouter.post("/donations/offline", internalController.createOfflineDonation);
 
+// Prasadam dispatch status set in DRM, pushed here so this site's Prasadam tab
+// doesn't keep showing delivered boxes as pending. Read-modify-write on one
+// donation's prasadam fields; nothing else on the record is touched, and it is
+// idempotent - re-sending the same status is a no-op in effect.
+internalRouter.put("/donations/:id/prasadam-status", internalController.updatePrasadamStatus);
+
+// Donations started here and never completed, for DRM to turn into leads the
+// temple can ring. Read-only; nothing on this site is changed by it.
+internalRouter.get("/abandoned", internalController.getAbandonedDonations);
+
 internalRouter.get("/donations/:id/receipt.pdf", internalController.getReceiptPdf);
 internalRouter.post("/donations/:id/resend-receipt", internalController.resendReceipt);
 
