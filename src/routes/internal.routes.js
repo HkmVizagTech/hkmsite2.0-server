@@ -20,6 +20,10 @@ internalRouter.use((req, res, next) => {
 // /donors/by-mobile/:mobile pattern so it isn't swallowed by it.
 internalRouter.get("/donors", internalController.listDonors);
 internalRouter.get("/donors/by-mobile/:mobile", internalController.getDonorByMobile);
+// A profile correction made in DRM, pushed back here. Updates the donor record
+// only - past donations keep the name and address their receipts were issued
+// with, so an issued 80G receipt never disagrees with the record behind it.
+internalRouter.put("/donors/by-mobile/:mobile/profile", internalController.updateDonorProfile);
 // Offline donation entered in DRM. Delegates to the same "raise receipt" path
 // a preacher uses on this site, so DCC, the receipt number and the WhatsApp
 // send are all the existing ones. Declared before the "/donations/:id/..."

@@ -475,6 +475,90 @@ const internalController = {
       res.status(500).json({ success: false, message: "Could not generate receipt." });
     }
   },
+
+  // PUT /api/internal/drm/donors/by-mobile/:mobile/profile
+  //
+  // A correction made in DRM, pushed here.
+  //
+  // WHY THIS EXISTS
+  // Three systems hold a donor's details - this site, annadan, and DRM - and
+  // until now the traffic was one-way. A staff member who fixed a misspelt
+  // name or a wrong address in DRM fixed it only in DRM, and this site kept
+  // printing the old one on every receipt.
+  //
+  // WHAT IT WILL AND WILL NOT DO
+  // It updates the donor record, and deliberately not past donations. A
+  // donation carries the name and address as they were when the receipt was
+  // issued, and rewriting those would make issued 80G receipts disagree with
+  // the records behind them. New donations pick the corrected details up
+  // because they are copied from the donor at the time.
+  //
+  // A donor who has never given here is not created. DRM only pushes to sites
+  // a donor is already known to, and inventing a donor record from a sync
+  // would be a surprising thing for a sync to do.
+  updateDonorProfile: async (req, res) => {
+    try {
+      const mobile = normalizeMobile(req.params.mobile);
+      if (!mobile) {
+        return res.status(400).json({ success: false, message: "Mobile number required" });
+      }
+
+      const donor = await donorModel.findOne({ mobile });
+      if (!donor) {
+        // Not an error. DRM asked us to correct somebody we have never heard
+        // of, and the honest answer is "nothing to correct here".
+        return res.json({ success: true, applied: false, message: "No donor with that mobile on this site." });
+      }
+
+      const { name, email, panNumber, address } = req.body || {};
+      const changed = [];
+
+      if (typeof name === "string" && name.trim() && name.trim() !== donor.name) {
+        donor.name = name.trim().slice(0, 120);
+        changed.push("name");
+      }
+      if (typeof email === "string") {
+        const e = email.trim();
+        if (e && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e) && e !== donor.email) {
+          donor.email = e;
+          changed.push("email");
+        }
+      }
+      if (typeof panNumber === "string" && panNumber.trim()) {
+        const pan = panNumber.trim().toUpperCase();
+        if (/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(pan) && pan !== donor.panNumber) {
+          donor.panNumber = pan;
+          changed.push("panNumber");
+        }
+      }
+
+      // savedAddress is the five-field shape this site uses. DRM folds its
+      // door/house/area parts into street before sending, because a shape
+      // mismatch must not cost a donor their flat number.
+      if (address && typeof address === "object") {
+        const street = String(address.street || "").trim();
+        const city = String(address.city || "").trim();
+        const state = String(address.state || "").trim();
+        const pincode = String(address.pincode || "").trim();
+        const country = String(address.country || "India").trim() || "India";
+
+        if (street || city || state || pincode) {
+          donor.savedAddress = { street, city, state, pincode, country };
+          changed.push("address");
+        }
+      }
+
+      if (!changed.length) {
+        return res.json({ success: true, applied: false, message: "Nothing here differed." });
+      }
+
+      await donor.save();
+      res.json({ success: true, applied: true, changed, message: `Updated ${changed.join(", ")}.` });
+    } catch (err) {
+      console.error("internal.updateDonorProfile error:", err);
+      res.status(500).json({ success: false, message: "Server error" });
+    }
+  },
 };
 
 module.exports = { internalController, buildDonorSnapshot };
