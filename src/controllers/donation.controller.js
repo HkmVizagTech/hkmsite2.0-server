@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const { donationModel } = require("../models/donation.model");
 const { createRazorpayInstance } = require("./payment.controller");
 
@@ -431,6 +432,11 @@ const donationController = {
         utrNumber, manualPaymentMode, paymentDate, manualEntryNote,
         panNumber, certificate, wantPrasadam, prasadamAddress,
         sevakName, dob, devoteeId,
+        // The DCC id number itself, for callers that know the number but not
+        // this site's templeDevotee record — DRM, which holds its own list of
+        // preachers keyed on the same numbers. Read below, after devoteeId,
+        // which keeps its priority.
+        dccEnrolledById: dccEnrolledByIdRaw,
       } = req.body;
 
       const name = String(donorName || "").trim();
@@ -451,8 +457,22 @@ const donationController = {
       let dccEnrolledById;
       if (devoteeId) {
         const { templeDevoteeModel } = require("../models/templeDevotee.model");
-        const devotee = await templeDevoteeModel.findById(devoteeId).lean();
+        // Guarded: a malformed id used to throw a Mongoose CastError that the
+        // outer catch returned as a 500, so one bad value failed the whole
+        // donation rather than just the attribution.
+        const devotee = mongoose.isValidObjectId(devoteeId)
+          ? await templeDevoteeModel.findById(devoteeId).lean()
+          : null;
         if (devotee?.dccEnrolledById != null) dccEnrolledById = devotee.dccEnrolledById;
+      }
+      // Failing that, a raw DCC number sent directly. DRM keeps its own
+      // preacher list with these numbers on it and has no templeDevotee id to
+      // offer, so without this every donation it raises is enrolled under the
+      // site's generic default instead of the preacher who brought the donor
+      // in. Validated rather than trusted: anything that is not a finite
+      // number is ignored, and the default applies as before.
+      if (dccEnrolledById == null && Number.isFinite(Number(dccEnrolledByIdRaw)) && dccEnrolledByIdRaw !== "" && dccEnrolledByIdRaw != null) {
+        dccEnrolledById = Number(dccEnrolledByIdRaw);
       }
 
       // Duplicate-UTR guard — the same bank reference should never be
