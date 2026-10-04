@@ -6,6 +6,7 @@ const { startReconciliationJob } = require("./src/jobs/reconcilePendingDonations
 const { startTrackingSyncJob } = require("./src/jobs/trackingSync");
 const { ensureDefaultShopCategories } = require("./src/services/shopBootstrap.service");
 const { ensureDefaultFestivalDonations } = require("./src/services/festivalDonationBootstrap.service");
+const { ensureBlogDrafts } = require("./src/services/blogDraftsBootstrap.service");
 const PORT = process.env.PORT || 8080;
 
 const startServer =async()=>{
@@ -25,6 +26,12 @@ const startServer =async()=>{
         // campaigns. Idempotent; errors are logged and swallowed.
         ensureDefaultFestivalDonations().catch((err) => {
             console.error("Festival-donation bootstrap failed (non-fatal):", err && err.message ? err.message : err);
+        });
+
+        // One-time import of the October 2026 blog batch (src/seed/blog-drafts).
+        // Recorded in bootstrap_runs after success, so it never re-runs.
+        ensureBlogDrafts().catch((err) => {
+            console.error("Blog drafts import failed (non-fatal):", err && err.message ? err.message : err);
         });
 
         app.listen( PORT,()=>{
