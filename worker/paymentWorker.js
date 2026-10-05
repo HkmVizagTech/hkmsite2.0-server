@@ -1,3 +1,7 @@
+// Must stay the first require in this file — see src/config/timezone.js.
+// A worker is a separate process and does not inherit anything index.js did.
+require('../src/config/timezone');
+
 const { connectDb } = require('../src/config/db');
 const { popJob } = require('../src/redis/redisClient');
 const { completeDonation, handleSubscriptionCharged } = require('../src/services/paymentCompletion.service');

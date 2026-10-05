@@ -12,6 +12,7 @@ const { donationModel } = require("../models/donation.model");
 const { uploadToR2 } = require("../utils/r2");
 const { createRazorpayInstance } = require("./payment.controller");
 const { completeDonation } = require("../services/paymentCompletion.service");
+const { IST, istDayStart, istDayEnd } = require("../config/timezone");
 
 // Every query here is scoped to the /donations page's own donations only —
 // never mixes in seva-page or campaign donations from the rest of the site.
@@ -27,20 +28,23 @@ const DONATIONS_PAGE_FILTER = {
 const SUCCESS_STATUSES = ["completed"];
 
 // Builds a { createdAt: {...} } match clause from optional YYYY-MM-DD
-// startDate/endDate query params. endDate is inclusive through end of day.
+// startDate/endDate query params, interpreted as IST calendar days.
+// endDate is inclusive through 23:59:59.999 IST.
+//
+// This used to do `new Date(startDate)` on the bare string. ECMA-262
+// specifies a date-only string as UTC midnight regardless of process.env.TZ,
+// so "startDate=2026-10-01" meant 05:30 IST and quietly dropped every
+// donation taken in the first five and a half hours of the selected day.
 function buildDateRangeMatch(startDate, endDate) {
   if (!startDate && !endDate) return {};
   const createdAt = {};
   if (startDate) {
-    const d = new Date(startDate);
-    if (!isNaN(d.getTime())) createdAt.$gte = d;
+    const d = istDayStart(startDate);
+    if (d) createdAt.$gte = d;
   }
   if (endDate) {
-    const d = new Date(endDate);
-    if (!isNaN(d.getTime())) {
-      d.setHours(23, 59, 59, 999);
-      createdAt.$lte = d;
-    }
+    const d = istDayEnd(endDate);
+    if (d) createdAt.$lte = d;
   }
   return Object.keys(createdAt).length ? { createdAt } : {};
 }
@@ -130,9 +134,13 @@ const donationAdminController = {
       if (!startDate || !endDate) {
         return res.status(400).json({ success: false, message: "startDate and endDate are required (YYYY-MM-DD)." });
       }
-      const start = new Date(startDate);
-      const end = new Date(endDate);
-      end.setHours(23, 59, 59, 999);
+      // IST calendar days — see buildDateRangeMatch above for why a bare
+      // YYYY-MM-DD cannot go through `new Date()` directly.
+      const start = istDayStart(startDate);
+      const end = istDayEnd(endDate);
+      if (!start || !end) {
+        return res.status(400).json({ success: false, message: "startDate and endDate must be valid dates (YYYY-MM-DD)." });
+      }
 
       const baseMatch = sourcePage
         ? { sourcePage, status: "completed", createdAt: { $gte: start, $lte: end } }
@@ -150,7 +158,9 @@ const donationAdminController = {
         ]),
         donationModel.aggregate([
           { $match: baseMatch },
-          { $group: { _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } }, amount: { $sum: "$amount" }, count: { $sum: 1 } } },
+          // timezone is required: $dateToString runs inside MongoDB, which
+          // never sees this process's TZ and would bucket by UTC day.
+          { $group: { _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt", timezone: IST } }, amount: { $sum: "$amount" }, count: { $sum: 1 } } },
           { $sort: { _id: 1 } },
         ]),
         donationModel.aggregate([
@@ -227,15 +237,8 @@ const donationAdminController = {
         }
       }
 
-      if (startDate || endDate) {
-        query.createdAt = {};
-        if (startDate) query.createdAt.$gte = new Date(startDate);
-        if (endDate) {
-          const end = new Date(endDate);
-          end.setHours(23, 59, 59, 999);
-          query.createdAt.$lte = end;
-        }
-      }
+      // Same IST calendar-day semantics as every other range filter here.
+      Object.assign(query, buildDateRangeMatch(startDate, endDate));
 
       if (campaign) query["utm.campaign"] = campaign === "direct" ? { $in: [null, ""] } : campaign;
       if (source) query["utm.source"] = source === "direct" ? { $in: [null, ""] } : source;
@@ -377,15 +380,8 @@ const donationAdminController = {
         const statuses = String(status).split(",").map((s) => s.trim()).filter(Boolean);
         query.status = statuses.length === 1 ? statuses[0] : { $in: statuses };
       }
-      if (startDate || endDate) {
-        query.createdAt = {};
-        if (startDate) query.createdAt.$gte = new Date(startDate);
-        if (endDate) {
-          const end = new Date(endDate);
-          end.setHours(23, 59, 59, 999);
-          query.createdAt.$lte = end;
-        }
-      }
+      // Same IST calendar-day semantics as every other range filter here.
+      Object.assign(query, buildDateRangeMatch(startDate, endDate));
 
       const transactions = await donationModel.find(query).sort({ createdAt: -1 }).lean();
 

@@ -4,6 +4,7 @@ const { shopOrderModel } = require("../models/shopOrder.model");
 const { getShopSettings, calculateShipping } = require("../models/shopSettings.model");
 const { donorModel } = require("../models/donor.model");
 const { getNextSequence } = require("../utils/counter");
+const { IST } = require("../config/timezone");
 
 // Which Razorpay account the shop sells through. Shop sales now settle
 // through their own account, separate from donations, so the two money
@@ -34,7 +35,12 @@ function resolveShopRazorpay() {
 
 async function generateOrderNumber() {
   const seq = await getNextSequence("shopOrder");
-  return `HKMS-${new Date().getFullYear()}-${String(seq).padStart(5, "0")}`;
+  // Permanent order identifier shown to the customer, so the year is pinned
+  // to IST explicitly rather than following process.env.TZ — an order placed
+  // between midnight and 05:30 IST on 1 January used to be numbered with the
+  // previous year.
+  const year = new Date().toLocaleDateString("en-GB", { timeZone: IST, year: "numeric" });
+  return `HKMS-${year}-${String(seq).padStart(5, "0")}`;
 }
 
 // Rebuilds the cart from the database. The browser sends only product IDs,

@@ -1,5 +1,6 @@
 const { galleryModel } = require("../models/gallery.model");
 const { uploadToR2 } = require("../utils/r2");
+const { istDayStart, istDayEnd } = require("../config/timezone");
 
 const galleryController = {
   // POST /gallery/upload-image — upload a single image to R2 and return
@@ -26,11 +27,11 @@ const galleryController = {
       if (category) filter.category = category;
       if (type) filter.type = type;
       if (status) filter.status = status;
+      // IST calendar day — a bare YYYY-MM-DD parses as UTC midnight.
       if (date) {
-        const start = new Date(date);
-        const end = new Date(date);
-        end.setHours(23, 59, 59, 999);
-        filter.date = { $gte: start, $lte: end };
+        const start = istDayStart(date);
+        const end = istDayEnd(date);
+        if (start && end) filter.date = { $gte: start, $lte: end };
       }
       const items = await galleryModel.find(filter).sort({ date: -1 });
       res.status(200).json({ items });

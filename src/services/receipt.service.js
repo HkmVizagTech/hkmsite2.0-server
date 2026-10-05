@@ -16,6 +16,7 @@ const { PDFDocument, StandardFonts } = require("pdf-lib");
 const numToWord = require("number-to-words");
 const { donationModel } = require("../models/donation.model");
 const { campaignerModel } = require("../models/campaigner.model");
+const { IST } = require("../config/timezone");
 
 const resolveFontPath = (fontPath) => {
   if (!fontPath) return null;
@@ -119,7 +120,13 @@ async function generateReceiptBuffer(donationId) {
   if (!donation) throw new Error("Donation not found for receipt generation");
 
   const amountWords = `${numToWord.toWords(Math.round(donation.amount)).toUpperCase()} RUPEES ONLY`;
-  const formattedDate = new Date(donation.date || donation.createdAt || Date.now()).toLocaleDateString("en-IN");
+  // The transaction date printed on the 80G certificate. The zone is named
+  // explicitly rather than left to follow process.env.TZ: this is the date
+  // on a tax document, and under the old UTC process a donation taken
+  // between midnight and 05:30 IST was certified as the previous day. The
+  // "en-IN" format (D/M/YYYY) is unchanged — only the zone is pinned.
+  const formattedDate = new Date(donation.date || donation.createdAt || Date.now())
+    .toLocaleDateString("en-IN", { timeZone: IST });
   const taxExemption = donation.panNumber ? "YES" : "NO";
   const address = buildAddress(donation.prasadamAddress);
   const seva = donation.sevaName || donation.type || "General Seva";
@@ -163,7 +170,10 @@ async function generateReceiptBuffer(donationId) {
     pan: donation.panNumber || "---",
     receiptNumber: receiptText,
     amount: `${Number(donation.amount).toLocaleString("en-IN")}/-`,
-    transactionNumber: donation.razorpayPaymentId || donation.transactionId || "---",
+    // A manual or DRM-entered donation has no Razorpay id; its UTR / cheque
+    // number is the transaction number, and printing "---" there left the
+    // donor's receipt with nothing to trace the payment by.
+    transactionNumber: donation.razorpayPaymentId || donation.utrNumber || donation.transactionId || "---",
     sevakName: donation.sevakName || "---",
     donorId: displayDonorId,
   };

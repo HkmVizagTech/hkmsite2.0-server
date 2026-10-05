@@ -1,4 +1,5 @@
 const { donationModel } = require("../models/donation.model");
+const { IST } = require("../config/timezone");
 
 const DCC_API_URL = process.env.DCC_API_URL || "https://vhkmsurabhi.com/api/socialmedia/addDonation";
 
@@ -358,12 +359,30 @@ const DEFAULT_NAME_BASED_SEVA_MAPPINGS = [
   },
 ];
 
+// DCC expects the transaction date as DD/MM/YYYY, and it is the date DCC
+// files the donation under — which decides both its financial year and the
+// receipt-number series it is issued from.
+//
+// This used to use getDate()/getMonth()/getFullYear(), which read the
+// process's local zone. The process ran in UTC, so every donation taken
+// between midnight and 05:30 IST was sent to DCC as the previous calendar
+// day. On 1 April that put the donation in the previous financial year and
+// gave it a receipt number from the wrong series — on a document the
+// temple has to stand behind to the income-tax department.
+//
+// The zone is named here rather than left to follow process.env.TZ on
+// purpose: this function produces a number on a legal document, and it must
+// not change meaning because somebody later edits a deployment variable.
 const formatDateForDcc = (value) => {
   const date = value ? new Date(value) : new Date();
-  const day = String(date.getDate()).padStart(2, "0");
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const year = String(date.getFullYear());
-  return `${day}/${month}/${year}`;
+  // en-GB gives DD/MM/YYYY with 2-digit day and month and a 4-digit year,
+  // which is exactly the shape DCC parses.
+  return date.toLocaleDateString("en-GB", {
+    timeZone: IST,
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
 };
 
 const compact = (parts) => parts.map((part) => String(part || "").trim()).filter(Boolean);

@@ -3,6 +3,7 @@ const { eventModel } = require("../models/event.model");
 const { galleryModel } = require("../models/gallery.model");
 const { blogModel } = require("../models/blog.model");
 const { contactMessageModel } = require("../models/contactMessage.model");
+const { IST } = require("../config/timezone");
 
 // The standalone /donations page is a fully separate donation flow with its
 // own dedicated admin (/donations/admin) -- it must never be blended into
@@ -87,7 +88,9 @@ const dashboardController = {
         { $match: { status: "completed", date: { $gte: sixMonthsAgo }, ...EXCLUDE_DONATIONS_PAGE } },
         {
           $group: {
-            _id: { year: { $year: "$date" }, month: { $month: "$date" } },
+            // timezone is required: $year/$month run inside MongoDB, which
+            // never sees this process's TZ and would split by UTC month.
+            _id: { year: { $year: { date: "$date", timezone: IST } }, month: { $month: { date: "$date", timezone: IST } } },
             donations: { $sum: "$amount" },
             count: { $sum: 1 },
           },
@@ -131,7 +134,9 @@ const dashboardController = {
         { $match: { status: "completed", date: { $gte: thirtyDaysAgo }, ...EXCLUDE_DONATIONS_PAGE } },
         {
           $group: {
-            _id: { $dateToString: { format: "%Y-%m-%d", date: "$date" } },
+            // timezone is required: $dateToString runs inside MongoDB, which
+            // never sees this process's TZ and would bucket by UTC day.
+            _id: { $dateToString: { format: "%Y-%m-%d", date: "$date", timezone: IST } },
             donations: { $sum: "$amount" },
             count: { $sum: 1 },
           },

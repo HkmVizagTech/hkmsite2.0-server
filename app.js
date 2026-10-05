@@ -1,3 +1,8 @@
+// Must stay the first require in this file — see src/config/timezone.js.
+// app.js is required by index.js, which already sets the zone, but it is
+// also loadable on its own, and the require is idempotent either way.
+require("./src/config/timezone");
+
 const express = require("express");
 const cors = require("cors");
 const cookieParser = require("cookie-parser");

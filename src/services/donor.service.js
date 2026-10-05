@@ -1,5 +1,6 @@
 const { donorModel } = require("../models/donor.model");
 const { getNextSequence } = require("../utils/counter");
+const { IST } = require("../config/timezone");
 
 // Finds the existing donor record for a mobile number, or creates one.
 // Used whenever a donation happens (manual entry by a preacher, or later
@@ -25,7 +26,11 @@ async function findOrCreateDonor({ mobile, name, email, raisedByPreacherId, crea
   }
 
   const seq = await getNextSequence("donorId");
-  const year = new Date().getFullYear();
+  // HKM-<year>-<seq> is a permanent identifier printed on receipts and quoted
+  // back by donors, so the year is pinned to IST explicitly rather than left
+  // to follow process.env.TZ. Under the old UTC process, a donor created
+  // between midnight and 05:30 IST on 1 January got the previous year.
+  const year = new Date().toLocaleDateString("en-GB", { timeZone: IST, year: "numeric" });
   const donorId = `HKM-${year}-${String(seq).padStart(5, "0")}`;
 
   donor = await donorModel.create({

@@ -1,5 +1,6 @@
 const { donorModel } = require("../models/donor.model");
 const { donationModel } = require("../models/donation.model");
+const { istDayStart, istDayEnd } = require("../config/timezone");
 
 const preacherController = {
   // GET /preacher/search-donor?q=<mobile, name, or donor ID>
@@ -97,13 +98,18 @@ const preacherController = {
       const mongoose = require("mongoose");
       const match = { manualEnteredBy: new mongoose.Types.ObjectId(preacherId), status: "completed" };
 
+      // IST calendar days — a bare YYYY-MM-DD parses as UTC midnight
+      // (05:30 IST), which used to cut the first morning hours off a
+      // preacher's own collection figures.
       if (from || to) {
         match.createdAt = {};
-        if (from) match.createdAt.$gte = new Date(from);
+        if (from) {
+          const d = istDayStart(from);
+          if (d) match.createdAt.$gte = d;
+        }
         if (to) {
-          const end = new Date(to);
-          end.setHours(23, 59, 59, 999);
-          match.createdAt.$lte = end;
+          const d = istDayEnd(to);
+          if (d) match.createdAt.$lte = d;
         }
       }
 

@@ -1,4 +1,6 @@
 
+// Must stay the first require in this file — see src/config/timezone.js.
+require("./src/config/timezone");
 require("dotenv").config();
 const { app } = require("./app");
 const { connectDb } = require("./src/config/db");

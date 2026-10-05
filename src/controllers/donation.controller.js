@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 const { donationModel } = require("../models/donation.model");
 const { createRazorpayInstance } = require("./payment.controller");
+const { IST, istDayStart, istDayEnd } = require("../config/timezone");
 
 // The standalone /donations page (and anything built under /donations/...,
 // e.g. /donations/janmashtami2) is fully separate from the rest of the
@@ -13,20 +14,24 @@ const DONATIONS_DOMAIN_PATTERN = /^donations(\/|$)/;
 const EXCLUDE_DONATIONS_PAGE = { sourcePage: { $not: DONATIONS_DOMAIN_PATTERN } };
 
 // Shared helper: builds a { createdAt: {...} } match clause from optional
-// YYYY-MM-DD from/to query params. `to` is inclusive through end of day.
+// YYYY-MM-DD from/to query params, interpreted as IST calendar days. `to`
+// is inclusive through 23:59:59.999 IST.
+//
+// This used to do `new Date(from)` on the bare string. ECMA-262 specifies a
+// date-only string as UTC midnight regardless of process.env.TZ, so
+// "from=2026-10-01" meant 05:30 IST and quietly dropped every donation taken
+// in the first five and a half hours of the day the admin had selected.
+// istDayStart/istDayEnd anchor the string to +05:30 instead.
 function buildDateRangeMatch(from, to) {
   if (!from && !to) return {};
   const createdAt = {};
   if (from) {
-    const d = new Date(from);
-    if (!isNaN(d.getTime())) createdAt.$gte = d;
+    const d = istDayStart(from);
+    if (d) createdAt.$gte = d;
   }
   if (to) {
-    const d = new Date(to);
-    if (!isNaN(d.getTime())) {
-      d.setHours(23, 59, 59, 999);
-      createdAt.$lte = d;
-    }
+    const d = istDayEnd(to);
+    if (d) createdAt.$lte = d;
   }
   return Object.keys(createdAt).length ? { createdAt } : {};
 }
@@ -105,7 +110,9 @@ const donationController = {
           { $match: { ...completedBase, createdAt: { $gte: twelveMonthsAgo } } },
           {
             $group: {
-              _id: { year: { $year: "$createdAt" }, month: { $month: "$createdAt" } },
+              // timezone is required: $year/$month run inside MongoDB, which
+              // never sees this process's TZ and would split by UTC month.
+              _id: { year: { $year: { date: "$createdAt", timezone: IST } }, month: { $month: { date: "$createdAt", timezone: IST } } },
               amount: { $sum: "$amount" },
               count: { $sum: 1 },
             },
@@ -310,6 +317,11 @@ const donationController = {
       const { period = "today", from, to } = req.query;
       const now = new Date();
 
+      // These take a Date, not a string: the multi-argument Date constructor
+      // and the getters below both read process.env.TZ, which is pinned to
+      // IST at startup, so "today" here is an IST day. The bare-string case
+      // (period=custom) is the one that could not rely on that and is
+      // anchored explicitly further down.
       const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
       const endOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
 
@@ -344,8 +356,11 @@ const donationController = {
         granularity = "month";
       } else if (period === "custom") {
         if (!from || !to) return res.status(400).json({ success: false, message: "from and to are required for a custom period." });
-        start = startOfDay(new Date(from));
-        end = endOfDay(new Date(to));
+        // from/to arrive as bare YYYY-MM-DD; anchor them to IST rather than
+        // letting `new Date()` read them as UTC midnight.
+        start = istDayStart(from);
+        end = istDayEnd(to);
+        if (!start || !end) return res.status(400).json({ success: false, message: "from and to must be valid dates (YYYY-MM-DD)." });
         const spanMs = end.getTime() - start.getTime();
         prevEnd = new Date(start.getTime() - 1);
         prevStart = new Date(prevEnd.getTime() - spanMs);
@@ -358,9 +373,13 @@ const donationController = {
       const completedMatch = { ...baseMatch, status: "completed" };
       const prevCompletedMatch = { ...EXCLUDE_DONATIONS_PAGE, status: "completed", createdAt: { $gte: prevStart, $lte: prevEnd } };
 
+      // timezone is required on both: $dateToString runs inside MongoDB,
+      // which never sees this process's TZ. Without it the chart series
+      // below was bucketed by UTC day while the range filter above it was
+      // IST — two numbers on one screen that disagreed.
       const dateTrunc = granularity === "month"
-        ? { $dateToString: { format: "%Y-%m", date: "$createdAt" } }
-        : { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } };
+        ? { $dateToString: { format: "%Y-%m", date: "$createdAt", timezone: IST } }
+        : { $dateToString: { format: "%Y-%m-%d", date: "$createdAt", timezone: IST } };
 
       const [summaryAgg, prevSummaryAgg, sevaAgg, statusAgg, seriesAgg] = await Promise.all([
         donationModel.aggregate([
@@ -432,6 +451,10 @@ const donationController = {
         utrNumber, manualPaymentMode, paymentDate, manualEntryNote,
         panNumber, certificate, wantPrasadam, prasadamAddress,
         sevakName, dob, devoteeId,
+        // The gateway's own id for money that came through a Razorpay QR
+        // (sent by DRM). Kept in transactionId, which the receipt prints and
+        // the admin search already covers.
+        razorpayPaymentId: gatewayPaymentId,
         // The DCC id number itself, for callers that know the number but not
         // this site's templeDevotee record — DRM, which holds its own list of
         // preachers keyed on the same numbers. Read below, after devoteeId,
@@ -481,7 +504,7 @@ const donationController = {
       if (existingWithUtr) {
         return res.status(409).json({
           success: false,
-          message: `This UTR is already recorded against a donation from ${existingWithUtr.donorName} (₹${existingWithUtr.amount}, ${new Date(existingWithUtr.createdAt).toLocaleDateString("en-IN")}).`,
+          message: `This UTR is already recorded against a donation from ${existingWithUtr.donorName} (₹${existingWithUtr.amount}, ${new Date(existingWithUtr.createdAt).toLocaleDateString("en-IN", { timeZone: IST })}).`,
         });
       }
 
@@ -504,7 +527,12 @@ const donationController = {
         panNumber: panNumber || undefined,
         certificate: !!certificate,
         wantPrasadam: !!wantPrasadam,
-        prasadamAddress: wantPrasadam ? prasadamAddress : undefined,
+        // Kept for 80G as well as for prasadam: this is the only address a
+        // donation has, and the receipt and DCC both read it. Dropping it
+        // whenever prasadam was not wanted sent every 80G-only manual entry
+        // to DCC and onto the certificate with no address at all.
+        prasadamAddress: wantPrasadam || certificate ? prasadamAddress : undefined,
+        transactionId: gatewayPaymentId ? String(gatewayPaymentId).trim() : undefined,
         sevakName: sevakName || undefined,
         dob: dob || undefined,
       });
@@ -630,20 +658,21 @@ const donationController = {
       } else if (status && status !== 'all') {
         filter.status = status;
       }
+      // All three are IST calendar days — a bare YYYY-MM-DD parses as UTC
+      // midnight, which is 05:30 IST, so these used to miss the first five
+      // and a half hours of the day the admin asked for.
       if (date) {
-        const start = new Date(date);
-        const end = new Date(date);
-        end.setHours(23, 59, 59, 999);
-        filter.date = { $gte: start, $lte: end };
+        const start = istDayStart(date);
+        const end = istDayEnd(date);
+        if (start && end) filter.date = { $gte: start, $lte: end };
       }
       if (from) {
-        filter.date = filter.date || {};
-        filter.date.$gte = new Date(from);
+        const d = istDayStart(from);
+        if (d) { filter.date = filter.date || {}; filter.date.$gte = d; }
       }
       if (to) {
-        filter.date = filter.date || {};
-        const d = new Date(to); d.setHours(23,59,59,999);
-        filter.date.$lte = d;
+        const d = istDayEnd(to);
+        if (d) { filter.date = filter.date || {}; filter.date.$lte = d; }
       }
       if (festivalId) filter.festivalId = festivalId;
       if (festivalSlug) filter.festivalSlug = festivalSlug;
@@ -651,7 +680,7 @@ const donationController = {
       if (maxAmount) filter.amount = Object.assign({}, filter.amount, { $lte: Number(maxAmount) });
       if (q) {
         const re = new RegExp(String(q), 'i');
-        const searchOr = [ { donorName: re }, { donorEmail: re }, { donorMobile: re }, { transactionId: re }, { razorpayOrderId: re } ];
+        const searchOr = [ { donorName: re }, { donorEmail: re }, { donorMobile: re }, { transactionId: re }, { razorpayOrderId: re }, { razorpayPaymentId: re }, { utrNumber: re } ];
         if (filter.$or) {
           filter.$and = [{ $or: filter.$or }, { $or: searchOr }];
           delete filter.$or;
@@ -1416,7 +1445,11 @@ const donationController = {
       ].join("\n");
 
       res.setHeader("Content-Type", "text/csv; charset=utf-8");
-      res.setHeader("Content-Disposition", `attachment; filename="prasadam-dispatch-${new Date().toISOString().slice(0, 10)}.csv"`);
+      // toISOString() is always UTC, so the date stamped on the downloaded
+      // file used to disagree with the IST date the admin downloaded it on,
+      // for anything exported before 05:30. en-CA gives YYYY-MM-DD.
+      const stamp = new Date().toLocaleDateString("en-CA", { timeZone: IST });
+      res.setHeader("Content-Disposition", `attachment; filename="prasadam-dispatch-${stamp}.csv"`);
       res.status(200).send(csv);
     } catch (err) {
       console.error("donation.exportPrasadamCsv error:", err);

@@ -1,5 +1,6 @@
 const { donationModel } = require("../models/donation.model");
 const { cacheWrap, cacheKeys } = require("../redis/redisClient");
+const { IST } = require("../config/timezone");
 
 // How long a public stats payload may be stale. These numbers are "raised so
 // far" totals and donor walls — a minute of lag is invisible to a donor, and
@@ -39,7 +40,11 @@ const timeAgo = (date) => {
   const days = Math.floor(hrs / 24);
   if (days === 1) return "yesterday";
   if (days < 30) return `${days} days ago`;
-  return new Date(date).toLocaleDateString("en-IN", { month: "short", day: "numeric" });
+  // Explicit zone: this falls back to a human-readable calendar date
+  // ("5 Jul") once the donation is over a month old, and under the UTC
+  // process anything from the first 5.5 hours of an IST day showed the
+  // day before.
+  return new Date(date).toLocaleDateString("en-IN", { timeZone: IST, month: "short", day: "numeric" });
 };
 
 const sevaStatsController = {

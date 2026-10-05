@@ -2,6 +2,7 @@ const { donorModel } = require("../models/donor.model");
 const { donationModel } = require("../models/donation.model");
 const { userModel } = require("../models/user.model");
 const { donorIssueModel } = require("../models/donorIssue.model");
+const { IST } = require("../config/timezone");
 
 const PAN_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -361,7 +362,9 @@ const donorController = {
       const [monthly, bySeva, totals] = await Promise.all([
         donationModel.aggregate([
           { $match: match },
-          { $group: { _id: { $dateToString: { format: "%Y-%m", date: "$createdAt" } }, amount: { $sum: "$amount" }, count: { $sum: 1 } } },
+          // timezone is required: $dateToString runs inside MongoDB, which
+          // never sees this process's TZ and would bucket by UTC month.
+          { $group: { _id: { $dateToString: { format: "%Y-%m", date: "$createdAt", timezone: IST } }, amount: { $sum: "$amount" }, count: { $sum: 1 } } },
           { $sort: { _id: 1 } },
         ]),
         donationModel.aggregate([

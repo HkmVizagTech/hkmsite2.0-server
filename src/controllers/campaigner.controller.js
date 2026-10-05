@@ -1,6 +1,7 @@
 const { campaignerModel } = require("../models/campaigner.model");
 const { donationModel } = require("../models/donation.model");
 const { cacheWrap, cacheKeys } = require("../redis/redisClient");
+const { IST } = require("../config/timezone");
 
 // Shorter than the site-wide stats TTL: a campaigner refreshing their own page
 // to watch donations land is the single most sensitive audience for staleness
@@ -26,7 +27,11 @@ const timeAgo = (date) => {
   const days = Math.floor(hrs / 24);
   if (days === 1) return "yesterday";
   if (days < 30) return `${days} days ago`;
-  return new Date(date).toLocaleDateString("en-IN", { month: "short", day: "numeric" });
+  // Explicit zone: this falls back to a human-readable calendar date
+  // ("5 Jul") once the donation is over a month old, and under the UTC
+  // process anything from the first 5.5 hours of an IST day showed the
+  // day before.
+  return new Date(date).toLocaleDateString("en-IN", { timeZone: IST, month: "short", day: "numeric" });
 };
 
 const slugify = (name) =>
