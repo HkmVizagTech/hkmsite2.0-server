@@ -41,11 +41,13 @@ const shopOtpRateLimit = rateLimit({
 
 donorAuthRouter.post("/send-otp", otpRateLimit, donorAuthController.sendOtp);
 donorAuthRouter.post("/shop/send-otp", shopOtpRateLimit, donorAuthController.sendShopOtp);
-// Lookup is read-only and does NOT send any WhatsApp message, so the strict
-// OTP limiter is more than enough — it just keeps someone from hammering the
-// endpoint to enumerate which numbers have donated. Same limit shape as
-// send-otp so both entry points behave predictably under load.
-donorAuthRouter.post("/lookup", otpRateLimit, donorAuthController.lookupDonor);
+// The public "find donor by mobile" lookup was retired (Oct 2026): it let
+// anyone fetch a donor's saved name, email, PAN and address by typing a
+// phone number, with no OTP. Details are now pre-filled only after OTP login.
+// The route answers 410 so an old cached checkout page falls back to manual entry.
+donorAuthRouter.post("/lookup", (req, res) =>
+  res.status(410).json({ success: false, message: "This lookup is no longer available." })
+);
 // Verification is shared: once a record exists, a shop customer and a donor
 // are the same kind of session, proven the same way.
 donorAuthRouter.post("/verify-otp", verifyRateLimit, donorAuthController.verifyOtp);
