@@ -172,6 +172,23 @@ const SEVA_IMAGES = {
   "janmashtami": R2 + "1787055655171-1787055654678-janmashtami2banner.webp",
   "janmashtami3": R2 + "1787055655171-1787055654678-janmashtami2banner.webp",
   "donations/janmashtami2": R2 + "1787055655171-1787055654678-janmashtami2banner.webp",
+  // Festival / occasion pages: each uses its own page banner. Before these
+  // were listed, they all fell through to the default (the Brick Seva banner),
+  // so a Pitru Paksha reminder showed a brick image.
+  "pitru-paksha": R2 + "1790235076658-1790235074922-pitru-paksha-desk.webp",
+  "govardhan-puja": R2 + "1789476038584-1789476037499-govardhan-desk.webp",
+  "radhashtami": R2 + "1788946765218-1788946764659-Radhashtamidesk.webp",
+  "ekadashi": R2 + "1790154963930-1790154963675-ekadashidesk.webp",
+  "shayani-ekadashi": R2 + "1790154963930-1790154963675-ekadashidesk.webp",
+  "chaturmas": R2 + "1786539472426-1786539471654-Chaturmasbanner.webp",
+  "special-occasion": R2 + "1784005845291-1784005844212-ChatGPTImageJul142026104033AM.png",
+  // /donate/<seva> pages share the banner of the matching campaign page.
+  "donate/square-foot-seva": R2 + "1786528614525-1786528613759-ChatGPTImageAug122026022735PM.webp",
+  "donate/brick-seva": R2 + "1785588189215-1785588187426-brick-hero-desk.webp",
+  "donate/anna-daan-seva": R2 + "1785586501452-1785586500800-annadan-banner-desk.webp",
+  "donate/gau-seva": R2 + "1785586948250-1785586945893-Gau-banner-desk.webp",
+  "donate/gita-daan-seva": R2 + "1786195248602-1786195247509-gita-hero-desk.webp",
+  "donate/vastra-seva": R2 + "1785573838202-1785573837372-ChatGPTImageAug12026021301PM.webp",
 };
 
 // Generic fallback header image when no mapping matches.
@@ -182,7 +199,8 @@ const SEVA_IMAGES = {
 // banner if this one isn't the right generic.
 const DEFAULT_SEVA_IMAGE =
   process.env.WAPI_PENDING_IMAGE ||
-  R2 + "1785588189215-1785588187426-brick-hero-desk.webp";
+  // Neutral deity photo, so an unmapped page never shows another seva's banner.
+  R2 + "1783677419371-1783677418690-DietyPhotos.jpeg";
 
 // Reduces a sourcePage to its base page so campaigner/deep-link variants map
 // to the same banner as their parent page, e.g. "/janmashtami/c/xyz" ->
