@@ -42,7 +42,9 @@ async function main() {
     }
     try {
       const resolved = await resolveJpegHeaderUrl(source);
-      if (!resolved || resolved.includes(FALLBACK_MARKER)) {
+      // The neutral default IS the Gupshup-hosted image, so only count it as
+      // a fallback when a seva banner got swapped for it.
+      if (!resolved || (resolved.includes(FALLBACK_MARKER) && resolved !== source)) {
         fellBack += 1;
         console.log(`FALLBACK  ${page}\n          -> generic banner (conversion or upload failed)`);
       } else {

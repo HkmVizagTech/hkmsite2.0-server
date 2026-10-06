@@ -12,7 +12,10 @@
 const fs = require("fs");
 const path = require("path");
 const fontkit = require("fontkit");
-const { PDFDocument, StandardFonts } = require("pdf-lib");
+const { PDFDocument, StandardFonts, rgb } = require("pdf-lib");
+
+// How a hand-entered donation was paid, as printed after "by" on the receipt.
+const MODE_WORDS = { cash: "Cash", cheque: "Cheque", upi: "UPI", bank: "Bank" };
 const numToWord = require("number-to-words");
 const { donationModel } = require("../models/donation.model");
 const { campaignerModel } = require("../models/campaigner.model");
@@ -256,6 +259,26 @@ async function generateReceiptBuffer(donationId) {
     // Flattening is cosmetic (it makes the fields non-editable). A receipt
     // with live form fields is still a correct, complete receipt.
     console.warn(`receipt.service: could not flatten the form (${err.message}) — saving with fields intact`);
+  }
+
+  // The template prints "by Online" as fixed text. That is true for a
+  // website payment and wrong on a cash, cheque or bank receipt entered by
+  // hand (here or from DRM) - an 80G receipt the donor files must say how
+  // they actually paid. Covered and rewritten only for those; a website
+  // receipt is left exactly as the template draws it.
+  if (donation.manualEntry && MODE_WORDS[donation.manualPaymentMode]) {
+    try {
+      const page = pdfDoc.getPages()[0];
+      const h = page.getHeight();
+      // "Online" sits at x 51.3-84.5, y 442.2-457.0 from the top (pdftotext
+      // -bbox on receipt-template.pdf). Covered with a little margin.
+      page.drawRectangle({ x: 50.5, y: h - 457.6, width: 36, height: 16, color: rgb(1, 1, 1) });
+      page.drawText(MODE_WORDS[donation.manualPaymentMode], {
+        x: 52, y: h - 452.8, size: 9.5, font: helvetica, color: rgb(0, 0, 0),
+      });
+    } catch (err) {
+      console.warn(`receipt.service: could not print the payment mode (${err.message})`);
+    }
   }
 
   return await pdfDoc.save();

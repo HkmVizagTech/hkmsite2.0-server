@@ -30,7 +30,9 @@ const {
 const {
   isGupshupConfigured,
   sendPendingWhatsappViaGupshup,
+  FALLBACK_HEADER_IMAGE,
 } = require("./gupshup.service");
+const { sanitizeBannerImage, fetchPageOgImage, absolutize } = require("./pageBanner.service");
 
 // Which BSP sends the pending reminder.
 //
@@ -154,9 +156,22 @@ async function donorAlreadyCompleted(donation) {
   return completed || false;
 }
 
-// Desktop banner image shown as the WhatsApp template header, keyed by the
-// donation's base sourcePage (see baseSourcePage). If a page has no dedicated
-// image here, the generic WAPI_PENDING_IMAGE default (or no header) is used.
+// ---------------------------------------------------------------------------
+// Header image — the hero banner of the page the donation came from.
+//
+// Resolved in this order (see resolveSevaImage):
+//   1. donation.bannerImage — the page's own desktop hero banner, sent by the
+//      page with its order. This is what keeps FUTURE pages correct without a
+//      server change: a new page only has to pass its banner when it creates
+//      the order (every current page does).
+//   2. SEVA_IMAGES below — for donations created before pages sent their
+//      banner, and for pages that don't send one (Subhojanam).
+//   3. The og:image of the live page — on the festival pages this is the
+//      desktop hero banner, so even a brand-new page that forgot step 1 gets
+//      its own banner rather than another campaign's.
+//   4. DEFAULT_SEVA_IMAGE — a neutral image. Never another campaign's banner:
+//      that was the bug where a Pitru Paksha donor got the Brick Seva banner.
+// ---------------------------------------------------------------------------
 const R2 = "https://pub-32ade8e1209149f980ffe2aa4ddc6c99.r2.dev/media-library/";
 
 const SEVA_IMAGES = {
@@ -172,12 +187,10 @@ const SEVA_IMAGES = {
   "janmashtami": R2 + "1787055655171-1787055654678-janmashtami2banner.webp",
   "janmashtami3": R2 + "1787055655171-1787055654678-janmashtami2banner.webp",
   "donations/janmashtami2": R2 + "1787055655171-1787055654678-janmashtami2banner.webp",
-  // Festival / occasion pages: each uses its own page banner. Before these
-  // were listed, they all fell through to the default (the Brick Seva banner),
-  // so a Pitru Paksha reminder showed a brick image.
+  // Festival pages — desktop hero banners, same as each page's DESKTOP_BANNER.
   "pitru-paksha": R2 + "1790235076658-1790235074922-pitru-paksha-desk.webp",
-  "govardhan-puja": R2 + "1789476038584-1789476037499-govardhan-desk.webp",
   "radhashtami": R2 + "1788946765218-1788946764659-Radhashtamidesk.webp",
+  "govardhan-puja": R2 + "1789476038584-1789476037499-govardhan-desk.webp",
   "ekadashi": R2 + "1790154963930-1790154963675-ekadashidesk.webp",
   "shayani-ekadashi": R2 + "1790154963930-1790154963675-ekadashidesk.webp",
   "chaturmas": R2 + "1786539472426-1786539471654-Chaturmasbanner.webp",
@@ -191,16 +204,19 @@ const SEVA_IMAGES = {
   "donate/vastra-seva": R2 + "1785573838202-1785573837372-ChatGPTImageAug12026021301PM.webp",
 };
 
-// Generic fallback header image when no mapping matches.
+// Neutral fallback header image, used only when nothing above finds a banner.
 //
-// This must NOT be empty: pending_seva_notice has an IMAGE header, and Meta
-// rejects the entire send with "(#131008) Required parameter is missing" when
-// no header media is supplied. Point WAPI_PENDING_IMAGE at a neutral temple
-// banner if this one isn't the right generic.
+// This must NOT be empty: the template has an IMAGE header, and Meta rejects
+// the entire send with "(#131008) Required parameter is missing" when no
+// header media is supplied. It must also NOT be a campaign banner — this used
+// to be the Brick Seva banner, which is how unmapped pages (Pitru Paksha,
+// Radhashtami, Govardhan Puja…) ended up advertising Brick Seva. Default is
+// a neutral deity photo (JPEG, so Meta accepts it as-is); override with
+// WAPI_PENDING_IMAGE, and the template's approved sample is the last resort.
 const DEFAULT_SEVA_IMAGE =
   process.env.WAPI_PENDING_IMAGE ||
-  // Neutral deity photo, so an unmapped page never shows another seva's banner.
-  R2 + "1783677419371-1783677418690-DietyPhotos.jpeg";
+  R2 + "1783677419371-1783677418690-DietyPhotos.jpeg" ||
+  FALLBACK_HEADER_IMAGE;
 
 // Reduces a sourcePage to its base page so campaigner/deep-link variants map
 // to the same banner as their parent page, e.g. "/janmashtami/c/xyz" ->
@@ -209,10 +225,51 @@ function baseSourcePage(sourcePage) {
   return String(sourcePage || "").replace(/^\/+/, "").replace(/\/c\/[^/]+$/, "").replace(/\/+$/, "");
 }
 
+/** Static lookup only (steps 2 and 4) — kept for callers that can't await. */
 function getSevaImage(donation) {
   const sourcePage = baseSourcePage(donation.sourcePage);
   return SEVA_IMAGES[sourcePage] || DEFAULT_SEVA_IMAGE;
 }
+
+/**
+ * The hero banner of the page this donation came from (steps 1–4 above).
+ * Never throws; always returns a URL.
+ *
+ * @returns {Promise<{url: string, source: "donation"|"map"|"live-page"|"default"}>}
+ */
+async function resolveSevaImage(donation) {
+  // 1. Banner the page sent with the order. Re-checked here as well as at
+  //    order time, so records written before the allowlist existed can't
+  //    smuggle anything through.
+  const stored = sanitizeBannerImage(donation.bannerImage);
+  if (stored) return { url: absolutize(stored), source: "donation" };
+
+  const page = baseSourcePage(donation.sourcePage);
+
+  // 2. Known page.
+  if (SEVA_IMAGES[page]) return { url: SEVA_IMAGES[page], source: "map" };
+
+  // 3. The live page's og:image. Only for real page paths — not the
+  //    "admin-manual" / backfill markers some records carry.
+  if (page && !NON_PAGE_SOURCES.has(page)) {
+    try {
+      const live = await fetchPageOgImage(page);
+      if (live) return { url: live, source: "live-page" };
+    } catch {
+      /* fall through to the neutral default */
+    }
+  }
+
+  // 4. Neutral default.
+  console.warn(
+    `[PendingReminder] No banner found for sourcePage "${donation.sourcePage || ""}" —`,
+    "using the neutral default. Send bannerImage with the order from that page."
+  );
+  return { url: DEFAULT_SEVA_IMAGE, source: "default" };
+}
+
+// sourcePage values that are markers, not pages on the site.
+const NON_PAGE_SOURCES = new Set(["admin-manual", "recovered-subscription-backfill", "unknown"]);
 
 // The 6 core sevas map their donation category and seva-name keywords to the
 // seva's dedicated campaign page. We use this for the footer button so a
@@ -244,6 +301,10 @@ const FESTIVAL_PAGES = new Set([
   "subhojanam",
   "sqft-seva-campaign",
   "brick-seva-campaign",
+  "pitru-paksha",
+  "radhashtami",
+  "govardhan-puja",
+  "chaturmas",
 ]);
 
 // Human-readable campaign name for the festival pages, keyed by base
@@ -302,8 +363,12 @@ function resolveLinkSuffix(donation) {
   const basePage = baseSourcePage(donation.sourcePage);
 
   // Festival / standalone campaign pages — always keep their own link so the
-  // donor returns to the page they originated from.
-  if (FESTIVAL_PAGES.has(basePage)) return basePage;
+  // donor returns to the page they originated from. Any donation carrying a
+  // festivalSlug counts too, so a festival page added later isn't redirected
+  // to a core seva page just because its seva is called "Annadana Seva".
+  if (basePage && (FESTIVAL_PAGES.has(basePage) || String(donation.festivalSlug || "").trim())) {
+    return basePage;
+  }
 
   const typeStr = String(donation.type || "").trim().toUpperCase();
   const nameStr = String(donation.sevaName || "").toLowerCase();
@@ -458,6 +523,7 @@ async function runPendingReminders() {
     }
 
     const linkSuffix = resolveLinkSuffix(donation);
+    const banner = await resolveSevaImage(donation);
 
     try {
       await provider.send(
@@ -469,7 +535,7 @@ async function runPendingReminders() {
           linkSuffix,
           linkQuery: resolveLinkQuery(donation, linkSuffix),
           sourcePage: donation.sourcePage,
-          sevaImage: getSevaImage(donation),
+          sevaImage: banner.url,
           campaignLabel: resolveCampaignLabel(donation),
         },
       );
@@ -481,6 +547,7 @@ async function runPendingReminders() {
         String(donation._id),
         "->",
         donation.donorMobile,
+        `(banner: ${banner.source})`,
       );
     } catch (err) {
       failed += 1;
@@ -523,6 +590,7 @@ module.exports = {
   SEVA_IMAGES,
   DEFAULT_SEVA_IMAGE,
   getSevaImage,
+  resolveSevaImage,
   resolveLinkSuffix,
   CAMPAIGN_LABELS,
   resolveCampaignLabel,

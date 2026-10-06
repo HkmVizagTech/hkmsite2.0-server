@@ -18,6 +18,12 @@ const donationSchema = new mongoose.Schema({
   // the pending-payment reminder can send a donor back to the exact seva they
   // abandoned. Absent on donations from pages that don't have per-seva slugs.
   sevaSlug: { type: String },
+  // Desktop hero banner of the page the donation was made on, as sent by that
+  // page with its order. The pending-payment WhatsApp reminder uses it as the
+  // template's header image, so every page — including ones added later —
+  // gets its own banner without a server change. Only URLs on our own image
+  // hosts are stored (see pageBanner.service.js).
+  bannerImage: { type: String },
   legacySevaId: { type: Number },
   paymentAccount: { type: String },
   transactionId: { type: String },

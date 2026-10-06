@@ -373,4 +373,5 @@ module.exports = {
   uploadReceiptPdf,
   resolveJpegHeaderUrl,
   GUPSHUP_TEMPLATE_URL,
+  FALLBACK_HEADER_IMAGE,
 };

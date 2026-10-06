@@ -34,6 +34,13 @@ const DONATION_FIELDS = [
   "campaignerSlug",
   "utm",
   "razorpayPaymentId",
+  // How the money came in, for donations entered by hand (cash, cheque, bank,
+  // a UPI paid straight to the temple). Without these DRM recorded every one
+  // of them as a UPI payment made on the website, with no UTR.
+  "manualEntry",
+  "manualPaymentMode",
+  "utrNumber",
+  "transactionId",
 ].join(" ");
 
 function mapDonation(d) {
@@ -53,7 +60,9 @@ function mapDonation(d) {
     utm: d.utm
       ? { source: d.utm.source || null, medium: d.utm.medium || null, campaign: d.utm.campaign || null }
       : null,
-    paymentRef: d.razorpayPaymentId || null,
+    paymentRef: d.razorpayPaymentId || d.utrNumber || d.transactionId || null,
+    paymentMode: d.manualEntry ? d.manualPaymentMode || "bank" : "online",
+    offline: !!d.manualEntry,
     prasadam: d.wantPrasadam
       ? {
           status: d.prasadamStatus || "pending",

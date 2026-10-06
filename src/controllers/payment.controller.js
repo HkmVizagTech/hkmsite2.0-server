@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const { donationModel } = require('../models/donation.model');
 const { planModel } = require('../models/plan.model');
 const { enqueueJob } = require('../redis/redisClient');
+const { sanitizeBannerImage } = require('../services/pageBanner.service');
 
 // Hand Razorpay webhook events to worker/paymentWorker.js instead of
 // processing them in-process. Only turn this on once that worker is running as
@@ -275,6 +276,8 @@ const paymentController = {
         sourcePage,
         sevaName,
         sevaSlug: req.body.sevaSlug ? String(req.body.sevaSlug).slice(0, 80) : undefined,
+        // Page hero banner, used as the pending-payment reminder's header image.
+        bannerImage: sanitizeBannerImage(req.body.bannerImage),
         legacySevaId,
         message: message || undefined,
         paymentAccount: account.name,
