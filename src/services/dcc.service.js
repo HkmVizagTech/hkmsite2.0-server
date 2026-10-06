@@ -653,6 +653,16 @@ async function syncDonationToDcc(donationOrId, gatewayPaymentId) {
       }
     }
 
+    // A hand-entered donation whose receipt number arrived on a retry, after
+    // the entry itself: DRM is told now, or it keeps showing no receipt.
+    // Online donations push from their own pipeline once this returns.
+    if (lock.manualEntry && receiptNumber) {
+      try {
+        const { notifyDrmOfDonation } = require("./drmNotify.service");
+        notifyDrmOfDonation(lock._id, { reason: "receipt_issued" }).catch(() => undefined);
+      } catch {}
+    }
+
     return { ok: true, dccResponse, receiptNumber };
   } catch (error) {
     await donationModel.findByIdAndUpdate(lock._id, {

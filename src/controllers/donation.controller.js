@@ -575,6 +575,19 @@ const donationController = {
         console.error("Manual entry WhatsApp receipt failed:", e && e.message ? e.message : e);
       }
 
+
+      // Tell DRM. Hand-entered donations - this admin's manual entry, a
+      // preacher's Raise Receipt, a pending donation completed by UTR - do
+      // not run the online pipeline, which is the only place that pushed, so
+      // they never reached DRM until somebody ran a full import there. Last,
+      // after DCC, so the receipt number goes too. Never throws.
+      try {
+        const { notifyDrmOfDonation } = require("../services/drmNotify.service");
+        notifyDrmOfDonation(donation._id, { reason: "manual_entry" }).catch(() => undefined);
+      } catch (e) {
+        console.warn("DRM push not started (non-fatal):", e && e.message ? e.message : e);
+      }
+
       const final = await donationModel.findById(donation._id);
       res.status(201).json({ success: true, donation: final });
     } catch (error) {
@@ -633,6 +646,19 @@ const donationController = {
         await sendDonationWhatsAppReceipt(await donationModel.findById(donation._id));
       } catch (e) {
         console.error("Manual completion WhatsApp receipt failed:", e && e.message ? e.message : e);
+      }
+
+
+      // Tell DRM. Hand-entered donations - this admin's manual entry, a
+      // preacher's Raise Receipt, a pending donation completed by UTR - do
+      // not run the online pipeline, which is the only place that pushed, so
+      // they never reached DRM until somebody ran a full import there. Last,
+      // after DCC, so the receipt number goes too. Never throws.
+      try {
+        const { notifyDrmOfDonation } = require("../services/drmNotify.service");
+        notifyDrmOfDonation(donation._id, { reason: "manual_entry" }).catch(() => undefined);
+      } catch (e) {
+        console.warn("DRM push not started (non-fatal):", e && e.message ? e.message : e);
       }
 
       const final = await donationModel.findById(donation._id);
