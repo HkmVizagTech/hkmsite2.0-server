@@ -43,7 +43,9 @@ paymentRouter.post('/upi-fallback/claim', upiFallbackRateLimit, express.json(), 
 // Razorpay checkout widget (e.g. pays in their UPI app and goes back).
 // Returns only safe, non-sensitive fields. No auth required — the
 // orderId itself is the access token (long random string from Razorpay).
-paymentRouter.get('/status/:orderId', express.json(), paymentController.checkStatus);
+// ?live=1 calls Razorpay, so it gets its own limiter; plain polls don't.
+const liveStatusRateLimit = rateLimit({ windowMs: 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false, skip: (req) => req.query.live !== '1' });
+paymentRouter.get('/status/:orderId', liveStatusRateLimit, express.json(), paymentController.checkStatus);
 
 // Four distinct URLs, one per Razorpay account -- each account's own
 // dashboard gets its own webhook secret tied unambiguously to its URL.

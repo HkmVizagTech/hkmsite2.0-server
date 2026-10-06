@@ -656,17 +656,33 @@ const paymentController = {
       const { orderId } = req.params;
       if (!orderId) return res.status(400).json({ message: 'orderId is required' });
 
-      const donation = await donationModel
+      let donation = await donationModel
         .findOne({ razorpayOrderId: orderId })
-        .select('status receiptNumber dccSyncStatus whatsappReceiptSentAt donorName amount sevaName type createdAt')
+        .select('status receiptNumber dccSyncStatus whatsappReceiptSentAt donorName amount sevaName type createdAt razorpayOrderId paymentAccount')
         .lean();
 
       if (!donation) return res.status(404).json({ found: false });
+
+      // ?live=1 — also ask Razorpay (the webhook can lag a few seconds).
+      // Used before offering the PhonePe / UPI fallback, so a donor whose
+      // payment actually went through is never asked to pay again.
+      let inProgress = false;
+      if (req.query.live === '1' && donation.status !== 'completed') {
+        try {
+          const { liveCheckDonationOrder } = require('../services/liveOrderCheck.service');
+          const live = await liveCheckDonationOrder(donation);
+          inProgress = live.inProgress;
+          if (live.completed) donation = { ...donation, status: 'completed' };
+        } catch (e) {
+          console.warn('checkStatus live check failed:', e && e.message ? e.message : e);
+        }
+      }
 
       res.status(200).json({
         found: true,
         status: donation.status,
         completed: donation.status === 'completed',
+        inProgress,
         receiptReady: !!(donation.receiptNumber),
         whatsappSent: !!(donation.whatsappReceiptSentAt),
         donorName: donation.donorName,

@@ -16,6 +16,7 @@ const mongoose = require("mongoose");
 const { donationModel } = require("../models/donation.model");
 const { createRazorpayInstance } = require("./payment.controller");
 const { completeDonation } = require("../services/paymentCompletion.service");
+const { liveCheckDonationOrder } = require("../services/liveOrderCheck.service");
 
 const ACCOUNTS = ["default", "donations", "touchstone", "shop"];
 const BEFORE_OPEN_MS = 15 * 60 * 1000; // payment can't predate the attempt by much
@@ -110,6 +111,15 @@ const upiFallbackController = {
       const donation = await findOwnDonation(req.body);
       if (!donation) return res.status(404).json({ success: false, message: "Donation not found." });
       if (donation.status === "completed") return res.json({ success: true, alreadyPaid: true });
+
+      // The Razorpay payment may have gone through after all (webhook late):
+      // then there's nothing to match — tell the donor it's paid.
+      try {
+        const live = await liveCheckDonationOrder(donation);
+        if (live.completed) return res.json({ success: true, alreadyPaid: true });
+      } catch (e) {
+        console.warn("upiFallback.claim live check failed:", e && e.message ? e.message : e);
+      }
 
       const payerName = clean(req.body.payerName, 80);
       if (payerName.length < 2) {
