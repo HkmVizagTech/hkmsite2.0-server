@@ -1,5 +1,6 @@
 const express = require("express");
 const { donationController } = require("../controllers/donation.controller");
+const { upiFallbackController } = require("../controllers/upiFallback.controller");
 const { authMiddleware, adminMiddleware, preacherModuleMiddleware } = require("../middlewares/auth.middleware");
 
 const donationRouter = express.Router();
@@ -27,6 +28,11 @@ donationRouter.post("/resend-recent-whatsapp", authMiddleware, adminMiddleware, 
 donationRouter.get("/prasadam-requests", authMiddleware, adminMiddleware, donationController.listPrasadamRequests);
 donationRouter.get("/prasadam-export", authMiddleware, adminMiddleware, donationController.exportPrasadamCsv);
 donationRouter.put("/:id/prasadam-status", authMiddleware, adminMiddleware, donationController.updatePrasadamStatus);
+// UPI fallback claims (Admin → Donations → UPI to match). Must stay above /:id.
+donationRouter.get("/upi-claims", authMiddleware, adminMiddleware, upiFallbackController.listClaims);
+donationRouter.get("/upi-claims/:id/candidates", authMiddleware, adminMiddleware, upiFallbackController.candidates);
+donationRouter.post("/upi-match", authMiddleware, adminMiddleware, upiFallbackController.match);
+donationRouter.post("/upi-dismiss", authMiddleware, adminMiddleware, upiFallbackController.dismiss);
 donationRouter.get("/:id", authMiddleware, adminMiddleware, donationController.get);
 donationRouter.post("/:id/resend-receipt", authMiddleware, adminMiddleware, donationController.resendReceipt);
 donationRouter.put("/:id/receipt-number", authMiddleware, adminMiddleware, donationController.patchReceiptNumber);

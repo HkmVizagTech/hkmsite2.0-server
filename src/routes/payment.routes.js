@@ -1,6 +1,7 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const { paymentController } = require('../controllers/payment.controller');
+const { upiFallbackController } = require('../controllers/upiFallback.controller');
 const { authMiddleware, adminMiddleware } = require('../middlewares/auth.middleware');
 
 const paymentRouter = express.Router();
@@ -29,6 +30,13 @@ const orderRateLimit = rateLimit({
 paymentRouter.post('/order', orderRateLimit, express.json(), paymentController.createOrder);
 paymentRouter.post('/subscription', express.json(), paymentController.createSubscription);
 paymentRouter.post('/verify', express.json(), paymentController.verifyPayment);
+
+// "Prefer PhonePe / UPI?" fallback after a failed/closed Razorpay checkout:
+// the donor opened a UPI app, then tapped "I've paid". Both only annotate the
+// donation (proved by its Razorpay order id); an admin matches the payment.
+const upiFallbackRateLimit = rateLimit({ windowMs: 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false });
+paymentRouter.post('/upi-fallback/opened', upiFallbackRateLimit, express.json(), upiFallbackController.opened);
+paymentRouter.post('/upi-fallback/claim', upiFallbackRateLimit, express.json(), upiFallbackController.claim);
 
 // Public status-check endpoint — called by the frontend to poll for
 // webhook-triggered completion after a donor navigates away from the

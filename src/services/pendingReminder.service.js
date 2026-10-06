@@ -491,6 +491,9 @@ async function runPendingReminders() {
       // until the subscription activates, and the donor already authorised
       // autopay, so a "donation not confirmed" nudge would be wrong here.
       isRecurring: { $ne: true },
+      // The donor told us they paid by UPI after the checkout failed; an
+      // admin is matching it, so a "payment pending" nudge would be wrong.
+      "upiFallback.status": { $nin: ["claimed", "matched"] },
     })
     .sort({ createdAt: 1 })
     .limit(BATCH_SIZE);

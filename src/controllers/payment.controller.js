@@ -90,6 +90,14 @@ async function processWebhookEventInline(event) {
       const payment = event.payload && event.payload.payment && event.payload.payment.entity;
       if (!payment) break;
       const orderId = payment.order_id;
+      // QR / direct-UPI payments (e.g. the website UPI QR) have no order.
+      // Looking one up by an empty order id would match ANY donation without
+      // an order and mark it paid; these are matched by an admin instead
+      // (Admin → Donations → UPI to match). Same guard as worker/paymentWorker.js.
+      if (!orderId) {
+        console.log('payment.captured without an order (QR/direct UPI):', payment.id, payment.amount / 100);
+        break;
+      }
       const completedDonation = await completeDonation({ orderId, paymentId: payment.id });
       if (completedDonation) {
         console.log('Donation marked completed for order', orderId);

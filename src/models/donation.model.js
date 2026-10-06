@@ -88,6 +88,22 @@ const donationSchema = new mongoose.Schema({
   manualPaymentMode: { type: String, enum: ["upi", "bank", "cash", "cheque"], default: undefined },
   manualEntryNote: { type: String, trim: true },
   manualEnteredBy: { type: mongoose.Schema.Types.ObjectId, ref: "user" },
+  // "Prefer PhonePe / UPI?" fallback. When the Razorpay checkout fails or
+  // the donor closes it, the checkout offers to pay the same amount straight
+  // to the temple's website UPI QR. These UPI payments carry no Razorpay order,
+  // so they are matched to this donation by an admin (Admin → Donations →
+  // UPI to match) using the amount, the payer name and these timestamps.
+  upiFallback: {
+    status: { type: String, enum: ["opened", "claimed", "matched", "dismissed"], default: undefined },
+    app: { type: String, trim: true }, // "phonepe" | "other"
+    openedAt: { type: Date }, // donor tapped Pay with PhonePe / Other UPI
+    claimedAt: { type: Date }, // donor tapped "I've paid"
+    payerName: { type: String, trim: true }, // name shown in the donor's UPI app
+    matchedAt: { type: Date },
+    matchedBy: { type: mongoose.Schema.Types.ObjectId, ref: "user" },
+    matchedPaymentId: { type: String, trim: true },
+    note: { type: String, trim: true },
+  },
   // Links this donation to a stable Donor identity record (created/found
   // by donor.service.js) — powers preacher "My Donors" views and, later,
   // the donor's own login portal showing their full donation history.
@@ -170,6 +186,7 @@ donationSchema.index({ status: 1 });
 donationSchema.index({ razorpayOrderId: 1 });
 donationSchema.index({ donorMobile: 1 });
 donationSchema.index({ utrNumber: 1 });
+donationSchema.index({ "upiFallback.status": 1, "upiFallback.claimedAt": -1 });
 donationSchema.index({ donorRecordId: 1 });
 // Prasadam tab queries always filter wantPrasadam + status, so a compound
 // index keeps the courier list fast as the request volume grows.
