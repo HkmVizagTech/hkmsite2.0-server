@@ -31,6 +31,7 @@ donationRouter.put("/:id/prasadam-status", authMiddleware, adminMiddleware, dona
 // UPI fallback claims (Admin → Donations → UPI to match). Must stay above /:id.
 donationRouter.get("/upi-claims", authMiddleware, adminMiddleware, upiFallbackController.listClaims);
 donationRouter.get("/upi-claims/:id/candidates", authMiddleware, adminMiddleware, upiFallbackController.candidates);
+donationRouter.get("/upi-qr-payments", authMiddleware, adminMiddleware, upiFallbackController.qrPayments);
 donationRouter.post("/upi-match", authMiddleware, adminMiddleware, upiFallbackController.match);
 donationRouter.post("/upi-dismiss", authMiddleware, adminMiddleware, upiFallbackController.dismiss);
 donationRouter.get("/:id", authMiddleware, adminMiddleware, donationController.get);

@@ -19,6 +19,11 @@ const { completeDonation } = require("../services/paymentCompletion.service");
 const { liveCheckDonationOrder } = require("../services/liveOrderCheck.service");
 
 const ACCOUNTS = ["default", "donations", "touchstone", "shop"];
+
+// The website's Razorpay UPI QR ("Website UPI transactions"). Payments made
+// from the PhonePe / UPI buttons and scans of the QR all land on it.
+const UPI_QR_ID = process.env.RAZORPAY_UPI_QR_ID || "qr_TkXLOSHxVdX10H";
+let qrOwnerAccount = null; // remembered after the first successful fetch
 const BEFORE_OPEN_MS = 15 * 60 * 1000; // payment can't predate the attempt by much
 const AFTER_CLAIM_MS = 6 * 60 * 60 * 1000; // donors sometimes tap "I've paid" late
 
@@ -59,6 +64,42 @@ async function fetchPaymentAnyAccount(paymentId) {
     }
   }
   return null;
+}
+
+/**
+ * Captured payments received on the website UPI QR between start and end,
+ * fetched from Razorpay (GET /v1/payments/qr_codes/{id}/payments). Tries the
+ * account that owned the QR last time first, then every configured account.
+ * Returns { account, payments, errors }; account is null if no configured
+ * key can see the QR.
+ */
+async function fetchQrPayments(start, end) {
+  const clients = razorpayClients();
+  clients.sort((a, b) => Number(b.name === qrOwnerAccount) - Number(a.name === qrOwnerAccount));
+  const errors = [];
+  for (const { name, instance } of clients) {
+    try {
+      const payments = [];
+      let skip = 0;
+      for (let page = 0; page < 10; page++) {
+        const res = await instance.qrCode.fetchAllPayments(UPI_QR_ID, {
+          from: Math.floor(start.getTime() / 1000),
+          to: Math.floor(end.getTime() / 1000),
+          count: 100,
+          skip,
+        });
+        const items = (res && res.items) || [];
+        for (const p of items) if (p.status === "captured") payments.push(summarisePayment(p, name));
+        if (items.length < 100) break;
+        skip += 100;
+      }
+      qrOwnerAccount = name;
+      return { account: name, payments, errors };
+    } catch (e) {
+      errors.push(`${name}: ${(e && e.error && e.error.description) || (e && e.message) || "failed"}`);
+    }
+  }
+  return { account: null, payments: [], errors };
 }
 
 const summarisePayment = (p, account) => ({
@@ -145,15 +186,18 @@ const upiFallbackController = {
     }
   },
 
-  // GET /donations/upi-claims?status=claimed|opened|matched|dismissed|all
+  // GET /donations/upi-claims?status=open|claimed|opened|matched|dismissed|all
+  // "open" (default) = everyone who opened PhonePe / a UPI app from the
+  // fallback, whether or not they then tapped "I've paid".
   listClaims: async (req, res) => {
     try {
       const allowed = ["claimed", "opened", "matched", "dismissed"];
-      const status = String(req.query.status || "claimed");
-      const statuses = status === "all" ? allowed : allowed.includes(status) ? [status] : ["claimed"];
+      const status = String(req.query.status || "open");
+      const statuses =
+        status === "all" ? allowed : status === "open" ? ["claimed", "opened"] : allowed.includes(status) ? [status] : ["claimed", "opened"];
       const claims = await donationModel
         .find({ "upiFallback.status": { $in: statuses } })
-        .sort({ "upiFallback.claimedAt": -1, "upiFallback.openedAt": -1 })
+        .sort({ "upiFallback.openedAt": -1, "upiFallback.claimedAt": -1 })
         .limit(300)
         .select(
           "donorName donorMobile donorEmail amount sevaName type sourcePage status createdAt razorpayOrderId razorpayPaymentId receiptNumber upiFallback"
@@ -183,10 +227,13 @@ const upiFallbackController = {
       const start = new Date((uf.openedAt || donation.createdAt).getTime() - BEFORE_OPEN_MS);
       const end = new Date(Math.min(Date.now(), (uf.claimedAt || uf.openedAt || donation.createdAt).getTime() + AFTER_CLAIM_MS));
 
+      // Prefer the website UPI QR's own payment list; fall back to scanning
+      // every order-less payment if no configured key can see the QR.
+      const qr = await fetchQrPayments(start, end);
       const clients = razorpayClients();
-      const payments = [];
-      const errors = [];
-      for (const { name, instance } of clients) {
+      const payments = qr.account ? qr.payments : [];
+      const errors = qr.account ? [] : qr.errors;
+      for (const { name, instance } of qr.account ? [] : clients) {
         try {
           let skip = 0;
           for (let page = 0; page < 5; page++) {
@@ -227,10 +274,78 @@ const upiFallbackController = {
         }))
         .sort((a, b) => Number(b.amountMatches) - Number(a.amountMatches) || Math.abs(a.minutesFromClaim) - Math.abs(b.minutesFromClaim));
 
-      res.json({ window: { start, end }, payments: list, accountsChecked: clients.map((c) => c.name), errors });
+      res.json({
+        window: { start, end },
+        payments: list,
+        source: qr.account ? `UPI QR ${UPI_QR_ID} (${qr.account} account)` : "all order-less payments",
+        accountsChecked: clients.map((c) => c.name),
+        errors,
+      });
     } catch (err) {
       console.error("upiFallback.candidates error:", err && err.message ? err.message : err);
       res.status(500).json({ message: "Could not fetch payments from Razorpay." });
+    }
+  },
+
+  // GET /donations/upi-qr-payments?days=7
+  // Every captured payment on the website UPI QR in the last N days (max 31),
+  // each with the donation it's matched to, or — if unmatched — the open UPI
+  // claims with the same amount from around that time, best guess first.
+  qrPayments: async (req, res) => {
+    try {
+      const days = Math.min(31, Math.max(1, parseInt(req.query.days, 10) || 7));
+      const end = new Date();
+      const start = new Date(end.getTime() - days * 24 * 60 * 60 * 1000);
+      const qr = await fetchQrPayments(start, end);
+      if (!qr.account) {
+        return res.status(502).json({
+          message: `Could not read UPI QR ${UPI_QR_ID} with the Razorpay keys configured on the server.`,
+          errors: qr.errors,
+        });
+      }
+
+      const ids = qr.payments.map((p) => p.id);
+      const matched = await donationModel
+        .find({ razorpayPaymentId: { $in: ids } })
+        .select("donorName donorMobile amount sevaName sourcePage razorpayPaymentId receiptNumber")
+        .lean();
+      const byPayment = new Map(matched.map((d) => [d.razorpayPaymentId, d]));
+
+      const open = await donationModel
+        .find({
+          "upiFallback.status": { $in: ["opened", "claimed"] },
+          "upiFallback.openedAt": { $gte: new Date(start.getTime() - 24 * 60 * 60 * 1000) },
+        })
+        .select("donorName donorMobile amount sevaName sourcePage upiFallback createdAt")
+        .lean();
+
+      const payments = qr.payments
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .map((p) => {
+          const m = byPayment.get(p.id);
+          if (m) return { ...p, matchedTo: m, suggestions: [] };
+          const suggestions = open
+            .filter((d) => Math.round(d.amount * 100) === Math.round(p.amount * 100))
+            .map((d) => {
+              const at = (d.upiFallback.claimedAt || d.upiFallback.openedAt || d.createdAt).getTime();
+              return { ...d, minutesFromClaim: Math.round((p.createdAt.getTime() - at) / 60000) };
+            })
+            .filter((d) => d.minutesFromClaim > -(BEFORE_OPEN_MS / 60000) && d.minutesFromClaim < AFTER_CLAIM_MS / 60000)
+            .sort((a, b) => Math.abs(a.minutesFromClaim) - Math.abs(b.minutesFromClaim))
+            .slice(0, 5);
+          return { ...p, matchedTo: null, suggestions };
+        });
+
+      res.json({
+        qrId: UPI_QR_ID,
+        account: qr.account,
+        days,
+        payments,
+        openClaims: open.map((d) => ({ _id: d._id, donorName: d.donorName, amount: d.amount, sevaName: d.sevaName, upiFallback: d.upiFallback })),
+      });
+    } catch (err) {
+      console.error("upiFallback.qrPayments error:", err && err.message ? err.message : err);
+      res.status(500).json({ message: "Could not load the QR payments from Razorpay." });
     }
   },
 
