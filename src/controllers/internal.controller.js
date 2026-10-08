@@ -41,6 +41,12 @@ const DONATION_FIELDS = [
   "manualPaymentMode",
   "utrNumber",
   "transactionId",
+  // The donor's own birthday, and the day a seva was booked for (a birthday
+  // or anniversary of the person it is "on the name of"). DRM's Sankalpam
+  // list is built from these - the puja done on that day every year.
+  "dob",
+  "sevaDate",
+  "sevakName",
 ].join(" ");
 
 function mapDonation(d) {
@@ -63,6 +69,10 @@ function mapDonation(d) {
     paymentRef: d.razorpayPaymentId || d.utrNumber || d.transactionId || null,
     paymentMode: d.manualEntry ? d.manualPaymentMode || "bank" : "online",
     offline: !!d.manualEntry,
+    occasion: d.sevaName || d.type || null,
+    sevaDate: d.sevaDate || null,
+    sevakName: d.sevakName || null,
+    dob: d.dob || null,
     prasadam: d.wantPrasadam
       ? {
           status: d.prasadamStatus || "pending",
@@ -76,8 +86,12 @@ function mapDonation(d) {
   };
 }
 
-function mapDonor(donor) {
+// `donations` (newest first) supplies the date of birth, which this site
+// keeps on each donation rather than on the donor.
+function mapDonor(donor, donations = []) {
+  const withDob = donations.find((d) => d && d.dob);
   return {
+    dob: withDob ? String(withDob.dob) : null,
     externalId: String(donor._id),
     donorId: donor.dccDonorNumber || donor.donorId,
     name: donor.name,
@@ -132,7 +146,7 @@ async function buildDonorSnapshot(donor) {
     .lean();
 
   return {
-    donor: mapDonor(donor),
+    donor: mapDonor(donor, donations),
     donations: donations.map(mapDonation),
     subscriptions: collapseSubscriptions(donations),
   };
@@ -161,7 +175,7 @@ async function buildDonorSnapshots(donors) {
   return donors.map((donor) => {
     const own = byDonor.get(String(donor._id)) || [];
     return {
-      donor: mapDonor(donor),
+      donor: mapDonor(donor, own),
       donations: own.map(mapDonation),
       subscriptions: collapseSubscriptions(own),
     };
@@ -411,16 +425,20 @@ const internalController = {
     try {
       const page = Math.max(1, parseInt(req.query.page, 10) || 1);
       const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 200));
-      const minMinutes = Math.max(15, parseInt(req.query.minMinutes, 10) || 60);
+      // No lower than 3: DRM asks from 5, after the site's 3-minute reminder.
+      const minMinutes = Math.max(3, parseInt(req.query.minMinutes, 10) || 60);
 
+      // A FAILED payment is returned at once - the donor is no longer on the
+      // payment page, and DRM rings its bell for it within minutes. A PENDING
+      // one only after minMinutes, because before that they may still pay.
+      const cutoff = new Date(Date.now() - minMinutes * 60 * 1000);
       const filter = {
-        status: { $in: ["pending", "failed"] },
-        createdAt: { $lte: new Date(Date.now() - minMinutes * 60 * 1000) },
         donorMobile: { $exists: true, $ne: "" },
+        $or: [{ status: "failed" }, { status: "pending", createdAt: { $lte: cutoff } }],
       };
       if (req.query.since) {
         const since = new Date(req.query.since);
-        if (!Number.isNaN(since.getTime())) filter.createdAt.$gte = since;
+        if (!Number.isNaN(since.getTime())) filter.createdAt = { $gte: since };
       }
 
       const [rows, total] = await Promise.all([
