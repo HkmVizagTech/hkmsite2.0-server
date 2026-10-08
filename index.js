@@ -57,8 +57,13 @@ const startServer =async()=>{
         // idempotent regardless.
         if (process.env.PENDING_REMINDER_ENABLED !== "false") {
             const { runPendingReminders } = require("./src/services/pendingReminder.service");
-            const intervalMinutes = Number(process.env.PENDING_REMINDER_INTERVAL_MINUTES || 10);
+            // Every minute, so the 3-minute reminder goes at 3 minutes, not
+            // whenever the next 10-minute pass happens to come round.
+            const intervalMinutes = Number(process.env.PENDING_REMINDER_INTERVAL_MINUTES || 1);
+            let running = false;
             const run = () => {
+                if (running) return;
+                running = true;
                 runPendingReminders()
                     .then((result) => {
                         if (result && result.checked > 0) {
@@ -67,6 +72,9 @@ const startServer =async()=>{
                     })
                     .catch((err) => {
                         console.error("Pending reminders scheduler error:", err && err.stack ? err.stack : err);
+                    })
+                    .finally(() => {
+                        running = false;
                     });
             };
             // First pass shortly after boot, then on the interval.

@@ -14,8 +14,8 @@
 //               found (see payment.controller.js). The donor tried and the
 //               payment did not go through, so the nudge is if anything more
 //               useful here than for an abandoned checkout.
-// Once such a donation is older than the cutoff (default 6 minutes, like
-// Annadan) and we haven't already messaged the donor, we send the approved
+// Once such a donation is older than the cutoff (default 3 minutes, like
+// Annadan; DRM asks a caller to ring at 5 if it is still not paid) and we haven't already messaged the donor, we send the approved
 // "pending transaction" WhatsApp template with that donation's own seva name.
 //
 // The whatsappPendingReminderSent flag makes this idempotent: it is set only
@@ -64,10 +64,10 @@ function resolveProvider() {
   };
 }
 
-// How old a pending donation must be before we nudge the donor (6 minutes —
+// How old a pending donation must be before we nudge the donor (3 minutes —
 // enough for UPI/auto-debit flows to settle or fail visibly, and for the
 // donor to have genuinely abandoned an in-progress checkout).
-const CUTOFF_MINUTES = Number(process.env.PENDING_REMINDER_CUTOFF_MINUTES || 6);
+const CUTOFF_MINUTES = Number(process.env.PENDING_REMINDER_CUTOFF_MINUTES || 3);
 
 // ...and how old is TOO old. Without this floor, the very first run after
 // deploy would sweep up every pending/failed donation ever recorded and
