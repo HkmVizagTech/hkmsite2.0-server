@@ -715,8 +715,36 @@ const donationController = {
         }
       }
 
-      const page = Math.max(1, parseInt(req.query.page || '1', 10));
-      const limit = Math.min(200, Math.max(1, parseInt(req.query.limit || '20', 10)));
+      // parseInt('abc') is NaN, and both Math.max and Math.min propagate it —
+      // so a non-numeric ?page or ?limit used to reach .skip()/.limit() as NaN.
+      const toInt = (value, fallback) => {
+        const n = parseInt(value, 10);
+        return Number.isFinite(n) ? n : fallback;
+      };
+      const page = Math.max(1, toInt(req.query.page, 1));
+
+      // Browsing the table is capped at 200 rows per page — plenty for a
+      // screen, and it stops a hand-crafted ?limit=50000 from trying to
+      // serialise the whole collection into one response.
+      //
+      // A CSV export is a different job: it legitimately wants every row that
+      // matches the filter. It used to ask for ?limit=10000 and silently get
+      // 200 back, so an admin exporting 300+ failed payments downloaded a file
+      // containing 200 of them with nothing to indicate the rest were missing.
+      // That is the worst kind of bug in an accounting tool — the output looks
+      // complete.
+      //
+      // The cap stays, because an unbounded page is still a bad idea; export
+      // mode simply gets a larger one and the client pages through until it has
+      // `total` rows. The response already echoes `total` and the `limit`
+      // actually applied, so truncation is now visible to any caller.
+      const MAX_BROWSE_LIMIT = 200;
+      const MAX_EXPORT_LIMIT = 1000;
+      const isExport = String(req.query.export || '') === '1';
+      const limit = Math.min(
+        isExport ? MAX_EXPORT_LIMIT : MAX_BROWSE_LIMIT,
+        Math.max(1, toInt(req.query.limit, 20))
+      );
       const skip = (page - 1) * limit;
 
       const projection = {
