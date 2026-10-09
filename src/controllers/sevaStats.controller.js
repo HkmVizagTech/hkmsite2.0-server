@@ -1,5 +1,5 @@
 const { donationModel } = require("../models/donation.model");
-const { cacheWrap, cacheKeys } = require("../redis/redisClient");
+const { cacheWrap, cacheKeys } = require("../cache/memoryCache");
 const { IST } = require("../config/timezone");
 
 // How long a public stats payload may be stale. These numbers are "raised so
@@ -88,7 +88,7 @@ const sevaStatsController = {
           ]),
         ]);
 
-        // Redact here, before anything is written to Redis — the cache must
+        // Redact here, before anything is written to the cache — it must
         // never hold a full donor name. `date` stays raw so timeAgo() can be
         // recomputed per request.
         return {

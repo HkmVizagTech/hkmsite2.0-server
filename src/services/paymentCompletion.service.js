@@ -12,7 +12,7 @@ const {
   sendReceiptWhatsappViaGupshup,
 } = require("./gupshup.service");
 const { generateReceiptBuffer } = require("./receipt.service");
-const { cacheDel, cacheKeys } = require("../redis/redisClient");
+const { cacheDel, cacheKeys } = require("../cache/memoryCache");
 
 // Approved Meta template for the receipt-with-PDF message. Confirmed from
 // the real approved template: body expects 3 params — donor name
@@ -348,7 +348,7 @@ async function markDonationCompleted({ donationId, orderId, paymentId }) {
  * Drops the cached public totals that this donation has just changed.
  *
  * Deliberately fire-and-forget and deliberately un-awaited by callers: a
- * donation is completed whether or not Redis cooperates, and the TTLs are the
+ * donation is completed whether or not the cache cooperates, and the TTLs are the
  * real correctness guarantee — this only shortens the window from "up to a
  * minute" to "immediately" for the pages where a donor is most likely to be
  * looking for their own name.
@@ -374,7 +374,7 @@ async function invalidateDonationCaches(donation) {
       donation.campaignerSlug ? cacheKeys.campaigner(donation.campaignerSlug) : null
     );
   } catch (err) {
-    // cacheDel already swallows Redis errors; this is belt-and-braces so a
+    // cacheDel cannot fail in practice; this is belt-and-braces so a
     // cache concern can never surface as a failed donation.
     console.warn("Cache invalidation after donation completion failed (non-fatal):", err && err.message ? err.message : err);
   }
@@ -508,10 +508,8 @@ async function completeDonation({ donationId, orderId, paymentId }) {
 }
 
 // Handles a Razorpay `subscription.charged` event — fires for EVERY charge
-// on a subscription, including the very first one. Shared by both the
-// inline webhook fallback (payment.controller.js, used when Redis isn't
-// available) and the queued worker (worker/paymentWorker.js) so the two
-// paths can never drift apart with different logic for the same event.
+// on a subscription, including the very first one. Called by the webhook
+// handler (payment.controller.js).
 //
 // Two cases:
 //   - First charge: the donor's authorization already created a pending

@@ -234,18 +234,11 @@ app.get('/health', (req, res) => {
   const dbState = mongoose && mongoose.connection ? mongoose.connection.readyState : 0;
   const ok = dbState === 1;
 
-  // Redis is reported but deliberately does NOT affect the status code. The
-  // cache fails open by design, so a Redis outage means "slower", not
-  // "unhealthy" — returning 503 here would take a healthy site out of the
-  // load balancer over an optimisation.
-  //
-  // This block exists because the cache is silent when it fails: without it,
-  // a wrong REDIS_URL looks exactly like a working cache that happens to be
-  // slow. Read `cache.connected` and the hits/misses counters to confirm
-  // Redis is genuinely being used.
+  // In-memory cache counters (src/cache/memoryCache.js); informational only,
+  // they never affect the status code.
   let cache;
   try {
-    cache = require('./src/redis/redisClient').cacheStatus();
+    cache = require('./src/cache/memoryCache').cacheStatus();
   } catch (err) {
     cache = { error: err && err.message ? err.message : String(err) };
   }

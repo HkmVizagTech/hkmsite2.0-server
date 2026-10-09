@@ -1,6 +1,6 @@
 const { campaignerModel } = require("../models/campaigner.model");
 const { donationModel } = require("../models/donation.model");
-const { cacheWrap, cacheKeys } = require("../redis/redisClient");
+const { cacheWrap, cacheKeys } = require("../cache/memoryCache");
 const { IST } = require("../config/timezone");
 
 // Shorter than the site-wide stats TTL: a campaigner refreshing their own page

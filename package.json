@@ -7,8 +7,7 @@
     "start": "node index.js",
     "dev": "nodemon index.js",
     "seed:shop-categories": "node scripts/seed-shop-categories.js",
-    "seed:festival-donations": "node scripts/seed-festival-donations.js",
-    "worker": "node worker/paymentWorker.js"
+    "seed:festival-donations": "node scripts/seed-festival-donations.js"
   },
   "keywords": [],
   "author": "",
@@ -36,7 +35,6 @@
     "number-to-words": "^1.2.4",
     "pdf-lib": "^1.17.1",
     "razorpay": "^2.9.0",
-    "redis": "^5.1.0",
     "sharp": "^0.34.5",
     "socket.io": "^4.8.1",
     "uuid": "^9.0.0"

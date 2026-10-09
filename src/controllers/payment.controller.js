@@ -2,13 +2,8 @@ const Razorpay = require('razorpay');
 const crypto = require('crypto');
 const { donationModel } = require('../models/donation.model');
 const { planModel } = require('../models/plan.model');
-const { enqueueJob } = require('../redis/redisClient');
 const { sanitizeBannerImage } = require('../services/pageBanner.service');
 
-// Hand Razorpay webhook events to worker/paymentWorker.js instead of
-// processing them in-process. Only turn this on once that worker is running as
-// its own deployed service — see the comment at the enqueue site below.
-const QUEUE_ENABLED = String(process.env.PAYMENTS_QUEUE_ENABLED || 'false') === 'true';
 const { completeDonation, markDonationCompleted, runPostCompletionPipeline, handleSubscriptionCharged } = require('../services/paymentCompletion.service');
 
 const RAZORPAY_ACCOUNTS = {
@@ -81,9 +76,8 @@ const verifySignature = ({ orderId, paymentId, signature, keySecret }) => {
   return expected === signature;
 };
 
-// Inline processor for webhook events, used when the Redis queue is
-// unavailable (unreachable, timing out, or not provisioned). Identical
-// semantics to worker/paymentWorker.js.
+// Processes a verified Razorpay webhook event in-process (called right after
+// the 200 is sent to Razorpay).
 async function processWebhookEventInline(event) {
   switch (event.event) {
     case 'payment.captured': {
@@ -93,7 +87,7 @@ async function processWebhookEventInline(event) {
       // QR / direct-UPI payments (e.g. the website UPI QR) have no order.
       // Looking one up by an empty order id would match ANY donation without
       // an order and mark it paid; these are matched by an admin instead
-      // (Admin → Donations → UPI to match). Same guard as worker/paymentWorker.js.
+      // (Admin → Donations → UPI to match).
       if (!orderId) {
         console.log('payment.captured without an order (QR/direct UPI):', payment.id, payment.amount / 100);
         break;
@@ -545,8 +539,7 @@ const paymentController = {
 
       // CRITICAL: respond to Razorpay IMMEDIATELY after signature
       // verification. Razorpay's delivery timeout is short; any slow work
-      // here (Redis enqueue to an unreachable server hangs indefinitely
-      // with node-redis's default infinite reconnect) reads as delivery
+      // here (e.g. a slow external call) reads as delivery
       // failure and gets the webhook auto-disabled after 24h of retries —
       // which has now happened twice. All processing happens after the
       // response; failures there are logged and recoverable via the
@@ -554,35 +547,10 @@ const paymentController = {
       res.status(200).send('Webhook received');
 
       setImmediate(async () => {
-        // The queue is OFF unless PAYMENTS_QUEUE_ENABLED=true, and that is
-        // deliberate rather than cautious.
-        //
-        // On a successful enqueue this handler returns immediately and hands
-        // ownership of the event to worker/paymentWorker.js. If that worker is
-        // not actually running, the event sits in the `payments:jobs` list
-        // forever: the donation is never marked completed, no receipt goes
-        // out, no DCC sync happens — and Razorpay saw a 200, so nothing
-        // anywhere reports a failure. It is silent data loss.
-        //
-        // Before this flag existed, the only thing preventing that was Redis
-        // being unreachable (REDIS_URL unset, so every enqueue failed and every
-        // event took the inline path). That made "configure REDIS_URL" — an
-        // innocuous-looking change made for caching, which needs no worker —
-        // enough to break payments. The flag decouples the two: caching can be
-        // switched on freely, and the queue only takes over when someone has
-        // explicitly confirmed a consumer exists.
-        if (QUEUE_ENABLED) {
-          try {
-            // Bound the enqueue — never trust Redis to fail fast.
-            await Promise.race([
-              enqueueJob('payments:jobs', { event: event.event, payload: event.payload, receivedAt: Date.now() }),
-              new Promise((_, reject) => setTimeout(() => reject(new Error('enqueue timeout (2s)')), 2000)),
-            ]);
-            return; // worker will process it
-          } catch (enqueueErr) {
-            console.warn('Failed to enqueue webhook job, falling back to inline processing:', enqueueErr && enqueueErr.message ? enqueueErr.message : enqueueErr);
-          }
-        }
+        // Processed in-process right after the 200. (There used to be an
+        // optional Redis queue + worker here; it was never enabled in
+        // production and Redis has been removed.) Failures are logged and
+        // recoverable via the /donations/audit-pending reconciliation.
         try {
           await processWebhookEventInline(event);
         } catch (procErr) {
