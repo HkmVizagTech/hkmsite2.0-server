@@ -96,6 +96,7 @@ const donationSchema = new mongoose.Schema({
   upiFallback: {
     status: { type: String, enum: ["opened", "claimed", "matched", "dismissed"], default: undefined },
     app: { type: String, trim: true }, // "phonepe" | "other"
+    via: { type: String, trim: true }, // "dialog" (payment-failed box) | "strip" (PhonePe strip on the page)
     openedAt: { type: Date }, // donor tapped Pay with PhonePe / Other UPI
     claimedAt: { type: Date }, // donor tapped "I've paid"
     payerName: { type: String, trim: true }, // name shown in the donor's UPI app

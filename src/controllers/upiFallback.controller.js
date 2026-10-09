@@ -128,11 +128,13 @@ const upiFallbackController = {
       const uf = donation.upiFallback || {};
       if (uf.status === "matched") return res.json({ success: true });
       const app = req.body.app === "phonepe" ? "phonepe" : "other";
+      const via = req.body.via === "strip" ? "strip" : "dialog";
       await donationModel.updateOne(
         { _id: donation._id },
         {
           $set: {
             "upiFallback.app": app,
+            "upiFallback.via": via,
             // keep the FIRST time they opened an app; that's the useful one for matching
             ...(uf.openedAt ? {} : { "upiFallback.openedAt": new Date() }),
             ...(uf.status === "claimed" ? {} : { "upiFallback.status": "opened" }),
