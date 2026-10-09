@@ -129,6 +129,9 @@ async function reconcilePendingDonations({ limit = 100, skip = 0, fix = false, s
             status: "failed",
             razorpayPaymentId: failedPayments[0].id,
           });
+          // keep Razorpay's reason (the most recent failed attempt)
+          const latest = failedPayments.slice().sort((a, b) => (b.created_at || 0) - (a.created_at || 0))[0];
+          await require("./paymentFailure.service").recordPaymentFailure(donation._id, latest).catch(() => {});
           entry.action = "MARKED_FAILED";
           summary.markedFailed++;
         } else {

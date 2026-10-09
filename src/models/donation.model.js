@@ -76,6 +76,25 @@ const donationSchema = new mongoose.Schema({
   prasadamDeliveredAt: { type: Date },
   prasadamNotes: { type: String, trim: true },
   razorpayOrderId: { type: String },
+  // Razorpay's reason for the latest failed attempt on this order (kept even if
+  // a later attempt succeeds) and how many attempts failed. Filled from the
+  // payment.failed webhook and the reconciliation job — see
+  // services/paymentFailure.service.js. Shown in Admin → Payment failures.
+  paymentError: {
+    paymentId: String,
+    code: String,
+    description: String,
+    source: String,
+    step: String,
+    reason: String,
+    method: String,
+    bank: String,
+    wallet: String,
+    upiFlow: String,
+    cardNetwork: String,
+    at: Date,
+  },
+  failedAttempts: { type: Number, default: 0 },
   razorpayPaymentId: { type: String },
   // Manual entry support — for donations that arrived OUTSIDE the website
   // checkout flow entirely (direct bank transfer, UPI paid straight to the

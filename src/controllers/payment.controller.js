@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const { donationModel } = require('../models/donation.model');
 const { planModel } = require('../models/plan.model');
 const { sanitizeBannerImage } = require('../services/pageBanner.service');
+const { recordPaymentFailure, recordDowntime } = require('../services/paymentFailure.service');
 
 const { completeDonation, markDonationCompleted, runPostCompletionPipeline, handleSubscriptionCharged } = require('../services/paymentCompletion.service');
 
@@ -147,6 +148,15 @@ async function processWebhookEventInline(event) {
       // (Razorpay can send payment.failed for one attempt while a retry
       // succeeds — we don't want to overwrite a completed donation).
       const donation = await donationModel.findOne({ razorpayOrderId: orderId });
+      // Keep Razorpay's reason for every failed attempt (bank declined, UPI
+      // request expired, cancelled by the donor…), whatever happens next.
+      if (donation) {
+        try {
+          await recordPaymentFailure(donation._id, payment);
+        } catch (e) {
+          console.warn('recordPaymentFailure failed:', e && e.message ? e.message : e);
+        }
+      }
       if (donation && donation.status === 'pending') {
         try {
           const created = createRazorpayInstance(donation.paymentAccount);
@@ -173,6 +183,15 @@ async function processWebhookEventInline(event) {
           console.log('Donation marked failed (Razorpay check failed) for order', orderId);
         }
       }
+      break;
+    }
+    case 'payment.downtime.started':
+    case 'payment.downtime.updated':
+    case 'payment.downtime.resolved': {
+      // A bank / UPI app / card network Razorpay routes through is down or
+      // degraded. Kept for 30 days so Admin → Payment failures can line
+      // failures up against outages.
+      await recordDowntime(event.event, event.payload);
       break;
     }
     case 'subscription.activated': {
