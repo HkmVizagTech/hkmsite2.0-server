@@ -297,6 +297,14 @@ const FESTIVAL_PAGES = new Set([
   // back correctly.
   "ekadashi",
   "shayani-ekadashi",
+  // The standalone /donations page is a multi-seva page in its own right, not
+  // a route into the individual seva campaigns. Without this entry it fell
+  // through to the seva matcher below: every donation from it carries
+  // type "ANNADAAN" or "GO SEVA", so every pending/failed reminder sent the
+  // donor to /anna-daan-seva or /gau-seva instead of back to /donations —
+  // a different page, with different tiers and different wording from the one
+  // they had actually been using.
+  "donations",
   "special-occasion",
   "subhojanam",
   "sqft-seva-campaign",
