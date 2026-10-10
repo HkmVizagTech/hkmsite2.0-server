@@ -158,6 +158,14 @@ const donationSchema = new mongoose.Schema({
   // RECEIPT_WHATSAPP_PROVIDER, so "which one sent this?" can't be answered
   // from the current env alone when investigating an old delivery.
   whatsappProvider: { type: String },
+
+  // When the plain 'regular_donation_success_message' acknowledgement went
+  // out. This is deliberately NOT whatsappReceiptSentAt: that message carries
+  // no receipt number and no PDF, so the real receipt must still follow once
+  // DCC syncs. Keeping them apart means the idempotency guard on the receipt
+  // is untouched, and the donation still shows up in the admin's Needs
+  // Manual Receipt / Needs WhatsApp tabs until a genuine receipt is sent.
+  whatsappThankYouSentAt: { type: Date },
   // Provider's message id for the receipt send. This is the join key for the
   // Gupshup delivery callback (/webhooks/whatsapp/gupshup) — indexed because
   // every incoming event looks a donation up by it.

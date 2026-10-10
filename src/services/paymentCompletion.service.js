@@ -5,6 +5,7 @@ const { donationModel } = require("../models/donation.model");
 const { syncDonationToDcc } = require("./dcc.service");
 const {
   isWhatsAppConfigured,
+  sendTemplateMessage,
   sendTemplateMessageWithAttachment,
 } = require("./whatsapp.service");
 const {
@@ -17,9 +18,10 @@ const { cacheDel, cacheKeys } = require("../cache/memoryCache");
 // Approved Meta template for the receipt-with-PDF message. Confirmed from
 // the real approved template: body expects 3 params — donor name
 // ({{body_1}}), amount ({{body_2}}), seva/purpose ({{body_3}}).
-// Per policy, this is the ONLY WhatsApp message this donation flow ever
-// sends — no plain-text fallback when there's no receipt yet (see
-// sendDonationWhatsAppReceipt below).
+// This is the message that carries the actual receipt. When DCC has not
+// produced a receipt number yet, a plain acknowledgement goes out instead
+// (THANKYOU_TEMPLATE_NAME) and this one still follows later — see the
+// no-receipt branch in sendDonationWhatsAppReceipt below.
 const RECEIPT_TEMPLATE_NAME = process.env.WAPI_RECEIPT_TEMPLATE_NAME || "common_donation_success_reciept";
 
 // ---------------------------------------------------------------------------
@@ -39,8 +41,43 @@ const RECEIPT_TEMPLATE_NAME = process.env.WAPI_RECEIPT_TEMPLATE_NAME || "common_
 // The same three body variables are used either way, in the same order, so a
 // switch changes only the number and the transport.
 // ---------------------------------------------------------------------------
-const RECEIPT_PROVIDER = () =>
+const DEFAULT_RECEIPT_PROVIDER = () =>
   String(process.env.RECEIPT_WHATSAPP_PROVIDER || "gupshup").toLowerCase();
+
+// Source pages whose receipts go out from the Flaxxa number instead of the
+// Gupshup one, so /donations can send from a different business number than
+// the rest of the site. Comma-separated base source pages; change it on
+// Railway without a deploy.
+const FLAXXA_SOURCE_PAGES = new Set(
+  String(process.env.RECEIPT_FLAXXA_SOURCE_PAGES || "donations")
+    .split(",")
+    .map((p) => p.trim().replace(/^\/+|\/+$/g, "").toLowerCase())
+    .filter(Boolean)
+);
+
+// Same normalisation the pending-reminder service uses, so "/donations" and
+// "/donations/c/ravi" both resolve to "donations".
+const baseSourcePage = (sourcePage) =>
+  String(sourcePage || "")
+    .replace(/^\/+/, "")
+    .replace(/\/c\/[^/]+$/, "")
+    .replace(/\/+$/, "")
+    .toLowerCase();
+
+const RECEIPT_PROVIDER = (donation) => {
+  const page = baseSourcePage(donation && donation.sourcePage);
+  if (page && FLAXXA_SOURCE_PAGES.has(page)) return "flaxxa";
+  return DEFAULT_RECEIPT_PROVIDER();
+};
+
+// Plain-text acknowledgement, no PDF and no receipt number. Sent ONLY as a
+// fallback when DCC has not produced a receipt number yet — see the long note
+// at the no-receipt branch below for why this is a fallback and never a
+// replacement. Set DONATION_THANKYOU_ENABLED=false to turn it off.
+const THANKYOU_TEMPLATE_NAME =
+  process.env.WAPI_THANKYOU_TEMPLATE_NAME || "regular_donation_success_message";
+const THANKYOU_ENABLED = () =>
+  String(process.env.DONATION_THANKYOU_ENABLED || "true") !== "false";
 
 // Isolated on purpose: a WhatsApp failure (bad template name, Meta outage,
 // invalid phone) must NEVER undo or break the donation record — the payment
@@ -49,7 +86,7 @@ const RECEIPT_PROVIDER = () =>
 // generation, and WhatsApp send are each wrapped separately so one failing
 // doesn't cascade into losing the others.
 async function sendDonationWhatsAppReceipt(donation, { force = false } = {}) {
-  const provider = RECEIPT_PROVIDER();
+  const provider = RECEIPT_PROVIDER(donation);
   const configured = provider === "gupshup" ? isGupshupReceiptConfigured() : isWhatsAppConfigured();
   if (!configured) {
     return { ok: false, skipped: true, reason: "whatsapp_not_configured", provider };
@@ -65,7 +102,61 @@ async function sendDonationWhatsAppReceipt(donation, { force = false } = {}) {
   // The admin "Resend WhatsApp" action re-checks this same condition, so
   // once DCC is manually resynced, sending the real receipt is one click.
   if (!donation.receiptNumber) {
-    return { ok: false, skipped: true, reason: "no_receipt_yet" };
+    // No receipt number means DCC has not synced (or failed). The PDF receipt
+    // prints that number, so no receipt can go out yet — and historically
+    // nothing at all went out, leaving the donor in silence.
+    //
+    // This now sends a plain acknowledgement instead. Three properties make
+    // that safe, and all three matter:
+    //
+    //   1. It is a FALLBACK, never a replacement. It records
+    //      whatsappThankYouSentAt, not whatsappReceiptSentAt, so the real
+    //      receipt still sends the moment DCC returns a number, and the
+    //      donation stays visible in the admin Needs Manual Receipt tab.
+    //   2. It claims only what is true — the money was received. It does not
+    //      say a receipt was issued, because none has been. That distinction
+    //      is why the earlier version of this fallback was removed: it let a
+    //      donor believe a failed DCC sync had completed.
+    //   3. It is sent once. Re-running the pipeline (Razorpay delivers the
+    //      same webhook twice) will not send a second one.
+    if (!THANKYOU_ENABLED() || donation.whatsappThankYouSentAt) {
+      return { ok: false, skipped: true, reason: "no_receipt_yet" };
+    }
+
+    // The acknowledgement template lives in Flaxxa, so it always goes from
+    // that number regardless of which provider owns this page's receipt.
+    if (!isWhatsAppConfigured()) {
+      return { ok: false, skipped: true, reason: "no_receipt_yet" };
+    }
+
+    // Claim it before sending, so two pipeline runs racing each other cannot
+    // both get past the check above.
+    const claimed = await donationModel.findOneAndUpdate(
+      { _id: donation._id, whatsappThankYouSentAt: { $in: [null, undefined] } },
+      { whatsappThankYouSentAt: new Date() },
+      { new: true }
+    );
+    if (!claimed) return { ok: false, skipped: true, reason: "no_receipt_yet" };
+
+    const ackName = donation.donorName || "Donor";
+    const ackAmount = Number(donation.amount || 0).toLocaleString("en-IN");
+    const ackSeva = donation.sevaName || donation.type || "Seva";
+    try {
+      await sendTemplateMessage(donation.donorMobile, THANKYOU_TEMPLATE_NAME, [
+        { type: "text", text: ackName },    // {{1}} donor name
+        { type: "text", text: ackAmount },  // {{2}} amount
+        { type: "text", text: ackSeva },    // {{3}} seva, in "support towards"
+        { type: "text", text: ackSeva },    // {{4}} seva, in "is a sacred service"
+      ]);
+      return { ok: true, thankYouOnly: true, reason: "no_receipt_yet", provider: "flaxxa" };
+    } catch (err) {
+      // Release the claim so a later pipeline run (or the admin resend) can
+      // try again — a failed send must not look like a sent one.
+      await donationModel.findByIdAndUpdate(donation._id, { whatsappThankYouSentAt: null });
+      const msg = err && err.message ? err.message : String(err);
+      console.error("Thank-you acknowledgement failed for donation", String(donation._id), msg);
+      return { ok: false, skipped: true, reason: "no_receipt_yet", thankYouError: msg };
+    }
   }
 
   // HARD IDEMPOTENCY GUARD — a donor must NEVER receive two receipts for
