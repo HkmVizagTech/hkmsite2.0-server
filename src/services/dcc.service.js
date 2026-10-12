@@ -1,5 +1,6 @@
 const { donationModel } = require("../models/donation.model");
 const { IST } = require("../config/timezone");
+const { toEnglish } = require("../utils/toEnglish");
 
 const DCC_API_URL = process.env.DCC_API_URL || "https://vhkmsurabhi.com/api/socialmedia/addDonation";
 
@@ -399,15 +400,19 @@ const toNumberArray = (value) => {
   return Number.isFinite(single) ? [single] : [];
 };
 
+// DCC receipts are printed in English, so donor details typed in Telugu,
+// Hindi or any other Indian script are converted to English letters before
+// they are sent (రమేష్ కుమార్ → Ramesh Kumar). English text passes through
+// unchanged; the donation itself keeps what the donor typed.
 const buildFullAddress = (prasadamAddress) => {
   if (!prasadamAddress) return null;
   const value = compact([
-    prasadamAddress.doorNo,
-    prasadamAddress.house,
-    prasadamAddress.street,
-    prasadamAddress.area,
-    prasadamAddress.city,
-    prasadamAddress.state,
+    toEnglish(prasadamAddress.doorNo),
+    toEnglish(prasadamAddress.house),
+    toEnglish(prasadamAddress.street),
+    toEnglish(prasadamAddress.area),
+    toEnglish(prasadamAddress.city),
+    toEnglish(prasadamAddress.state),
     prasadamAddress.pincode,
     prasadamAddress.country,
   ]).join(", ");
@@ -509,14 +514,14 @@ const buildDccPayload = (donation, gatewayPaymentId) => {
   const sevaMapping = resolveSevaMapping(donation);
 
   return {
-    donorName: donation.donorName,
+    donorName: toEnglish(donation.donorName),
     donorPhone: normalizeDccPhone(donation.donorMobile),
     donorEmail: donation.donorEmail || null,
     gender: null,
     address: {
       fullAddress: buildFullAddress(donation.prasadamAddress),
-      state: donation.prasadamAddress?.state || null,
-      city: donation.prasadamAddress?.city || null,
+      state: toEnglish(donation.prasadamAddress?.state) || null,
+      city: toEnglish(donation.prasadamAddress?.city) || null,
       pinCode: donation.prasadamAddress?.pincode || null,
     },
     PAN: donation.panNumber || null,
