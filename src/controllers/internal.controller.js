@@ -1,5 +1,6 @@
 const { donorModel } = require("../models/donor.model");
 const { donationModel } = require("../models/donation.model");
+const { toEnglish } = require("../utils/toEnglish");
 
 // How long after a receipt goes out another manual resend is refused. Stops a
 // double-click or a client retry from sending the donor two WhatsApp messages.
@@ -49,6 +50,17 @@ const DONATION_FIELDS = [
   "sevakName",
 ].join(" ");
 
+// DRM works in English, so names and addresses typed in Telugu, Hindi or any
+// other Indian script are sent in English letters (same conversion as the
+// DCC receipt). Pincode is left as it is; this site keeps what the donor typed.
+const ADDRESS_TEXT_FIELDS = ["doorNo", "house", "street", "area", "city", "state", "country"];
+function englishAddress(address) {
+  if (!address) return null;
+  const out = { ...address };
+  for (const key of ADDRESS_TEXT_FIELDS) if (out[key] != null) out[key] = toEnglish(out[key]);
+  return out;
+}
+
 function mapDonation(d) {
   return {
     externalId: String(d._id),
@@ -71,7 +83,7 @@ function mapDonation(d) {
     offline: !!d.manualEntry,
     occasion: d.sevaName || d.type || null,
     sevaDate: d.sevaDate || null,
-    sevakName: d.sevakName || null,
+    sevakName: toEnglish(d.sevakName) || null,
     dob: d.dob || null,
     prasadam: d.wantPrasadam
       ? {
@@ -80,7 +92,7 @@ function mapDonation(d) {
           trackingNumber: d.prasadamTrackingNumber || null,
           dispatchedAt: d.prasadamDispatchedAt || null,
           deliveredAt: d.prasadamDeliveredAt || null,
-          address: d.prasadamAddress || null,
+          address: englishAddress(d.prasadamAddress),
         }
       : null,
   };
@@ -94,11 +106,11 @@ function mapDonor(donor, donations = []) {
     dob: withDob ? String(withDob.dob) : null,
     externalId: String(donor._id),
     donorId: donor.dccDonorNumber || donor.donorId,
-    name: donor.name,
+    name: toEnglish(donor.name),
     mobile: donor.mobile,
     email: donor.email || null,
     panNumber: donor.panNumber || null,
-    savedAddress: donor.savedAddress || null,
+    savedAddress: englishAddress(donor.savedAddress),
     donorSince: donor.createdAt,
   };
 }
