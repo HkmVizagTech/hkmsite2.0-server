@@ -14,7 +14,7 @@ const EXCLUDE_DONATIONS_PAGE = { sourcePage: { $not: DONATIONS_DOMAIN_PATTERN } 
 // match, manual complete, a late Razorpay webhook) still gets it completed —
 // every completion path accepts a failed donation.
 const CLOSE_UNPAID_AFTER_MINUTES = Number(process.env.CLOSE_UNPAID_AFTER_MINUTES || 30);
-// A monthly seva sign-up the donor never authorised in Razorpay.
+// A monthly seva sign-up with no paid first charge after this long.
 const CLOSE_UNAUTHORISED_SUBSCRIPTION_AFTER_HOURS = Number(process.env.CLOSE_UNAUTHORISED_SUBSCRIPTION_AFTER_HOURS || 24);
 
 /** pending -> failed, marked as "never paid" (not a declined payment). */
@@ -30,23 +30,25 @@ async function closeAsNotPaid(donationId) {
  * (they have a subscription instead) and records that never got an order.
  */
 async function closeStalePendingWithoutOrder({ limit = 200, fix = false } = {}) {
-  const summary = { checked: 0, closedNotPaid: 0, subscriptionsLeft: 0, manualLeft: 0, errors: 0 };
+  const summary = { checked: 0, completed: 0, closedNotPaid: 0, subscriptionsLeft: 0, errors: 0 };
   const cutoff = new Date(Date.now() - CLOSE_UNPAID_AFTER_MINUTES * 60 * 1000);
   const subCutoff = new Date(Date.now() - CLOSE_UNAUTHORISED_SUBSCRIPTION_AFTER_HOURS * 60 * 60 * 1000);
   const stale = await donationModel
     .find({ status: "pending", razorpayOrderId: { $in: [null, ""] }, createdAt: { $lte: cutoff } })
     .sort({ lastReconcileCheckAt: 1, createdAt: -1 })
     .limit(limit)
-    .select("_id subscriptionId paymentAccount manualEntry createdAt")
+    .select("_id subscriptionId paymentAccount manualEntry utrNumber createdAt")
     .lean();
 
   for (const d of stale) {
     summary.checked++;
     try {
       if (fix) await donationModel.updateOne({ _id: d._id }, { lastReconcileCheckAt: new Date() });
-      if (d.manualEntry) {
-        // Entered by hand; the person who entered it completes it.
-        summary.manualLeft++;
+      if (d.manualEntry && d.utrNumber) {
+        // Entered by hand with the UTR as proof of payment, but its
+        // completion never ran (the server stopped mid-way): finish it.
+        if (fix) await completeDonation({ donationId: d._id });
+        summary.completed++;
         continue;
       }
       if (d.subscriptionId) {
@@ -59,12 +61,15 @@ async function closeStalePendingWithoutOrder({ limit = 200, fix = false } = {}) 
           summary.errors++;
           continue;
         }
-        const sub = await created.instance.subscriptions.fetch(d.subscriptionId);
-        // authenticated / active: the first charge is on its way (the
-        // subscription.charged webhook completes it); pending: Razorpay is
-        // retrying a charge. Everything else was never authorised or ended.
-        if (["authenticated", "active", "pending"].includes(sub && sub.status)) {
-          summary.subscriptionsLeft++;
+        // A paid invoice means the first monthly charge went through and its
+        // webhook was missed: complete with that payment. Otherwise the
+        // sign-up was never paid; if a charge comes later, the
+        // subscription.charged webhook still completes this record.
+        const invoices = await created.instance.invoices.all({ subscription_id: d.subscriptionId });
+        const paid = ((invoices && invoices.items) || []).find((inv) => inv.status === "paid" && inv.payment_id);
+        if (paid) {
+          if (fix) await completeDonation({ donationId: d._id, paymentId: paid.payment_id });
+          summary.completed++;
           continue;
         }
       }
@@ -197,11 +202,48 @@ async function reconcilePendingDonations({ limit = 100, skip = 0, fix = false, s
           donation.receiptNumber ? summary.capturedWithReceipt++ : summary.capturedAndCompleted++;
         }
       } else if (authorized) {
-        // Money authorised but not yet captured: Razorpay captures or
-        // refunds it on its own, usually within minutes. Leave it.
+        // The donor's money is authorised but was never captured (Razorpay
+        // refunds it after a few days if nobody does). The donor meant to
+        // pay, so capture it and complete the donation.
+        const auth = items.find((p) => p.status === "authorized");
         entry.razorpayStatus = items.map((p) => p.status).join(", ");
-        entry.action = "NEEDS_REVIEW (authorized, not captured yet)";
-        summary.genuinelyPending++;
+        entry.razorpayPaymentId = auth.id;
+        if (!fix) {
+          entry.action = "WOULD_CAPTURE_AND_COMPLETE";
+          summary.capturedAndCompleted++;
+        } else {
+          try {
+            await created.instance.payments.capture(auth.id, auth.amount, auth.currency || "INR");
+            await completeDonation({ orderId: donation.razorpayOrderId, paymentId: auth.id });
+            entry.action = "CAPTURED_AND_COMPLETED (was authorized, not captured)";
+            summary.capturedAndCompleted++;
+          } catch (capErr) {
+            const code = capErr && (capErr.statusCode || (capErr.error && capErr.error.code));
+            if (code === 400 || code === "BAD_REQUEST_ERROR") {
+              // Razorpay refuses: already refunded / expired. Nothing was paid.
+              await donationModel.updateOne(
+                { _id: donation._id, status: "pending" },
+                {
+                  status: "failed",
+                  razorpayPaymentId: auth.id,
+                  paymentError: {
+                    paymentId: auth.id,
+                    description: `Could not capture the authorised payment: ${(capErr.error && capErr.error.description) || capErr.message || "refused by Razorpay"}`,
+                    method: auth.method || undefined,
+                    at: new Date(),
+                  },
+                }
+              );
+              entry.action = "MARKED_FAILED (authorized payment could not be captured)";
+              summary.markedFailed++;
+            } else {
+              // Network / Razorpay outage: try again on the next run.
+              entry.error = (capErr && capErr.message) || String(capErr);
+              entry.action = "ERROR (capture will be retried)";
+              summary.errors++;
+            }
+          }
+        }
       } else if (failedPayments.length === 0) {
         // No attempt at all, or only attempts the donor never finished
         // ("created").

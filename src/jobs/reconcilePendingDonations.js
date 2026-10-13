@@ -10,10 +10,11 @@ const {
 //   - captured                      -> completed (DCC + WhatsApp as usual)
 //   - every attempt failed          -> failed (Razorpay's reason kept)
 //   - never paid / donor left       -> failed, marked closedAsNotPaidAt
-//   - authorised, not yet captured  -> left; Razorpay settles it within minutes
-// and closes monthly seva sign-ups never authorised within 24 h. It is also
-// the safety net for missed webhooks (restart mid-delivery, Razorpay's retry
-// window running out).
+//   - authorised, not yet captured  -> captured, then completed
+// Hand entries with a UTR whose completion never ran are completed, and
+// monthly seva sign-ups are completed (paid first invoice) or closed after
+// 24 h. It is also the safety net for missed webhooks (restart mid-delivery,
+// Razorpay's retry window running out).
 //
 // Runs on a plain setInterval rather than a cron library — avoids adding
 // a dependency for something this simple on an always-on Railway process.
@@ -32,12 +33,12 @@ async function runReconciliation() {
       olderThanMinutes: CLOSE_UNPAID_AFTER_MINUTES,
     });
     const noOrder = await closeStalePendingWithoutOrder({ limit: 200, fix: true });
-    const fixed = summary.capturedAndCompleted + summary.capturedWithReceipt;
+    const fixed = summary.capturedAndCompleted + summary.capturedWithReceipt + noOrder.completed;
     if (fixed > 0 || summary.markedFailed > 0 || summary.closedNotPaid > 0 || noOrder.closedNotPaid > 0) {
       console.log(
         `[reconcile] completed ${fixed} paid, marked ${summary.markedFailed} failed, ` +
         `closed ${summary.closedNotPaid + noOrder.closedNotPaid} never paid ` +
-        `(checked ${summary.totalChecked + noOrder.checked}, ${summary.genuinelyPending} awaiting capture, ` +
+        `(checked ${summary.totalChecked + noOrder.checked}, ` +
         `${summary.errors + noOrder.errors} errors)`
       );
     }

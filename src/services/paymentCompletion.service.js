@@ -629,7 +629,12 @@ async function handleSubscriptionCharged(payload) {
   }
 
   let targetDonationId;
-  if (original.status === "pending") {
+  // The sign-up record was never paid: still pending, or closed as failed
+  // ("never paid") by the reconcile job before this first charge arrived.
+  const neverPaid =
+    original.status === "pending" ||
+    (original.status === "failed" && original.closedAsNotPaidAt && !original.razorpayPaymentId);
+  if (neverPaid) {
     // First charge — complete the record created at signup rather than
     // creating a duplicate.
     targetDonationId = original._id;
