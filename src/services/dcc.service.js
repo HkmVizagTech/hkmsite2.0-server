@@ -289,6 +289,67 @@ const DEFAULT_NAME_BASED_SEVA_MAPPINGS = [
     sevaSubCategory: 118,
     sevaSubCategoryCode: "MNSO-B",
   },
+  // ---- Vijayadashami festival sevas ----
+  // Real DCC codes from the temple's SevaList2026 sheet (provided
+  // 2026-10-13): Cultural Program (3) -> Vijayadashami (106). The
+  // /vijayadashami page sends festivalSlug "vijayadashami" plus sevaName =
+  // the seva title, so BOTH conditions must hold and no other festival's
+  // donation can cross-match these entries.
+  //
+  // The sevaNameIncludes needles below must stay in step with the seva
+  // titles in app/vijayadashami/VijayadashamiClient.tsx - rename a seva
+  // there without changing it here and the donation falls through to the
+  // generic Annadana code.
+  {
+    sevaNameIncludes: ["yajamana"],
+    festivalSlug: "vijayadashami",
+    sevaCategory: 3,
+    sevaSubCategory: 106,
+    sevaSubCategoryCode: 104,
+  },
+  {
+    sevaNameIncludes: ["pushpalankara", "pushpa alankara", "pushpanjali"],
+    festivalSlug: "vijayadashami",
+    sevaCategory: 3,
+    sevaSubCategory: 106,
+    sevaSubCategoryCode: 105,
+  },
+  {
+    // DCC spells this one "Mantapa Seva" (not Mandapa).
+    sevaNameIncludes: ["mantapa", "mandapa", "mandap"],
+    festivalSlug: "vijayadashami",
+    sevaCategory: 3,
+    sevaSubCategory: 106,
+    sevaSubCategoryCode: 106,
+  },
+  {
+    sevaNameIncludes: ["vastrabharana", "vastra abharana", "vastra-abharana"],
+    festivalSlug: "vijayadashami",
+    sevaCategory: 3,
+    sevaSubCategory: 106,
+    sevaSubCategoryCode: 107,
+  },
+  {
+    sevaNameIncludes: ["annadana", "anna daan", "anna-daan", "annadaan"],
+    festivalSlug: "vijayadashami",
+    sevaCategory: 3,
+    sevaSubCategory: 106,
+    sevaSubCategoryCode: 108,
+  },
+  {
+    sevaNameIncludes: ["homam", "homa seva", "yagna", "yajna"],
+    festivalSlug: "vijayadashami",
+    sevaCategory: 3,
+    sevaSubCategory: 106,
+    sevaSubCategoryCode: 109,
+  },
+  {
+    sevaNameIncludes: ["gau seva", "go seva", "cow", "goshala"],
+    festivalSlug: "vijayadashami",
+    sevaCategory: 3,
+    sevaSubCategory: 106,
+    sevaSubCategoryCode: 141,
+  },
   // ---- Generic seva mappings (non-festival) ----
   {
     sevaNameIncludes: ["annadana", "anna daan", "anna-daan", "annadaan", "sadhu bhojan", "sadhu vaishnav bhojan"],

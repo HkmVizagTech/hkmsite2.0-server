@@ -194,6 +194,7 @@ const SEVA_IMAGES = {
   "ekadashi": R2 + "1790154963930-1790154963675-ekadashidesk.webp",
   "shayani-ekadashi": R2 + "1790154963930-1790154963675-ekadashidesk.webp",
   "chaturmas": R2 + "1786539472426-1786539471654-Chaturmasbanner.webp",
+  "vijayadashami": R2 + "1791881259236-1791881258272-Dussehradesk.webp",
   "special-occasion": R2 + "1784005845291-1784005844212-ChatGPTImageJul142026104033AM.png",
   // /donate/<seva> pages share the banner of the matching campaign page.
   "donate/square-foot-seva": R2 + "1786528614525-1786528613759-ChatGPTImageAug122026022735PM.webp",
@@ -307,6 +308,7 @@ const FESTIVAL_PAGES = new Set([
   "donations",
   "special-occasion",
   "subhojanam",
+  "vijayadashami",
   "sqft-seva-campaign",
   "brick-seva-campaign",
   "pitru-paksha",
@@ -331,6 +333,7 @@ const CAMPAIGN_LABELS = {
   "ekadashi": "Ekadashi",
   "shayani-ekadashi": "Shayani Ekadashi", // legacy pending records only
   chaturmas: "Chaturmas",
+  vijayadashami: "Vijayadashami",
   "special-occasion": "Special Occasion Seva",
 };
 
