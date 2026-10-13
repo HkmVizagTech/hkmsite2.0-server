@@ -17,6 +17,9 @@ donationRouter.get("/utm-transactions", authMiddleware, adminMiddleware, donatio
 donationRouter.get("/report", authMiddleware, adminMiddleware, donationController.getReport);
 donationRouter.get("/whatsapp-audit", authMiddleware, adminMiddleware, donationController.whatsappAudit);
 donationRouter.get("/needs-manual-receipt", authMiddleware, adminMiddleware, donationController.needsManualReceipt);
+// DCC receipts panel (Admin → Donations → DCC receipts). Above /:id.
+donationRouter.get("/dcc-status", authMiddleware, adminMiddleware, donationController.dccStatus);
+donationRouter.post("/dcc-push-all", authMiddleware, adminMiddleware, donationController.dccPushAll);
 donationRouter.post("/backfill-dcc-donor-numbers", authMiddleware, adminMiddleware, donationController.backfillDccDonorNumbers);
 donationRouter.get("/needs-whatsapp", authMiddleware, adminMiddleware, donationController.needsWhatsApp);
 donationRouter.post("/backfill-donors", authMiddleware, adminMiddleware, donationController.backfillDonors);

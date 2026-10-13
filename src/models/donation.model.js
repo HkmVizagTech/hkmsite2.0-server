@@ -143,6 +143,13 @@ const donationSchema = new mongoose.Schema({
   lastReconcileCheckAt: { type: Date, default: null },
   dccSyncedAt: { type: Date },
   dccLastAttemptAt: { type: Date },
+  // How many times this donation has been pushed to DCC; the automatic
+  // receipt sweep (services/dccSweep.service.js) waits longer between
+  // retries as this grows.
+  dccAttempts: { type: Number, default: 0 },
+  // Set when DCC answered a repeat push with the receipt it had already
+  // issued (its first reply was lost or was an error after saving).
+  dccRecoveredAt: { type: Date },
   dccSyncError: { type: String },
   dccPayload: { type: mongoose.Schema.Types.Mixed },
   dccResponse: { type: mongoose.Schema.Types.Mixed },

@@ -857,11 +857,22 @@ const donationController = {
         });
       }
 
-      const result = await syncDonationToDcc(id);
-      if (result.ok) {
-        return res.status(200).json({ message: "Receipt sync re-triggered successfully", receiptNumber: result.receiptNumber });
+      // Push to DCC (DCC answers a repeat push with the receipt it already
+      // issued), then send the WhatsApp receipt once there is a number.
+      const { pushAndSendReceipt } = require("../services/dccSweep.service");
+      const result = await pushAndSendReceipt(id);
+      if (result.receiptNumber) {
+        const wa = result.whatsapp;
+        const whatsapp = !wa
+          ? "already sent earlier"
+          : wa.ok && !wa.skipped
+          ? "WhatsApp receipt sent"
+          : wa.reason === "already_sent"
+          ? "already sent earlier"
+          : `WhatsApp not sent (${wa.reason || wa.error || "unknown"})`;
+        return res.status(200).json({ message: `Receipt ${result.receiptNumber} — ${whatsapp}`, receiptNumber: result.receiptNumber, whatsapp: wa });
       }
-      return res.status(502).json({ message: "Receipt resync failed", error: result.error });
+      return res.status(502).json({ message: "DCC did not return a receipt number", error: (result.dcc && (result.dcc.error || result.dcc.reason)) || "unknown" });
     } catch (err) {
       console.error("Resend receipt error:", err);
       res.status(500).json({ message: "Server error", error: err.message });
@@ -889,9 +900,60 @@ const donationController = {
         { new: true }
       );
       if (!donation) return res.status(404).json({ success: false, message: "Donation not found." });
-      res.status(200).json({ success: true, message: `Receipt number set to ${clean}`, donation });
+
+      // The donor gets the receipt now that it has a number (never twice).
+      let whatsapp = null;
+      if (donation.status === "completed" && !donation.whatsappReceiptSentAt) {
+        try {
+          const { sendDonationWhatsAppReceipt } = require("../services/paymentCompletion.service");
+          whatsapp = await sendDonationWhatsAppReceipt(donation);
+        } catch (e) {
+          whatsapp = { ok: false, error: e && e.message ? e.message : String(e) };
+        }
+      }
+      const sent = whatsapp && whatsapp.ok && !whatsapp.skipped;
+      res.status(200).json({
+        success: true,
+        message: `Receipt number set to ${clean}${sent ? " — WhatsApp receipt sent" : whatsapp ? ` — WhatsApp not sent (${whatsapp.reason || whatsapp.error || "unknown"})` : ""}`,
+        donation,
+        whatsapp,
+      });
     } catch (err) {
       console.error("patchReceiptNumber error:", err);
+      res.status(500).json({ success: false, message: err.message || "Server error" });
+    }
+  },
+
+  // GET /donations/dcc-status?includeOld=true — Admin → Donations → DCC
+  // receipts: every successful donation still without a DCC receipt number,
+  // what the automatic sweep will do with it, and the counts.
+  dccStatus: async (req, res) => {
+    try {
+      const { dccReceiptStatus, isSweepRunning } = require("../services/dccSweep.service");
+      const { isDccConfigured } = require("../services/dcc.service");
+      const status = await dccReceiptStatus({ includeOld: req.query.includeOld === "true" });
+      res.status(200).json({ success: true, configured: isDccConfigured(), running: isSweepRunning(), ...status });
+    } catch (err) {
+      console.error("dccStatus error:", err);
+      res.status(500).json({ success: false, message: err.message || "Server error" });
+    }
+  },
+
+  // POST /donations/dcc-push-all — push every due donation now instead of
+  // waiting for the next sweep (retry waits skipped). Runs in the background;
+  // the panel refreshes /dcc-status to follow it.
+  dccPushAll: async (req, res) => {
+    try {
+      const { sweepDccReceipts, isSweepRunning } = require("../services/dccSweep.service");
+      const { isDccConfigured } = require("../services/dcc.service");
+      if (!isDccConfigured()) return res.status(400).json({ success: false, message: "DCC is not configured on this server." });
+      if (isSweepRunning()) return res.status(202).json({ success: true, message: "A push is already running." });
+      sweepDccReceipts({ limit: 200, ignoreBackoff: true })
+        .then((s) => console.log(`[dcc-sweep] admin push: pushed ${s.pushed}, ${s.receipts} receipt(s), ${s.whatsappSent} WhatsApp sent, ${s.failed} failing`))
+        .catch((e) => console.error("[dcc-sweep] admin push failed:", e && e.message ? e.message : e));
+      res.status(202).json({ success: true, message: "Pushing to DCC now." });
+    } catch (err) {
+      console.error("dccPushAll error:", err);
       res.status(500).json({ success: false, message: err.message || "Server error" });
     }
   },

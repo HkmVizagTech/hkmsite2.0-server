@@ -6,6 +6,7 @@ const { app } = require("./app");
 const { connectDb } = require("./src/config/db");
 const { startReconciliationJob } = require("./src/jobs/reconcilePendingDonations");
 const { startTrackingSyncJob } = require("./src/jobs/trackingSync");
+const { startDccSweepJob } = require("./src/jobs/dccReceiptSweep");
 const { ensureDefaultShopCategories } = require("./src/services/shopBootstrap.service");
 const { ensureDefaultFestivalDonations } = require("./src/services/festivalDonationBootstrap.service");
 const { ensureBlogDrafts } = require("./src/services/blogDraftsBootstrap.service");
@@ -41,6 +42,10 @@ const startServer =async()=>{
         })
 
         startReconciliationJob();
+
+        // Every successful donation gets pushed to DCC until it has a receipt
+        // number; the WhatsApp receipt follows. Disable with DCC_SWEEP_ENABLED=false.
+        startDccSweepJob();
 
         // Auto-tracking sync: watch courier feeds (Delhivery / DTDC /
         // Bluedart / India Post) for shipped orders and flip them to

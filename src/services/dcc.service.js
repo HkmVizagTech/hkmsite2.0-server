@@ -510,6 +510,10 @@ const resolveSevaMapping = (donation) => {
   };
 };
 
+// The transaction id DCC stores and de-duplicates on.
+const dccTransactionId = (donation, gatewayPaymentId) =>
+  gatewayPaymentId || donation.utrNumber || donation.razorpayPaymentId || donation.transactionId || null;
+
 const buildDccPayload = (donation, gatewayPaymentId) => {
   const sevaMapping = resolveSevaMapping(donation);
 
@@ -533,7 +537,7 @@ const buildDccPayload = (donation, gatewayPaymentId) => {
     modeOfPayment: donation.manualPaymentMode
       ? (DCC_PAYMENT_MODES[donation.manualPaymentMode] ?? DCC_PAYMENT_MODES.online)
       : DCC_PAYMENT_MODES.online,
-    gatewayPaymentId: gatewayPaymentId || donation.utrNumber || donation.razorpayPaymentId || donation.transactionId || null,
+    gatewayPaymentId: dccTransactionId(donation, gatewayPaymentId),
     transactionDate: formatDateForDcc(donation.date || donation.createdAt || new Date()),
     enrolledBy: resolveEnrolledBy(donation),
   };
@@ -559,6 +563,12 @@ async function postToDcc(payload) {
     parsed = { raw };
   }
 
+  // DCC answers a repeat push of a transaction it already has with the
+  // receipt it issued the first time ("Transaction already exists —
+  // returning existing donation and donor details."). A receipt number in
+  // the reply is the answer we want, whatever the status code.
+  if (parsed && typeof parsed === "object" && parsed.ReceiptNumber) return parsed;
+
   if (!response.ok) {
     const message = parsed && typeof parsed === "object" && parsed.Message
       ? parsed.Message
@@ -571,9 +581,8 @@ async function postToDcc(payload) {
     // so admin knows to check DCC directly and enter the receipt manually.
     if (typeof message === "string" && message.toLowerCase().includes("transaction details exist")) {
       const err = new Error(
-        "DCC already has this donation on record (a previous sync attempt succeeded on their side). " +
-        "Please log into DCC (vhkmsurabhi.com), find this transaction by the donor name/amount/date, " +
-        "and enter the receipt number manually — or contact DCC support to share it with you."
+        "DCC already has this donation on record but did not return its receipt number. " +
+        "Find the transaction in DCC (vhkmsurabhi.com) by donor name/amount/date and enter the receipt number here."
       );
       err.status = response.status;
       err.response = parsed;
@@ -597,7 +606,14 @@ async function syncDonationToDcc(donationOrId, gatewayPaymentId) {
 
   if (!donation) return { ok: false, skipped: true, reason: "donation_not_found" };
   if (!isDccConfigured()) return { ok: false, skipped: true, reason: "dcc_not_configured" };
-  if (donation.receiptNumber || donation.dccSyncStatus === "synced") {
+  if (donation.receiptNumber) {
+    return { ok: true, skipped: true, reason: "already_synced" };
+  }
+  // "synced" without a receipt number: DCC took it but the number never came
+  // back. Pushing again is safe only when DCC can recognise the transaction
+  // (it de-duplicates on the payment id / UTR and replies with the receipt it
+  // already issued); without one, a second push would raise a second receipt.
+  if (donation.dccSyncStatus === "synced" && !dccTransactionId(donation, gatewayPaymentId)) {
     return { ok: true, skipped: true, reason: "already_synced" };
   }
 
@@ -610,13 +626,14 @@ async function syncDonationToDcc(donationOrId, gatewayPaymentId) {
     {
       dccSyncStatus: "syncing",
       dccLastAttemptAt: new Date(),
+      $inc: { dccAttempts: 1 },
     },
     { new: true }
   );
 
   if (!lock) {
     const latest = await donationModel.findById(donation._id);
-    if (latest?.receiptNumber || latest?.dccSyncStatus === "synced") {
+    if (latest?.receiptNumber) {
       return { ok: true, skipped: true, reason: "already_synced" };
     }
     return { ok: false, skipped: true, reason: "sync_in_progress" };
@@ -627,8 +644,10 @@ async function syncDonationToDcc(donationOrId, gatewayPaymentId) {
   try {
     const dccResponse = await postToDcc(payload);
     const receiptNumber = dccResponse?.ReceiptNumber || null;
+    const recovered = /already exists/i.test(String(dccResponse?.Message || ""));
 
     await donationModel.findByIdAndUpdate(lock._id, {
+      ...(recovered ? { dccRecoveredAt: new Date() } : {}),
       dccSyncStatus: "synced",
       dccSyncedAt: new Date(),
       dccSyncError: null,
@@ -685,6 +704,7 @@ async function syncDonationToDcc(donationOrId, gatewayPaymentId) {
 module.exports = {
   DCC_PAYMENT_MODES,
   buildDccPayload,
+  dccTransactionId,
   isDccConfigured,
   resolveEnrolledBy,
   resolveSevaMapping,
