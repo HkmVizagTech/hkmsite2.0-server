@@ -480,7 +480,9 @@ async function invalidateDonationCaches(donation) {
 // a Janmashtami campaign where hundreds of payments complete in a short
 // window) — a slow DCC response never delays the WhatsApp receipt for a
 // different donor whose payment completed at the same time.
-async function runPostCompletionPipeline(donationId, paymentId) {
+// sendWhatsApp:false completes and pushes to DCC but sends the donor nothing
+// (old donations settled by the reconcile job long after the payment).
+async function runPostCompletionPipeline(donationId, paymentId, { sendWhatsApp = true } = {}) {
   let donation;
   try {
     donation = await donationModel.findById(donationId);
@@ -548,7 +550,7 @@ async function runPostCompletionPipeline(donationId, paymentId) {
   }
 
   try {
-    const refreshed = await donationModel.findById(donationId);
+    const refreshed = sendWhatsApp ? await donationModel.findById(donationId) : null;
     if (refreshed) await sendDonationWhatsAppReceipt(refreshed);
   } catch (err) {
     console.error("WhatsApp receipt failed (non-fatal, will appear in Needs WhatsApp tab):", String(donationId), err && err.message ? err.message : err);
@@ -589,11 +591,11 @@ async function runPostCompletionPipeline(donationId, paymentId) {
 
 // Full synchronous flow: mark completed + run pipeline.
 // Used by webhooks and reconciliation where no user is waiting.
-async function completeDonation({ donationId, orderId, paymentId }) {
+async function completeDonation({ donationId, orderId, paymentId, sendWhatsApp = true }) {
   const donation = await markDonationCompleted({ donationId, orderId, paymentId });
   if (!donation) return null;
 
-  await runPostCompletionPipeline(donation._id, paymentId);
+  await runPostCompletionPipeline(donation._id, paymentId, { sendWhatsApp });
 
   return donationModel.findById(donation._id);
 }

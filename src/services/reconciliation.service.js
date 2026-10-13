@@ -1,6 +1,12 @@
 const { donationModel } = require("../models/donation.model");
 const { createRazorpayInstance } = require("../controllers/payment.controller");
 const { completeDonation } = require("./paymentCompletion.service");
+const { AUTO_SINCE } = require("./dccSweep.service");
+
+// Donations from before the site pushed to DCC (2 Jul 2026) that turn out to
+// be paid are completed and pushed to DCC (DCC answers with the receipt it
+// already has, if any) but the donor gets no WhatsApp so long after paying.
+const whatsAppFor = (d) => new Date(d.createdAt) >= AUTO_SINCE;
 
 // The standalone /donations page (and anything under /donations/...) has
 // its own dedicated admin — same pattern as donation.controller.js's
@@ -47,7 +53,7 @@ async function closeStalePendingWithoutOrder({ limit = 200, fix = false } = {}) 
       if (d.manualEntry && d.utrNumber) {
         // Entered by hand with the UTR as proof of payment, but its
         // completion never ran (the server stopped mid-way): finish it.
-        if (fix) await completeDonation({ donationId: d._id });
+        if (fix) await completeDonation({ donationId: d._id, sendWhatsApp: whatsAppFor(d) });
         summary.completed++;
         continue;
       }
@@ -68,7 +74,7 @@ async function closeStalePendingWithoutOrder({ limit = 200, fix = false } = {}) 
         const invoices = await created.instance.invoices.all({ subscription_id: d.subscriptionId });
         const paid = ((invoices && invoices.items) || []).find((inv) => inv.status === "paid" && inv.payment_id);
         if (paid) {
-          if (fix) await completeDonation({ donationId: d._id, paymentId: paid.payment_id });
+          if (fix) await completeDonation({ donationId: d._id, paymentId: paid.payment_id, sendWhatsApp: whatsAppFor(d) });
           summary.completed++;
           continue;
         }
@@ -191,7 +197,7 @@ async function reconcilePendingDonations({ limit = 100, skip = 0, fix = false, s
               : "COMPLETED (status only — receipt already existed)";
             summary.capturedWithReceipt++;
           } else {
-            await completeDonation({ orderId: donation.razorpayOrderId, paymentId: captured.id });
+            await completeDonation({ orderId: donation.razorpayOrderId, paymentId: captured.id, sendWhatsApp: whatsAppFor(donation) });
             entry.action = wasAlreadyFailed
               ? "CORRECTED (was marked failed, actually captured — full pipeline, DCC + WhatsApp triggered)"
               : "COMPLETED (full pipeline — DCC + WhatsApp triggered)";
@@ -214,7 +220,7 @@ async function reconcilePendingDonations({ limit = 100, skip = 0, fix = false, s
         } else {
           try {
             await created.instance.payments.capture(auth.id, auth.amount, auth.currency || "INR");
-            await completeDonation({ orderId: donation.razorpayOrderId, paymentId: auth.id });
+            await completeDonation({ orderId: donation.razorpayOrderId, paymentId: auth.id, sendWhatsApp: whatsAppFor(donation) });
             entry.action = "CAPTURED_AND_COMPLETED (was authorized, not captured)";
             summary.capturedAndCompleted++;
           } catch (capErr) {
