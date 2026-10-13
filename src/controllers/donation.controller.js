@@ -846,7 +846,7 @@ const donationController = {
   resendReceipt: async (req, res) => {
     try {
       const { id } = req.params;
-      const { syncDonationToDcc, isDccConfigured } = require("../services/dcc.service");
+      const { isDccConfigured } = require("../services/dcc.service");
       const donation = await donationModel.findById(id);
       if (!donation) return res.status(404).json({ message: "Donation not found" });
 
@@ -859,20 +859,13 @@ const donationController = {
 
       // Push to DCC (DCC answers a repeat push with the receipt it already
       // issued), then send the WhatsApp receipt once there is a number.
-      const { pushAndSendReceipt } = require("../services/dccSweep.service");
+      const { pushAndSendReceipt, pushResultMessage } = require("../services/dccSweep.service");
       const result = await pushAndSendReceipt(id);
+      const message = pushResultMessage(result);
       if (result.receiptNumber) {
-        const wa = result.whatsapp;
-        const whatsapp = !wa
-          ? "already sent earlier"
-          : wa.ok && !wa.skipped
-          ? "WhatsApp receipt sent"
-          : wa.reason === "already_sent"
-          ? "already sent earlier"
-          : `WhatsApp not sent (${wa.reason || wa.error || "unknown"})`;
-        return res.status(200).json({ message: `Receipt ${result.receiptNumber} — ${whatsapp}`, receiptNumber: result.receiptNumber, whatsapp: wa });
+        return res.status(200).json({ message, receiptNumber: result.receiptNumber, whatsapp: result.whatsapp });
       }
-      return res.status(502).json({ message: "DCC did not return a receipt number", error: (result.dcc && (result.dcc.error || result.dcc.reason)) || "unknown" });
+      return res.status(502).json({ message, error: message });
     } catch (err) {
       console.error("Resend receipt error:", err);
       res.status(500).json({ message: "Server error", error: err.message });
@@ -889,35 +882,11 @@ const donationController = {
       const clean = String(receiptNumber || "").trim();
       if (!clean) return res.status(400).json({ success: false, message: "receiptNumber is required." });
 
-      const donation = await donationModel.findByIdAndUpdate(
-        req.params.id,
-        {
-          receiptNumber: clean,
-          dccSyncStatus: "synced",
-          dccSyncedAt: new Date(),
-          dccSyncError: null,
-        },
-        { new: true }
-      );
-      if (!donation) return res.status(404).json({ success: false, message: "Donation not found." });
-
-      // The donor gets the receipt now that it has a number (never twice).
-      let whatsapp = null;
-      if (donation.status === "completed" && !donation.whatsappReceiptSentAt) {
-        try {
-          const { sendDonationWhatsAppReceipt } = require("../services/paymentCompletion.service");
-          whatsapp = await sendDonationWhatsAppReceipt(donation);
-        } catch (e) {
-          whatsapp = { ok: false, error: e && e.message ? e.message : String(e) };
-        }
-      }
-      const sent = whatsapp && whatsapp.ok && !whatsapp.skipped;
-      res.status(200).json({
-        success: true,
-        message: `Receipt number set to ${clean}${sent ? " — WhatsApp receipt sent" : whatsapp ? ` — WhatsApp not sent (${whatsapp.reason || whatsapp.error || "unknown"})` : ""}`,
-        donation,
-        whatsapp,
-      });
+      // Stores it and sends the donor the WhatsApp receipt (never twice).
+      const { setReceiptNumberAndSend } = require("../services/dccSweep.service");
+      const result = await setReceiptNumberAndSend(req.params.id, clean);
+      if (!result) return res.status(404).json({ success: false, message: "Donation not found." });
+      res.status(200).json({ success: true, ...result });
     } catch (err) {
       console.error("patchReceiptNumber error:", err);
       res.status(500).json({ success: false, message: err.message || "Server error" });

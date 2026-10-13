@@ -99,20 +99,64 @@ async function pushAndSendReceipt(donationId, { sendReceipt = true } = {}) {
   return result;
 }
 
+/** One line for admin screens: what a push did. */
+function pushResultMessage(result) {
+  if (!result.receiptNumber) {
+    return `DCC did not return a receipt number: ${(result.dcc && (result.dcc.error || result.dcc.reason)) || "unknown"}`;
+  }
+  const wa = result.whatsapp;
+  const whatsapp = !wa || wa.reason === "already_sent"
+    ? "WhatsApp receipt already sent earlier"
+    : wa.ok && !wa.skipped
+    ? "WhatsApp receipt sent"
+    : `WhatsApp not sent (${wa.reason || wa.error || "unknown"})`;
+  return `Receipt ${result.receiptNumber} — ${whatsapp}`;
+}
+
+/**
+ * Admin typed in the receipt number from DCC: store it and send the WhatsApp
+ * receipt (once). Returns null when the donation does not exist.
+ */
+async function setReceiptNumberAndSend(donationId, receiptNumber) {
+  const donation = await donationModel.findByIdAndUpdate(
+    donationId,
+    { receiptNumber, receiptGeneratedAt: new Date(), dccSyncStatus: "synced", dccSyncedAt: new Date(), dccSyncError: null },
+    { new: true }
+  );
+  if (!donation) return null;
+  let whatsapp = null;
+  if (donation.status === "completed" && !donation.whatsappReceiptSentAt) {
+    try {
+      const { sendDonationWhatsAppReceipt } = require("./paymentCompletion.service");
+      whatsapp = await sendDonationWhatsAppReceipt(donation);
+    } catch (e) {
+      whatsapp = { ok: false, error: e && e.message ? e.message : String(e) };
+    }
+  }
+  const sent = whatsapp && whatsapp.ok && !whatsapp.skipped;
+  const message = `Receipt number set to ${receiptNumber}` +
+    (sent ? " — WhatsApp receipt sent" : whatsapp ? ` — WhatsApp not sent (${whatsapp.reason || whatsapp.error || "unknown"})` : "");
+  return { donation, whatsapp, message };
+}
+
+// `scope` (a donation filter) limits a sweep or the status list to one part
+// of the site — the /donations page admin passes its page filter.
+const scoped = (query, scope) => (scope ? { $and: [query, scope] } : query);
+
 let running = false;
 
 /**
  * One pass: push every due donation that has no receipt number.
  * `limit` caps pushes per pass (DCC is slow; the next pass continues).
  */
-async function sweepDccReceipts({ limit = 25, now = Date.now(), ignoreBackoff = false } = {}) {
+async function sweepDccReceipts({ limit = 25, now = Date.now(), ignoreBackoff = false, scope = null } = {}) {
   const summary = { checked: 0, pushed: 0, receipts: 0, recovered: 0, whatsappSent: 0, failed: 0, staleLocks: 0, skipped: {} };
   if (!isDccConfigured()) return { ...summary, skippedAll: "dcc_not_configured" };
   if (running) return { ...summary, skippedAll: "already_running" };
   running = true;
   try {
     summary.staleLocks = await releaseStaleLocks();
-    const candidates = await donationModel.find(NO_RECEIPT).sort({ createdAt: -1 }).limit(2000).select(FIELDS).lean();
+    const candidates = await donationModel.find(scoped(NO_RECEIPT, scope)).sort({ createdAt: -1 }).limit(2000).select(FIELDS).lean();
     summary.checked = candidates.length;
 
     for (const d of candidates) {
@@ -139,12 +183,12 @@ async function sweepDccReceipts({ limit = 25, now = Date.now(), ignoreBackoff = 
 /** Counts and the list behind Admin → Donations → DCC receipts. */
 // Donations from before AUTO_SINCE are only counted, not listed, unless asked
 // for: years of history without a site-side receipt would bury the live list.
-async function dccReceiptStatus({ listLimit = 300, includeOld = false } = {}) {
+async function dccReceiptStatus({ listLimit = 300, includeOld = false, scope = null } = {}) {
   const now = Date.now();
   const query = includeOld ? NO_RECEIPT : { ...NO_RECEIPT, createdAt: { $gte: AUTO_SINCE } };
   const [missing, beforeAutoSince] = await Promise.all([
-    donationModel.find(query).sort({ createdAt: -1 }).limit(2000).select(FIELDS).lean(),
-    donationModel.countDocuments({ ...NO_RECEIPT, createdAt: { $lt: AUTO_SINCE } }),
+    donationModel.find(scoped(query, scope)).sort({ createdAt: -1 }).limit(2000).select(FIELDS).lean(),
+    donationModel.countDocuments(scoped({ ...NO_RECEIPT, createdAt: { $lt: AUTO_SINCE } }, scope)),
   ]);
 
   const counts = { missing: missing.length, autoQueued: 0, retrying: 0, needsAdmin: 0, pushing: 0, beforeAutoSince };
@@ -178,14 +222,14 @@ async function dccReceiptStatus({ listLimit = 300, includeOld = false } = {}) {
   });
 
   const [receiptNoWhatsapp, recovered7d] = await Promise.all([
-    donationModel.countDocuments({
+    donationModel.countDocuments(scoped({
       status: "completed",
       receiptNumber: { $nin: [null, ""] },
       whatsappReceiptSentAt: { $in: [null, undefined] },
       donorMobile: { $nin: [null, ""] },
       createdAt: { $gte: AUTO_SINCE },
-    }),
-    donationModel.countDocuments({ dccRecoveredAt: { $gte: new Date(now - 7 * 24 * 60 * 60 * 1000) } }),
+    }, scope)),
+    donationModel.countDocuments(scoped({ dccRecoveredAt: { $gte: new Date(now - 7 * 24 * 60 * 60 * 1000) } }, scope)),
   ]);
 
   return {
@@ -197,4 +241,14 @@ async function dccReceiptStatus({ listLimit = 300, includeOld = false } = {}) {
 
 const isSweepRunning = () => running;
 
-module.exports = { sweepDccReceipts, pushAndSendReceipt, dccReceiptStatus, autoPushDecision, releaseStaleLocks, isSweepRunning, AUTO_SINCE };
+module.exports = {
+  sweepDccReceipts,
+  pushAndSendReceipt,
+  pushResultMessage,
+  setReceiptNumberAndSend,
+  dccReceiptStatus,
+  autoPushDecision,
+  releaseStaleLocks,
+  isSweepRunning,
+  AUTO_SINCE,
+};

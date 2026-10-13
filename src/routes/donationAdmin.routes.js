@@ -12,6 +12,11 @@ donationAdminRouter.get("/dashboard-stats", authMiddleware, donationsAdminMiddle
 donationAdminRouter.get("/report", authMiddleware, donationsAdminMiddleware, donationAdminController.getReport);
 donationAdminRouter.get("/transactions", authMiddleware, donationsAdminMiddleware, donationAdminController.getAllTransactions);
 donationAdminRouter.get("/transactions/:id", authMiddleware, donationsAdminMiddleware, donationAdminController.getTransactionById);
+// DCC receipts (push to DCC, receipt number, WhatsApp receipt) for this page's donations.
+donationAdminRouter.get("/dcc-status", authMiddleware, donationsAdminMiddleware, donationAdminController.dccStatus);
+donationAdminRouter.post("/dcc-push-all", authMiddleware, donationsAdminMiddleware, donationAdminController.dccPushAll);
+donationAdminRouter.post("/transactions/:id/dcc-push", authMiddleware, donationsAdminMiddleware, donationAdminController.dccPushOne);
+donationAdminRouter.put("/transactions/:id/receipt-number", authMiddleware, donationsAdminMiddleware, donationAdminController.setReceiptNumber);
 donationAdminRouter.get("/utm-stats", authMiddleware, donationsAdminMiddleware, donationAdminController.getUtmStats);
 donationAdminRouter.get("/utm-transactions", authMiddleware, donationsAdminMiddleware, donationAdminController.getUtmTransactions);
 donationAdminRouter.get("/export", authMiddleware, donationsAdminMiddleware, donationAdminController.exportTransactions);

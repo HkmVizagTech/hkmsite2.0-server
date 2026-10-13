@@ -309,6 +309,82 @@ const donationAdminController = {
     }
   },
 
+  // ── DCC receipts for /donations page donations (same tab as the main
+  // admin's Donations → DCC receipts, limited to this page's donations;
+  // logic in services/dccSweep.service.js) ──
+
+  // GET /donations-admin/dcc-status?includeOld=true
+  dccStatus: async (req, res) => {
+    try {
+      const { dccReceiptStatus, isSweepRunning } = require("../services/dccSweep.service");
+      const { isDccConfigured } = require("../services/dcc.service");
+      const status = await dccReceiptStatus({ includeOld: req.query.includeOld === "true", scope: DONATIONS_PAGE_FILTER });
+      res.status(200).json({ success: true, configured: isDccConfigured(), running: isSweepRunning(), ...status });
+    } catch (error) {
+      console.error("donationAdmin.dccStatus error:", error);
+      res.status(500).json({ success: false, message: "Failed to load DCC status" });
+    }
+  },
+
+  // POST /donations-admin/dcc-push-all — runs in the background
+  dccPushAll: async (req, res) => {
+    try {
+      const { sweepDccReceipts, isSweepRunning } = require("../services/dccSweep.service");
+      const { isDccConfigured } = require("../services/dcc.service");
+      if (!isDccConfigured()) return res.status(400).json({ success: false, message: "DCC is not configured on this server." });
+      if (isSweepRunning()) return res.status(202).json({ success: true, message: "A push is already running." });
+      sweepDccReceipts({ limit: 200, ignoreBackoff: true, scope: DONATIONS_PAGE_FILTER })
+        .then((s) => console.log(`[dcc-sweep] /donations admin push: pushed ${s.pushed}, ${s.receipts} receipt(s), ${s.whatsappSent} WhatsApp sent, ${s.failed} failing`))
+        .catch((e) => console.error("[dcc-sweep] /donations admin push failed:", e && e.message ? e.message : e));
+      res.status(202).json({ success: true, message: "Pushing to DCC now." });
+    } catch (error) {
+      console.error("donationAdmin.dccPushAll error:", error);
+      res.status(500).json({ success: false, message: "Could not start the push" });
+    }
+  },
+
+  // POST /donations-admin/transactions/:id/dcc-push — push one donation to
+  // DCC and send the WhatsApp receipt once it has a number.
+  dccPushOne: async (req, res) => {
+    try {
+      const { id } = req.params;
+      if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) return res.status(400).json({ success: false, message: "Invalid transaction ID" });
+      const txn = await donationModel.findOne({ _id: id, ...DONATIONS_PAGE_FILTER }).select("status").lean();
+      if (!txn) return res.status(404).json({ success: false, message: "Transaction not found" });
+      if (txn.status !== "completed") return res.status(400).json({ success: false, message: "Only successful donations get a DCC receipt." });
+      const { isDccConfigured } = require("../services/dcc.service");
+      if (!isDccConfigured()) return res.status(400).json({ success: false, message: "DCC is not configured on this server." });
+
+      const { pushAndSendReceipt, pushResultMessage } = require("../services/dccSweep.service");
+      const result = await pushAndSendReceipt(id);
+      const message = pushResultMessage(result);
+      res.status(result.receiptNumber ? 200 : 502).json({ success: !!result.receiptNumber, message, receiptNumber: result.receiptNumber, whatsapp: result.whatsapp });
+    } catch (error) {
+      console.error("donationAdmin.dccPushOne error:", error);
+      res.status(500).json({ success: false, message: "Push to DCC failed" });
+    }
+  },
+
+  // PUT /donations-admin/transactions/:id/receipt-number { receiptNumber }
+  // — receipt number looked up in DCC by hand; sends the WhatsApp receipt.
+  setReceiptNumber: async (req, res) => {
+    try {
+      const { id } = req.params;
+      const clean = String((req.body && req.body.receiptNumber) || "").trim();
+      if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) return res.status(400).json({ success: false, message: "Invalid transaction ID" });
+      if (!clean) return res.status(400).json({ success: false, message: "receiptNumber is required." });
+      const txn = await donationModel.findOne({ _id: id, ...DONATIONS_PAGE_FILTER }).select("_id").lean();
+      if (!txn) return res.status(404).json({ success: false, message: "Transaction not found" });
+
+      const { setReceiptNumberAndSend } = require("../services/dccSweep.service");
+      const result = await setReceiptNumberAndSend(id, clean);
+      res.status(200).json({ success: true, message: result.message, whatsapp: result.whatsapp });
+    } catch (error) {
+      console.error("donationAdmin.setReceiptNumber error:", error);
+      res.status(500).json({ success: false, message: "Could not save the receipt number" });
+    }
+  },
+
   // GET /donations-admin/utm-stats — aggregated campaign/source/medium metrics
   getUtmStats: async (req, res) => {
     try {
