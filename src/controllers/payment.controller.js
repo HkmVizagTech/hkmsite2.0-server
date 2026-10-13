@@ -7,6 +7,14 @@ const { recordPaymentFailure, recordDowntime } = require('../services/paymentFai
 
 const { completeDonation, markDonationCompleted, runPostCompletionPipeline, handleSubscriptionCharged } = require('../services/paymentCompletion.service');
 
+// Smallest donation we will take, in rupees. Anything under this costs
+// more in payment-gateway fees, receipt generation and DCC sync than it
+// brings in, and sub-rupee amounts were being used to probe the checkout.
+// Override with MIN_DONATION_AMOUNT if the temple ever changes the floor.
+const MIN_DONATION_AMOUNT = Math.max(1, Number(process.env.MIN_DONATION_AMOUNT) || 100);
+const belowMinimum = (amount) => !amount || !Number.isFinite(Number(amount)) || Number(amount) < MIN_DONATION_AMOUNT;
+const MIN_AMOUNT_MESSAGE = `The minimum donation is Rs. ${MIN_DONATION_AMOUNT}.`;
+
 const RAZORPAY_ACCOUNTS = {
   default: {
     key_id: () => process.env.RAZORPAY_KEY_ID,
@@ -253,8 +261,8 @@ const paymentController = {
         message,
       } = req.body;
 
-      if (!amount || Number(amount) < 1) {
-        return res.status(400).send('Invalid amount');
+      if (belowMinimum(amount)) {
+        return res.status(400).send(MIN_AMOUNT_MESSAGE);
       }
 
       const razorpay = createRazorpayInstance(req.body.account);
@@ -379,8 +387,8 @@ const paymentController = {
         sourcePage, sevaName, sevaUnitLabel,
       } = req.body;
 
-      if (!amount || Number(amount) < 1) {
-        return res.status(400).send('Invalid amount');
+      if (belowMinimum(amount)) {
+        return res.status(400).send(MIN_AMOUNT_MESSAGE);
       }
 
       const razorpay = createRazorpayInstance(req.body.account);
