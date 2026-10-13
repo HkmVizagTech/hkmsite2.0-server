@@ -681,6 +681,10 @@ const donationController = {
           { whatsappReceiptSentAt: { $exists: false } },
           { whatsappReceiptSentAt: null },
         ];
+      } else if (status === 'unpaid') {
+        // Not paid yet: still pending, or closed as failed after 30 minutes
+        // (Manual Entry attaches a UTR to either).
+        filter.status = { $in: ['pending', 'failed'] };
       } else if (status && status !== 'all') {
         filter.status = status;
       }

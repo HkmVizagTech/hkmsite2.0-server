@@ -19,6 +19,14 @@ const paymentFailuresController = {
       ]);
       const totals = Object.fromEntries(statusCounts.map((s) => [s._id, s.n]));
       const started = statusCounts.reduce((a, s) => a + s.n, 0);
+      // Checkouts closed as failed because nothing was ever paid (the donor
+      // left) — counted apart from payments that were declined.
+      const notPaid = await donationModel.countDocuments({
+        createdAt: { $gte: since },
+        razorpayOrderId: { $exists: true, $ne: null },
+        status: "failed",
+        closedAsNotPaidAt: { $exists: true },
+      });
 
       const withError = { "paymentError.at": { $gte: since } };
 
@@ -73,7 +81,13 @@ const paymentFailuresController = {
       res.json({
         days,
         since,
-        checkouts: { started, completed: totals.completed || 0, failed: totals.failed || 0, pending: totals.pending || 0 },
+        checkouts: {
+          started,
+          completed: totals.completed || 0,
+          failed: Math.max(0, (totals.failed || 0) - notPaid), // declined / errored
+          notPaid, // left without paying (closed after 30 min)
+          pending: totals.pending || 0, // still within the 30 minutes
+        },
         reasons: reasons.map((r) => ({ ...r._id, donations: r.donations, attempts: r.attempts, paidLater: r.paidLater })),
         byMethod: byMethod.map((m) => ({ method: m._id.method || "unknown", via: m._id.via || "—", donations: m.donations })),
         recent,

@@ -141,6 +141,9 @@ const donationSchema = new mongoose.Schema({
   // first batches would re-check the same already-confirmed-abandoned
   // records forever instead of progressing through the backlog.
   lastReconcileCheckAt: { type: Date, default: null },
+  // Set when a checkout was closed as failed because nothing was ever paid
+  // (the donor left) — tells it apart from a payment the bank declined.
+  closedAsNotPaidAt: { type: Date },
   dccSyncedAt: { type: Date },
   dccLastAttemptAt: { type: Date },
   // How many times this donation has been pushed to DCC; the automatic
