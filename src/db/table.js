@@ -4,6 +4,23 @@ const snake = (s) => s.replace(/[A-Z]/g, (c) => "_" + c.toLowerCase());
 const camel = (s) => s.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase());
 const qi = (c) => `"${c.replace(/"/g, '""')}"`;
 
+const columnDefaults = new Map();
+
+export async function loadDefaults() {
+  const { rows } = await query(
+    `SELECT table_name, column_name, column_default FROM information_schema.columns
+     WHERE table_schema = 'public' AND column_default IS NOT NULL AND is_nullable = 'YES'
+       AND column_name NOT IN ('id', 'created_at', 'updated_at')`
+  );
+  columnDefaults.clear();
+  for (const r of rows) {
+    if (/\(\)/.test(r.column_default)) continue;
+    const { rows: v } = await query(`SELECT (${r.column_default}) AS v`);
+    if (!columnDefaults.has(r.table_name)) columnDefaults.set(r.table_name, {});
+    columnDefaults.get(r.table_name)[r.column_name] = v[0].v;
+  }
+}
+
 const prefix = (p, keys) => Object.fromEntries(keys.map((k) => [k, p + snake(k)]));
 
 function defineTable({
@@ -34,26 +51,34 @@ function defineTable({
   const keepNullSet = new Set(keepNull);
   const hiddenSet = new Set(hidden);
 
-  const fromRow = (row) => {
+  const fromRow = (row, { lean = false } = {}) => {
     if (!row) return null;
     const doc = {};
     const nested = {};
+    const extras = {};
     for (const [col, val] of Object.entries(row)) {
       if (col === "id") {
         doc._id = val;
         continue;
       }
       if (hiddenSet.has(col)) continue;
+      if (col === "extra") {
+        if (lean && val) for (const [k, v] of Object.entries(val)) if (!(k in doc)) extras[k] = v;
+        continue;
+      }
+      const fallback = !lean && val === null ? columnDefaults.get(table)?.[col] : undefined;
+      const value = fallback !== undefined ? fallback : val;
       if (nestOfCol[col]) {
         const [field, key] = nestOfCol[col];
-        if (val !== null && val !== undefined) (nested[field] = nested[field] || {})[key] = val;
+        if (value !== null && value !== undefined) (nested[field] = nested[field] || {})[key] = value;
         continue;
       }
       const field = Object.keys(renames).find((k) => renames[k] === col) || camel(col);
-      if (val === null && !keepNullSet.has(field)) continue;
-      doc[field] = val;
+      if (value === null && !(keepNullSet.has(field) && !lean)) continue;
+      doc[field] = value;
     }
     for (const [field, obj] of Object.entries(nested)) doc[field] = obj;
+    for (const [k, v] of Object.entries(extras)) if (!(k in doc)) doc[k] = v;
     return doc;
   };
 
@@ -230,7 +255,7 @@ function defineTable({
     fieldToCol,
     newId,
 
-    async find(filter = {}, { sort, skip, limit, fields, client } = {}) {
+    async find(filter = {}, { sort, skip, limit, fields, client, lean = false } = {}) {
       const params = [];
       let sql = `SELECT ${selectList(fields)} FROM ${qi(table)}${wherePart(filter, params)}${orderBy(sort)}`;
       if (limit != null) {
@@ -241,7 +266,7 @@ function defineTable({
         params.push(skip);
         sql += ` OFFSET $${params.length}`;
       }
-      return (await (client || { query }).query(sql, params)).rows.map(fromRow);
+      return (await (client || { query }).query(sql, params)).rows.map((r) => fromRow(r, { lean }));
     },
     async findOne(filter = {}, opts = {}) {
       return (await repo.find(filter, { ...opts, limit: 1 }))[0] || null;
@@ -267,7 +292,7 @@ function defineTable({
       return r.rows.map((x) => x.v).filter((v) => v !== null);
     },
 
-    async insert(doc, { client, onConflictDoNothing = false } = {}) {
+    async insert(doc, { client, onConflictDoNothing = false, lean = false } = {}) {
       const { cols } = toColumns({ ...doc });
       const all = serialId ? { ...cols } : { id: doc._id || doc.id || newId(), ...cols };
       const names = Object.keys(all);
@@ -275,7 +300,7 @@ function defineTable({
         `INSERT INTO ${qi(table)} (${names.map(qi).join(",")}) VALUES (${names.map((_, i) => `$${i + 1}`).join(",")})` +
         `${onConflictDoNothing ? " ON CONFLICT DO NOTHING" : ""} RETURNING *`;
       const r = await (client || { query }).query(sql, Object.values(all));
-      return fromRow(r.rows[0]);
+      return fromRow(r.rows[0], { lean });
     },
     async insertMany(docs, opts) {
       const out = [];
@@ -283,14 +308,14 @@ function defineTable({
       return out;
     },
 
-    async updateOne(filter, patch, { sort, client } = {}) {
+    async updateOne(filter, patch, { sort, client, lean = false } = {}) {
       const params = [];
       const sets = buildSet(patch, params);
-      if (!sets.length) return repo.findOne(filter, { sort });
+      if (!sets.length) return repo.findOne(filter, { sort, lean });
       const w = wherePart(filter, params);
       const sql = `UPDATE ${qi(table)} SET ${sets.join(", ")} WHERE id = (SELECT id FROM ${qi(table)}${w}${orderBy(sort)} LIMIT 1 FOR UPDATE) RETURNING *`;
       const r = await (client || { query }).query(sql, params);
-      return fromRow(r.rows[0]);
+      return fromRow(r.rows[0], { lean });
     },
     async updateById(id, patch, opts = {}) {
       return repo.updateOne({ _id: String(id) }, patch, opts);
@@ -313,9 +338,9 @@ function defineTable({
         if (v === null || typeof v !== "object" || v instanceof Date) base[k] = v;
       return repo.insert({ ...base, ...patch }, { client });
     },
-    async deleteById(id, { client } = {}) {
+    async deleteById(id, { client, lean = false } = {}) {
       const r = await (client || { query }).query(`DELETE FROM ${qi(table)} WHERE id = $1 RETURNING *`, [String(id)]);
-      return fromRow(r.rows[0]);
+      return fromRow(r.rows[0], { lean });
     },
     async deleteMany(filter, { client } = {}) {
       const params = [];

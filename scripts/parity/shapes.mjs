@@ -1,6 +1,7 @@
 import { MongoClient, ObjectId } from "mongodb";
 import * as T from "../../src/db/tables.js";
 import { closeDb } from "../../src/db/pg.js";
+import { attachVariants, attachItems } from "../../src/domain/shop.js";
 import { normalize, diff } from "./lib.mjs";
 
 const pairs = {
@@ -45,7 +46,10 @@ let bad = 0;
 for (const [repoName, coll] of Object.entries(pairs)) {
   const repo = T[repoName];
   const docs = await db.collection(coll).find({}).toArray();
-  const rows = new Map((await repo.find({})).map((r) => [r._id, r]));
+  let found = await repo.find({}, { lean: true });
+  if (repoName === "products") found = await attachVariants(found);
+  if (repoName === "shopOrders") found = await attachItems(found);
+  const rows = new Map(found.map((r) => [r._id, r]));
   let mismatches = 0,
     shown = 0;
   for (const d of docs) {

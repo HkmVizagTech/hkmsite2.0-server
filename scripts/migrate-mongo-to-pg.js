@@ -29,66 +29,62 @@ if (!SRC || !DEST) {
 // ── coercers ────────────────────────────────────────────────────────────────
 const get = (d, path) => path.split(".").reduce((o, k) => (o == null ? undefined : o[k]), d);
 const nn = (v) => (v === undefined ? null : v);
-const S =
-  (path, dflt = null) =>
-  (d) => {
+const tag = (fn, path) => Object.assign(fn, { path });
+const S = (path, dflt = null) =>
+  tag((d) => {
     const v = get(d, path);
     return v == null ? dflt : String(v);
-  };
-const N =
-  (path, dflt = null) =>
-  (d) => {
+  }, path);
+const N = (path, dflt = null) =>
+  tag((d) => {
     const v = get(d, path);
     if (v == null || v === "") return dflt;
     const n = Number(v);
     return Number.isFinite(n) ? n : dflt;
-  };
-const I =
-  (path, dflt = null) =>
-  (d) => {
+  }, path);
+const I = (path, dflt = null) =>
+  tag((d) => {
     const n = N(path, dflt)(d);
     return n == null ? n : Math.trunc(n);
-  };
-const B =
-  (path, dflt = false) =>
-  (d) => {
+  }, path);
+const B = (path, dflt = false) =>
+  tag((d) => {
     const v = get(d, path);
     return v == null ? dflt : Boolean(v);
-  };
-const T =
-  (path, dflt = null) =>
-  (d) => {
+  }, path);
+const T = (path, dflt = null) =>
+  tag((d) => {
     const v = get(d, path);
     if (v == null || v === "") return dflt;
     const t = v instanceof Date ? v : new Date(v);
     return Number.isNaN(t.getTime()) ? dflt : t;
-  };
-const TS = (path) => (d) => T(path)(d) || new Date(); // NOT NULL timestamps
-const A = (path) => (d) => {
-  const v = get(d, path);
-  return Array.isArray(v) ? v.filter((x) => x != null).map(String) : [];
-};
-const J = (path, dflt) => (d) => {
-  const v = get(d, path);
-  return JSON.stringify(v == null ? dflt : v);
-};
-const JN = (path) => (d) => {
-  const v = get(d, path);
-  return v == null ? null : JSON.stringify(v);
-}; // nullable jsonb
+  }, path);
+const TS = (path) => tag((d) => T(path)(d) || new Date(), path);
+const A = (path) =>
+  tag((d) => {
+    const v = get(d, path);
+    return Array.isArray(v) ? v.filter((x) => x != null).map(String) : [];
+  }, path);
+const J = (path, dflt) =>
+  tag((d) => {
+    const v = get(d, path);
+    return JSON.stringify(v == null ? dflt : v);
+  }, path);
+const JN = (path) =>
+  tag((d) => {
+    const v = get(d, path);
+    return v == null ? null : JSON.stringify(v);
+  }, path);
 const OID = (d) => String(d._id);
 
 const stats = { orphans: {}, bad: [] };
 const maps = {}; // collection -> Set of migrated ids (to detect dangling references)
-const FK = (mapName, path) => (d) => {
-  const v = get(d, path);
-  if (v == null) return null;
-  if (!(maps[mapName] && maps[mapName].has(String(v)))) {
-    const k = `${mapName}<-${path}`;
-    stats.orphans[k] = (stats.orphans[k] || 0) + 1;
-    return null;
-  }
-  return String(v);
+const FK = (mapName, path) => {
+  const fn = (d) => {
+    const v = get(d, path);
+    return v == null ? null : String(v);
+  };
+  return tag(fn, path);
 };
 
 const base = [
@@ -98,6 +94,8 @@ const base = [
 ];
 
 // ── table specs: [mongoCollection, pgTable, mapName|null, columns[]] ───────
+const CHILD_ARRAYS = { products: ["variants"], shoporders: ["items"] };
+
 const SPECS = [
   [
     "users",
@@ -748,6 +746,14 @@ async function main() {
     console.log("truncated destination tables");
   }
 
+  const nullable = new Set(
+    (
+      await pg.query(`SELECT table_name, column_name FROM information_schema.columns
+      WHERE table_schema = 'public' AND column_default IS NOT NULL AND is_nullable = 'YES'
+        AND column_name NOT IN ('id', 'created_at', 'updated_at')`)
+    ).rows.map((r) => `${r.table_name}.${r.column_name}`)
+  );
+
   const report = [];
   for (const [coll, table, mapName, cols] of SPECS) {
     if (!existing.has(coll)) {
@@ -755,11 +761,25 @@ async function main() {
       continue;
     }
     const docs = await mdb.collection(coll).find({}).toArray();
-    const colNames = cols.map((c) => c[0]);
+    const colNames = [...cols.map((c) => c[0]), "extra"];
+    const knownRoots = new Set([
+      "_id",
+      "__v",
+      "createdAt",
+      "updatedAt",
+      ...cols.map(([, fn]) => fn.path?.split(".")[0]).filter(Boolean),
+      ...(CHILD_ARRAYS[coll] ?? []),
+    ]);
     const rows = [];
     for (const d of docs) {
       try {
-        rows.push(cols.map(([, fn]) => nn(fn(d))));
+        const unknown = Object.fromEntries(Object.entries(d).filter(([k]) => !knownRoots.has(k)));
+        rows.push([
+          ...cols.map(([col, fn]) =>
+            nullable.has(`${table}.${col}`) && fn.path !== undefined && get(d, fn.path) === undefined ? null : nn(fn(d))
+          ),
+          Object.keys(unknown).length ? JSON.stringify(unknown) : null,
+        ]);
       } catch (e) {
         stats.bad.push(`${coll} ${d._id}: ${e.message}`);
       }

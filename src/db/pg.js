@@ -63,6 +63,7 @@ const isId = (v) => typeof v === "string" && /^[0-9a-f]{24}$/i.test(v);
 async function connectDb() {
   const r = await query("SELECT 1 AS ok");
   if (!r.rows[0] || r.rows[0].ok !== 1) throw new Error("Postgres ping failed");
+  await (await import("./table.js")).loadDefaults();
   console.log("Postgres connected");
 }
 const dbState = async () => {

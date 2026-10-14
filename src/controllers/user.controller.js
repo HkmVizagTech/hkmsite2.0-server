@@ -1,5 +1,4 @@
 import { users } from "../db/tables.js";
-import { tx } from "../db/pg.js";
 import { publicUser, toBool } from "../domain/validate.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
@@ -230,18 +229,7 @@ const userController = {
   delete: async (req, res) => {
     try {
       const { id } = req.params;
-      await tx(async (client) => {
-        const { rows } = await client.query(
-          `SELECT c.conrelid::regclass::text AS tbl, a.attname AS col
-                       FROM pg_constraint c
-                       JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
-                      WHERE c.contype = 'f' AND c.confrelid = 'users'::regclass`
-        );
-        for (const { tbl, col } of rows) {
-          await client.query(`UPDATE ${tbl} SET "${col}" = NULL WHERE "${col}" = $1`, [id]);
-        }
-        await client.query("DELETE FROM users WHERE id = $1", [id]);
-      });
+      await users.deleteById(id);
       res.status(200).json({ message: "User deleted" });
     } catch (err) {
       res.status(500).json({ message: "Server error" });

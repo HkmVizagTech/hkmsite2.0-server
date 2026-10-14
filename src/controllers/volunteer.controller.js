@@ -1,5 +1,4 @@
 import { volunteerEvents, volunteerRegistrations } from "../db/tables.js";
-import { tx } from "../db/pg.js";
 import { validateDoc, pick, toDate } from "../domain/validate.js";
 
 const CATEGORIES = ["festival", "weekly", "special", "outreach"];
@@ -118,11 +117,9 @@ const volunteerController = {
 
   delete: async (req, res) => {
     try {
-      const event = await tx(async (client) => {
-        await volunteerRegistrations.deleteMany({ eventId: req.params.id }, { client });
-        return volunteerEvents.deleteById(req.params.id, { client });
-      });
+      const event = await volunteerEvents.deleteById(req.params.id);
       if (!event) return res.status(404).json({ message: "Volunteer event not found" });
+      await volunteerRegistrations.deleteMany({ eventId: req.params.id });
       res.status(200).json({ message: "Volunteer event deleted" });
     } catch (err) {
       console.error("Volunteer delete error:", err);
