@@ -1,13 +1,17 @@
 import { users } from "../db/tables.js";
-import { publicUser, toBool } from "../domain/validate.js";
+import { publicUser } from "../domain/validate.js";
+import { userSchema } from "../domain/schemas.js";
+import { makeStore, castQueryId } from "../domain/store.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { getJwtSecret } from "../utils/utils.js";
 
+const store = makeStore(users, userSchema);
+
 const userController = {
   getUser: async (req, res) => {
     try {
-      const list = (await users.find({}, { sort: { _id: 1 } })).map(publicUser);
+      const list = (await store.find({}, { sort: { _id: 1 } })).map(publicUser);
       res.status(200).json({ users: list });
     } catch (err) {
       console.error("user.register error", err);
@@ -40,12 +44,12 @@ const userController = {
           ? allowedModules.filter((m) => VALID_PREACHER_MODULES.includes(m))
           : [];
 
-      const existing = await users.findOne({ email });
+      const existing = await store.findOne({ email });
       if (existing) {
         return res.status(409).json({ message: "Email already registered" });
       }
       const hash = await bcrypt.hash(password, 10);
-      const user = await users.insert({
+      const user = await store.create({
         name,
         email,
         password: hash,
@@ -93,7 +97,7 @@ const userController = {
         return res.status(409).json({ message: "Email already registered" });
       }
       const hash = await bcrypt.hash(password, 10);
-      const user = await users.insert({ name, email, password: hash, role: "admin", mustChangePassword: true });
+      const user = await store.create({ name, email, password: hash, role: "admin", mustChangePassword: true });
       console.log(`[SECURITY] New full admin created: ${user.email} (${user._id}) by ${req.user?.userId || "unknown"}`);
       res.status(201).json({
         message: "Admin account created successfully",
@@ -111,7 +115,7 @@ const userController = {
       if (typeof email !== "string" || typeof password !== "string" || !email || !password) {
         return res.status(400).json({ message: "Email and password required" });
       }
-      const user = await users.findOne({ email });
+      const user = await store.findOne({ email });
       if (!user) {
         return res.status(401).json({ message: "Invalid credentials" });
       }
@@ -157,13 +161,17 @@ const userController = {
       if (newPassword.length < 8) {
         return res.status(400).json({ message: "New password must be at least 8 characters." });
       }
-      const user = await users.findById(req.user.userId);
+      const user = await store.findById(castQueryId(req.user.userId, "user"));
       if (!user) return res.status(404).json({ message: "User not found." });
 
       const match = await bcrypt.compare(currentPassword, user.password);
       if (!match) return res.status(401).json({ message: "Current password is incorrect." });
 
-      await users.updateById(user._id, { password: await bcrypt.hash(newPassword, 10), mustChangePassword: false });
+      const { modified } = userSchema.applySave(user, {
+        password: await bcrypt.hash(newPassword, 10),
+        mustChangePassword: false,
+      });
+      await store.saveChanges(user._id, modified);
 
       res.status(200).json({ message: "Password updated successfully." });
     } catch (err) {
@@ -174,7 +182,7 @@ const userController = {
 
   profile: async (req, res) => {
     try {
-      const user = await users.findById(req.user.userId);
+      const user = await store.findById(castQueryId(req.user.userId, "user"));
       if (!user) return res.status(404).json({ message: "User not found" });
       res.status(200).json({ user: publicUser(user) });
     } catch (err) {
@@ -186,22 +194,18 @@ const userController = {
   update: async (req, res) => {
     try {
       const { name, email, currentPassword, newPassword, preferences } = req.body;
-      const user = await users.findById(req.user.userId);
+      const user = await store.findById(castQueryId(req.user.userId, "user"));
       if (!user) return res.status(404).json({ message: "User not found" });
 
       const updateData = {};
       if (name) updateData.name = name;
       if (email && typeof email === "string" && email !== user.email) {
-        const existing = await users.findOne({ email, _id: { $ne: user._id } });
+        const existing = await store.findOne({ email, _id: { $ne: user._id } });
         if (existing) return res.status(400).json({ message: "Email already in use" });
         updateData.email = email;
       }
       if (preferences && typeof preferences === "object") {
-        const next = { ...(user.preferences || {}) };
-        for (const key of ["newDonation", "newDevotee", "eventReminders", "weeklyReport"]) {
-          if (preferences[key] !== undefined) next[key] = toBool(preferences[key]);
-        }
-        updateData.preferences = next;
+        updateData.preferences = { ...(user.preferences || {}), ...preferences };
       }
 
       if (newPassword) {
@@ -218,7 +222,7 @@ const userController = {
         updateData.password = await bcrypt.hash(newPassword, 10);
       }
 
-      const updated = await users.updateById(req.user.userId, updateData);
+      const updated = await store.updateById(castQueryId(req.user.userId, "user"), updateData);
       res.status(200).json({ message: "Profile updated", user: publicUser(updated) });
     } catch (err) {
       console.error("user.update error", err);
@@ -229,7 +233,7 @@ const userController = {
   delete: async (req, res) => {
     try {
       const { id } = req.params;
-      await users.deleteById(id);
+      await users.deleteById(castQueryId(id, "user"));
       res.status(200).json({ message: "User deleted" });
     } catch (err) {
       res.status(500).json({ message: "Server error" });

@@ -69,10 +69,14 @@ const dashboardController = {
           orderBy: `value DESC, k COLLATE "C" NULLS FIRST`,
           limit: 6,
         }),
-        aggregate(EXCLUDE_DONATIONS_PAGE, "status AS k, COUNT(*) AS count, SUM(amount) AS amount", {
-          groupBy: "k",
-          orderBy: `k COLLATE "C"`,
-        }),
+        aggregate(
+          EXCLUDE_DONATIONS_PAGE,
+          "status AS k, COUNT(*) AS count, SUM(amount) AS amount, MIN(id) AS first_id",
+          {
+            groupBy: "k",
+            orderBy: "first_id",
+          }
+        ),
         aggregate(
           { ...completed, date: { $gte: thirtyDaysAgo } },
           `${istDay('"date"')} AS k, SUM(amount) AS donations, COUNT(*) AS count`,
@@ -102,11 +106,21 @@ const dashboardController = {
         donations.findOne(completed, {
           sort: { createdAt: -1, _id: 1 },
           fields: ["amount", "sevaName", "type", "createdAt"],
+          lean: true,
         }),
-        events.findOne({}, { sort: { createdAt: -1, _id: 1 }, fields: ["title", "createdAt"] }),
-        galleries.findOne({}, { sort: { createdAt: -1, _id: 1 }, fields: ["title", "images", "createdAt"] }),
-        blogs.findOne({ status: "published" }, { sort: { createdAt: -1, _id: 1 }, fields: ["title", "createdAt"] }),
-        contactMessages.findOne({}, { sort: { createdAt: -1, _id: 1 }, fields: ["name", "subject", "createdAt"] }),
+        events.findOne({}, { sort: { createdAt: -1, _id: 1 }, fields: ["title", "createdAt"], lean: true }),
+        galleries.findOne(
+          {},
+          { sort: { createdAt: -1, _id: 1 }, fields: ["title", "images", "createdAt"], lean: true }
+        ),
+        blogs.findOne(
+          { status: "published" },
+          { sort: { createdAt: -1, _id: 1 }, fields: ["title", "createdAt"], lean: true }
+        ),
+        contactMessages.findOne(
+          {},
+          { sort: { createdAt: -1, _id: 1 }, fields: ["name", "subject", "createdAt"], lean: true }
+        ),
       ]);
       const recentActivity = [
         recentDonation && {

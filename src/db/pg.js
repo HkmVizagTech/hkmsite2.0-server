@@ -60,7 +60,7 @@ const newId = () => {
 };
 const isId = (v) => typeof v === "string" && /^[0-9a-f]{24}$/i.test(v);
 
-const isObjectIdLike = (v) => isId(v) || (typeof v === "string" && v.length === 12);
+const isObjectIdLike = isId;
 
 const castError = (value, model, path = "_id") =>
   Object.assign(

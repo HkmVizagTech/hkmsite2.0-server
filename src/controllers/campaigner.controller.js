@@ -1,7 +1,11 @@
 import { campaigners, donations, templeDevotees } from "../db/tables.js";
 import { many, one } from "../db/pg.js";
 import { cacheWrap, cacheKeys } from "../cache/memoryCache.js";
+import { campaignerSchema } from "../domain/schemas.js";
+import { makeStore, castQueryId } from "../domain/store.js";
 import { IST } from "../config/timezone.js";
+
+const store = makeStore(campaigners, campaignerSchema);
 
 const CAMPAIGNER_TTL = Number(process.env.CAMPAIGNER_CACHE_TTL_SECONDS || 20);
 
@@ -61,14 +65,17 @@ const campaignerController = {
 
       let referredByDevotee = null;
       if (devoteeId) {
-        const devotee = await templeDevotees.findOne({ _id: devoteeId, status: "active" });
+        const devotee = await templeDevotees.findOne(
+          { _id: castQueryId(devoteeId, "templeDevotee"), status: "active" },
+          { lean: true }
+        );
         if (!devotee) return res.status(400).json({ message: "Please select a valid devotee from the list." });
         referredByDevotee = devotee._id;
       } else {
         return res.status(400).json({ message: "Please select the devotee you know from the list." });
       }
 
-      const existing = await campaigners.findOne({ email, campaignType });
+      const existing = await campaigners.findOne({ email, campaignType }, { lean: true });
       if (existing) {
         return res.status(200).json({
           existing: true,
@@ -91,7 +98,7 @@ const campaignerController = {
         slug = `${base}-${n}`;
       }
 
-      const campaigner = await campaigners.insert({
+      const campaigner = await store.create({
         name,
         email,
         mobile,
@@ -119,12 +126,17 @@ const campaignerController = {
       const slug = String(req.params.slug || "").toLowerCase();
 
       const cached = await cacheWrap(cacheKeys.campaigner(slug), CAMPAIGNER_TTL, async () => {
-        const campaigner = await campaigners.findOne({ slug, status: "active" });
+        const campaigner = await campaigners.findOne({ slug, status: "active" }, { lean: true });
         if (!campaigner) return null;
 
         const filter = { status: "completed", campaignerSlug: slug };
         const [recent, agg] = await Promise.all([
-          donations.find(filter, { sort: { date: -1, _id: -1 }, limit: 20, fields: ["donorName", "amount", "date"] }),
+          donations.find(filter, {
+            sort: { date: -1, _id: -1 },
+            limit: 20,
+            fields: ["donorName", "amount", "date"],
+            lean: true,
+          }),
           one(
             `SELECT COALESCE(SUM(amount), 0) AS "totalAmount", count(*)::int AS "donorCount"
                FROM donations WHERE status = 'completed' AND campaigner_slug = $1`,
@@ -177,7 +189,7 @@ const campaignerController = {
       const price = PRICE_PER_SQFT();
       const [rows, totals] = await Promise.all([
         many(
-          `SELECT c.*, d.name AS dev_name
+          `SELECT c.*, d.id AS dev_id, d.name AS dev_name
              FROM campaigners c LEFT JOIN temple_devotees d ON d.id = c.referred_by_devotee_id
             ORDER BY c.created_at DESC, c.id DESC`
         ),
@@ -187,9 +199,10 @@ const campaignerController = {
             GROUP BY campaigner_slug`
         ),
       ]);
-      const list = rows.map(({ dev_name, ...row }) => ({
-        ...campaigners.fromRow(row),
+      const list = rows.map(({ dev_id, dev_name, ...row }) => ({
+        ...campaigners.fromRow(row, { lean: true }),
         devoteeName: dev_name,
+        devoteeFound: Boolean(dev_id),
       }));
 
       const bySlug = Object.fromEntries(totals.map((t) => [t._id, t]));
@@ -202,7 +215,7 @@ const campaignerController = {
           mobile: c.mobile,
           slug: c.slug,
           campaignType: c.campaignType || "SQFT",
-          referredByDevotee: c.referredByDevotee ? { _id: c.referredByDevotee, name: c.devoteeName } : null,
+          referredByDevotee: c.referredByDevotee && c.devoteeFound ? { _id: c.referredByDevotee, name: c.devoteeName } : null,
           goalSqft: c.goalSqft || 0,
           message: c.message || "",
           status: c.status,
@@ -222,7 +235,7 @@ const campaignerController = {
     try {
       const allowed = ["pending", "active", "hidden"];
       const status = allowed.includes(req.body.status) ? req.body.status : "active";
-      const campaigner = await campaigners.updateById(req.params.id, { status });
+      const campaigner = await store.updateById(castQueryId(req.params.id, "campaigner"), { status });
       if (!campaigner) return res.status(404).json({ message: "Campaigner not found" });
       res.status(200).json({ message: "Updated", status: campaigner.status });
     } catch (err) {

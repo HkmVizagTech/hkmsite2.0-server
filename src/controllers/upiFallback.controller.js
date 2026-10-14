@@ -196,9 +196,9 @@ const upiFallbackController = {
         "receiptNumber",
         "upiFallback",
       ];
-      const claims = rows.map((r) => pick(donations.fromRow(r), claimFields));
+      const claims = rows.map((r) => pick(donations.fromRow(r, { lean: true }), claimFields));
       const counts = await many(
-        "SELECT upi_status AS k, COUNT(*) AS n FROM donations WHERE upi_status = ANY($1) GROUP BY upi_status ORDER BY upi_status",
+        "SELECT upi_status AS k, COUNT(*) AS n FROM donations WHERE upi_status = ANY($1) GROUP BY upi_status ORDER BY MIN(id)",
         [allowed]
       );
       res.json({ claims, counts: Object.fromEntries(counts.map((c) => [c.k, c.n])) });
@@ -211,7 +211,7 @@ const upiFallbackController = {
   candidates: async (req, res) => {
     try {
       if (!validId(req.params.id)) return res.status(400).json({ message: "Bad id" });
-      const donation = await donations.findById(req.params.id);
+      const donation = await donations.findById(req.params.id, { lean: true });
       if (!donation) return res.status(404).json({ message: "Donation not found" });
 
       const uf = donation.upiFallback || {};
@@ -253,7 +253,7 @@ const upiFallbackController = {
         (
           await donations.find(
             { razorpayPaymentId: { $in: payments.map((p) => p.id) } },
-            { fields: ["razorpayPaymentId"] }
+            { fields: ["razorpayPaymentId"], lean: true }
           )
         ).map((d) => d.razorpayPaymentId)
       );
@@ -303,6 +303,7 @@ const upiFallbackController = {
         { razorpayPaymentId: { $in: ids } },
         {
           sort: { _id: 1 },
+          lean: true,
           fields: [
             "donorName",
             "donorMobile",
@@ -323,6 +324,7 @@ const upiFallbackController = {
         },
         {
           sort: { _id: 1 },
+          lean: true,
           fields: ["donorName", "donorMobile", "amount", "sevaName", "sourcePage", "upiFallback", "createdAt"],
         }
       );
@@ -387,7 +389,7 @@ const upiFallbackController = {
           return res.status(400).json({ message: "That doesn't look like a Razorpay payment ID (pay_…)." });
         const taken = await donations.findOne(
           { razorpayPaymentId: paymentId, _id: { $ne: donation._id } },
-          { fields: ["donorName", "amount"] }
+          { fields: ["donorName", "amount"], lean: true }
         );
         if (taken)
           return res
@@ -411,7 +413,7 @@ const upiFallbackController = {
       if (utr) {
         const dup = await donations.findOne(
           { utrNumber: utr, _id: { $ne: donation._id } },
-          { fields: ["donorName", "amount"] }
+          { fields: ["donorName", "amount"], lean: true }
         );
         if (dup)
           return res

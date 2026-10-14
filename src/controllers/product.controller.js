@@ -1,5 +1,5 @@
 import { unlink } from "node:fs";
-import { many, one, tx, isId, newId } from "../db/pg.js";
+import { many, tx } from "../db/pg.js";
 import { products, shopCategories, shopSettings } from "../db/tables.js";
 import {
   totalStock,
@@ -7,8 +7,24 @@ import {
   calculateShipping,
   getShopSettings,
   attachVariants,
-  escapeLike,
+  ms,
+  selectRows,
+  wholeNumber,
+  searchMatcher,
+  withNulls,
+  readSettings,
+  setNullMarker,
 } from "../domain/shop.js";
+import {
+  PRODUCT,
+  CATEGORY,
+  SETTINGS,
+  buildDocument,
+  castUpdate,
+  castIdParam,
+  looseObjectId,
+  queryValue,
+} from "../domain/shopSchema.js";
 import { uploadToR2 } from "../utils/r2.js";
 
 const slugify = (raw) =>
@@ -20,18 +36,6 @@ const slugify = (raw) =>
     .replace(/-+/g, "-")
     .slice(0, 80);
 
-const trim = (v) => (typeof v === "string" ? v.trim() : v);
-
-class BadRequest extends Error {}
-
-const castError = (id, model) =>
-  new Error(
-    `Cast to ObjectId failed for value ${JSON.stringify(String(id))} (type string) at path "_id" for model "${model}"`
-  );
-const assertId = (id, model) => {
-  if (!isId(id)) throw castError(id, model);
-};
-
 async function uniqueSlug(base, excludeId) {
   const root = slugify(base) || "item";
   let candidate = root;
@@ -39,7 +43,7 @@ async function uniqueSlug(base, excludeId) {
   while (true) {
     const filter = { slug: candidate };
     if (excludeId) filter._id = { $ne: excludeId };
-    const clash = await products.findOne(filter, { fields: ["_id"] });
+    const clash = await products.findOne(filter, { fields: ["_id"], lean: true });
     if (!clash) return candidate;
     n += 1;
     candidate = `${root}-${n}`;
@@ -81,88 +85,39 @@ function publicProductShape(product) {
   };
 }
 
-const intOrNull = (v) => (v === undefined || v === null ? null : Math.round(Number(v)));
-
-function validateVariants(variants) {
-  if (!Array.isArray(variants) || variants.length === 0) {
-    throw new BadRequest("Add at least one variant, or turn variants off.");
+// Replaces a product's variants wholesale, like assigning the embedded array did.
+async function replaceVariants(client, productId, variants) {
+  await client.query("DELETE FROM product_variants WHERE product_id = $1", [productId]);
+  const clean = Array.isArray(variants) && variants.every((v) => v && typeof v === "object" && !Array.isArray(v));
+  if (variants == null || !clean) {
+    await client.query(
+      "UPDATE products SET extra = jsonb_set(coalesce(extra, '{}'::jsonb), '{variants}', $2::jsonb) WHERE id = $1",
+      [productId, JSON.stringify(variants ?? null)]
+    );
+    return;
   }
-  for (const v of variants) {
-    if (!v || !v.label || !String(v.label).trim()) throw new BadRequest("Every variant needs a label (e.g. 100g).");
-    if (typeof v.price !== "number" || v.price < 0)
-      throw new BadRequest(`Enter a valid price for variant "${v.label}".`);
-    for (const k of ["mrp", "stock", "weightGrams"]) {
-      if (v[k] !== undefined && v[k] !== null && (!Number.isFinite(Number(v[k])) || Number(v[k]) < 0)) {
-        throw new BadRequest(`Enter a valid ${k} for variant "${v.label}".`);
-      }
-    }
-  }
-}
-
-function money(value, message) {
-  const n = Number(value);
-  if (!Number.isFinite(n) || n < 0) throw new BadRequest(message);
-  return n;
-}
-
-// Replaces a product's variants, keeping the ids the client sent back for existing options
-// (orders reference them) and dropping the rest.
-async function syncVariants(client, productId, variants) {
-  const existing = (
-    await client.query("SELECT id, product_id FROM product_variants WHERE product_id = $1", [productId])
-  ).rows;
-  const own = new Set(existing.map((r) => r.id));
-  const sentIds = variants.map((v) => (isId(String(v._id || "")) ? String(v._id) : null)).filter(Boolean);
-  const taken = new Set(
-    sentIds.length
-      ? (await client.query("SELECT id FROM product_variants WHERE id = ANY($1)", [sentIds])).rows.map((r) => r.id)
-      : []
-  );
-  const keep = new Set();
-  const used = new Set();
+  await client.query("UPDATE products SET extra = NULLIF(extra - 'variants', '{}'::jsonb) WHERE id = $1 AND extra ? 'variants'", [
+    productId,
+  ]);
   for (const [position, v] of variants.entries()) {
-    const sent = isId(String(v._id || "")) ? String(v._id) : null;
-    const reuse = sent && own.has(sent) && !used.has(sent);
-    const id = reuse ? sent : sent && !taken.has(sent) && !used.has(sent) ? sent : newId();
-    used.add(id);
-    const row = {
-      label: trim(v.label),
-      sku: v.sku === undefined || v.sku === null ? null : trim(String(v.sku)),
-      price: v.price,
-      mrp: v.mrp === undefined || v.mrp === null ? null : Number(v.mrp),
-      stock: v.stock === undefined || v.stock === null ? 0 : Math.round(Number(v.stock)),
-      weightGrams: intOrNull(v.weightGrams),
-      position,
-    };
-    if (reuse) {
-      keep.add(id);
-      await client.query(
-        "UPDATE product_variants SET label=$2, sku=$3, price=$4, mrp=$5, stock=$6, weight_grams=$7, position=$8 WHERE id=$1",
-        [id, row.label, row.sku, row.price, row.mrp, row.stock, row.weightGrams, row.position]
-      );
-    } else {
-      await client.query(
-        "INSERT INTO product_variants (id, product_id, label, sku, price, mrp, stock, weight_grams, position) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
-        [id, productId, row.label, row.sku, row.price, row.mrp, row.stock, row.weightGrams, row.position]
-      );
-    }
+    await client.query(
+      "INSERT INTO product_variants (id, product_id, label, sku, price, mrp, stock, weight_grams, position) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+      [v._id, productId, v.label ?? null, v.sku ?? null, v.price ?? null, v.mrp ?? null, v.stock ?? null, v.weightGrams ?? null, position]
+    );
   }
-  const drop = [...own].filter((id) => !keep.has(id));
-  if (drop.length) await client.query("DELETE FROM product_variants WHERE id = ANY($1)", [drop]);
 }
 
-async function loadProduct(id, client) {
-  const doc = await products.findOne({ _id: id }, { client });
+// Variants are always read raw: an explicit null stock must not turn into the column default.
+async function loadProduct(id, client, { lean = false } = {}) {
+  const doc = await products.findOne({ _id: id }, { client, lean });
   if (!doc) return null;
-  await attachVariants([doc], client);
+  await attachVariants([doc], client, { lean: true });
   return doc;
 }
 
-const searchClause = (term, cols, tagsToo = true) => {
-  const pattern = `%${escapeLike(term)}%`;
-  const parts = cols.map((c) => `${c} ILIKE ?`);
-  if (tagsToo) parts.push("EXISTS (SELECT 1 FROM unnest(tags) t WHERE t ILIKE ?)");
-  return { $raw: [`(${parts.join(" OR ")})`, new Array(parts.length).fill(pattern)] };
+const stamp = () => {
+  const now = new Date();
+  return { createdAt: now, updatedAt: now };
 };
 
 const productController = {
@@ -188,22 +143,22 @@ const productController = {
         filter._id = { $in: idList };
       }
 
-      if (category && category !== "all") filter.category = category;
-      if (search && String(search).trim()) and.push(searchClause(String(search).trim(), ["name", "short_description"]));
+      if (category && category !== "all") filter.category = queryValue(category, "category", "product");
+      const matcher = search && String(search).trim() ? searchMatcher(String(search).trim()) : null;
 
       let orderSql;
       switch (sort) {
         case "price-asc":
-          orderSql = "price ASC NULLS FIRST, created_at DESC, id";
+          orderSql = `price ASC NULLS FIRST, ${ms("created_at")} DESC, id`;
           break;
         case "price-desc":
-          orderSql = "price DESC NULLS LAST, created_at DESC, id";
+          orderSql = `price DESC NULLS LAST, ${ms("created_at")} DESC, id`;
           break;
         case "newest":
-          orderSql = "created_at DESC, id";
+          orderSql = `${ms("created_at")} DESC, id`;
           break;
         default:
-          orderSql = "featured DESC, sort_order ASC, created_at DESC, id";
+          orderSql = `featured DESC NULLS LAST, sort_order ASC NULLS FIRST, ${ms("created_at")} DESC, id`;
       }
 
       const pageNum = Math.max(1, Number(page) || 1);
@@ -222,15 +177,27 @@ const productController = {
       const memoryPriceSort = sort === "price-asc" || sort === "price-desc";
       const params = [];
       const where = products.buildWhere(filter, params).sql;
-      let sql = `SELECT * FROM products WHERE ${where} ORDER BY ${orderSql}`;
-      if (memoryPriceSort) sql += " LIMIT 200";
-      else {
-        params.push(perPage, (pageNum - 1) * perPage);
-        sql += ` LIMIT $${params.length - 1} OFFSET $${params.length}`;
+      let sql = `SELECT * FROM products WHERE ${where || "TRUE"} ORDER BY ${orderSql}`;
+      const skip = wholeNumber((pageNum - 1) * perPage);
+      if (!matcher) {
+        if (memoryPriceSort) sql += " LIMIT 200";
+        else {
+          params.push(wholeNumber(perPage), skip);
+          sql += ` LIMIT $${params.length - 1} OFFSET $${params.length}`;
+        }
       }
 
-      const [rows, total] = await Promise.all([many(sql, params), products.count(filter)]);
-      const docs = await attachVariants(rows.map(products.fromRow));
+      let [rows, total] = await Promise.all([many(sql, params), matcher ? null : products.count(filter)]);
+      if (matcher) {
+        rows = rows.filter((r) => matcher([r.name, r.short_description, ...(r.tags || [])]));
+        total = rows.length;
+        rows = memoryPriceSort ? rows.slice(0, 200) : rows.slice(skip, skip + wholeNumber(perPage));
+      }
+      const docs = await attachVariants(
+        rows.map((r) => products.fromRow(r, { lean: true })),
+        undefined,
+        { lean: true }
+      );
 
       let list = docs.map(publicProductShape);
       list.sort((a, b) => Number(b.inStock) - Number(a.inStock));
@@ -251,15 +218,19 @@ const productController = {
 
   getProduct: async (req, res) => {
     try {
-      const product = await products.findOne({ slug: req.params.slug, status: "active" });
+      const product = req.params.slug.includes("\0")
+        ? null
+        : await products.findOne({ slug: req.params.slug, status: "active" }, { lean: true });
       if (!product) return res.status(404).json({ success: false, message: "Product not found." });
-      await attachVariants([product]);
+      await attachVariants([product], undefined, { lean: true });
 
-      const related = await products.find(
+      const related = await selectRows(
+        products,
         { status: "active", category: product.category ?? null, _id: { $ne: product._id } },
-        { sort: { sortOrder: 1, createdAt: 1, _id: 1 }, limit: 4 }
+        `sort_order NULLS FIRST, ${ms("created_at")}, id`,
+        { limit: 4, lean: true }
       );
-      await attachVariants(related);
+      await attachVariants(related, undefined, { lean: true });
 
       res.status(200).json({
         success: true,
@@ -275,20 +246,22 @@ const productController = {
   listCategories: async (req, res) => {
     try {
       const [rows, counts] = await Promise.all([
-        many(`SELECT * FROM shop_categories WHERE status = 'active' ORDER BY sort_order, name COLLATE "C", id`),
+        many(`SELECT * FROM shop_categories WHERE status = 'active' ORDER BY sort_order NULLS FIRST, name COLLATE "C" NULLS FIRST, id`),
         many("SELECT category, count(*) AS n FROM products WHERE status = 'active' GROUP BY category"),
       ]);
       const countBySlug = new Map(counts.map((c) => [c.category, Number(c.n)]));
       res.status(200).json({
         success: true,
-        categories: rows.map(shopCategories.fromRow).map((c) => ({
-          _id: c._id,
-          name: c.name,
-          slug: c.slug,
-          description: c.description,
-          image: c.image,
-          productCount: countBySlug.get(c.slug) || 0,
-        })),
+        categories: rows
+          .map((r) => shopCategories.fromRow(r, { lean: true }))
+          .map((c) => ({
+            _id: c._id,
+            name: c.name,
+            slug: c.slug,
+            description: c.description,
+            image: c.image,
+            productCount: countBySlug.get(c.slug) || 0,
+          })),
       });
     } catch (err) {
       console.error("product.listCategories error:", err);
@@ -332,11 +305,12 @@ const productController = {
     try {
       const { search, category, status } = req.query;
       const filter = {};
-      if (category && category !== "all") filter.category = category;
-      if (status && status !== "all") filter.status = status;
-      if (search && String(search).trim()) filter.$and = [searchClause(String(search).trim(), ["name", "slug"])];
-      const list = await products.find(filter, { sort: { updatedAt: -1, _id: 1 } });
-      await attachVariants(list);
+      if (category && category !== "all") filter.category = queryValue(category, "category", "product");
+      if (status && status !== "all") filter.status = queryValue(status, "status", "product");
+      const matcher = search && String(search).trim() ? searchMatcher(String(search).trim()) : null;
+      let list = await selectRows(products, filter, `${ms("updated_at")} DESC, id`, { lean: true });
+      if (matcher) list = list.filter((p) => matcher([p.name, p.slug, ...(p.tags || [])]));
+      await attachVariants(list, undefined, { lean: true });
       res.status(200).json({
         success: true,
         products: list.map((p) => ({ ...p, totalStock: totalStock(p) })),
@@ -355,42 +329,52 @@ const productController = {
       }
 
       const hasVariants = !!body.hasVariants;
-      if (hasVariants) validateVariants(body.variants);
-      else if (typeof body.price !== "number" || body.price < 0) {
+      if (hasVariants) {
+        if (!Array.isArray(body.variants) || body.variants.length === 0) {
+          return res.status(400).json({ success: false, message: "Add at least one variant, or turn variants off." });
+        }
+        for (const v of body.variants) {
+          if (!v.label || !String(v.label).trim()) {
+            return res.status(400).json({ success: false, message: "Every variant needs a label (e.g. 100g)." });
+          }
+          if (typeof v.price !== "number" || v.price < 0) {
+            return res.status(400).json({ success: false, message: `Enter a valid price for variant "${v.label}".` });
+          }
+        }
+      } else if (typeof body.price !== "number" || body.price < 0) {
         return res.status(400).json({ success: false, message: "Enter a valid price." });
       }
 
-      const doc = {
+      const { variants, ...doc } = buildDocument(PRODUCT, {
         name: String(body.name).trim(),
         slug: await uniqueSlug(body.slug || body.name),
-        shortDescription: trim(body.shortDescription),
+        shortDescription: body.shortDescription,
         description: body.description,
         productInfo: body.productInfo || "",
         category: body.category,
-        images: Array.isArray(body.images) ? body.images.filter(Boolean).map(String) : [],
+        images: Array.isArray(body.images) ? body.images.filter(Boolean) : [],
         hasVariants,
         price: hasVariants ? undefined : Number(body.price),
-        mrp: hasVariants ? undefined : body.mrp ? money(body.mrp, "Enter a valid MRP.") : undefined,
-        stock: hasVariants ? 0 : intOrNull(Number(body.stock) || 0),
-        weightGrams: body.weightGrams ? intOrNull(money(body.weightGrams, "Enter a valid weight.")) : undefined,
+        mrp: hasVariants ? undefined : body.mrp ? Number(body.mrp) : undefined,
+        stock: hasVariants ? 0 : Number(body.stock) || 0,
+        variants: hasVariants ? body.variants : [],
+        weightGrams: body.weightGrams ? Number(body.weightGrams) : undefined,
         status: body.status === "active" ? "active" : "draft",
         featured: !!body.featured,
         freeShipping: !!body.freeShipping,
-        tags: Array.isArray(body.tags) ? body.tags.map(String) : [],
-        sortOrder: intOrNull(Number(body.sortOrder) || 0),
+        tags: Array.isArray(body.tags) ? body.tags : [],
+        sortOrder: Number(body.sortOrder) || 0,
         createdBy: req.user.userId,
-      };
-      if (doc.stock < 0) return res.status(400).json({ success: false, message: "Enter a valid stock count." });
+      });
 
       const product = await tx(async (client) => {
-        const created = await products.insert(doc, { client });
-        if (hasVariants) await syncVariants(client, created._id, body.variants);
+        const created = await products.insert({ ...doc, ...stamp() }, { client });
+        await replaceVariants(client, created._id, variants);
         return loadProduct(created._id, client);
       });
 
       res.status(201).json({ success: true, message: "Product created.", product });
     } catch (err) {
-      if (err instanceof BadRequest) return res.status(400).json({ success: false, message: err.message });
       console.error("product.createProduct error:", err);
       res.status(500).json({ success: false, message: err.message || "Could not create product." });
     }
@@ -399,72 +383,66 @@ const productController = {
   updateProduct: async (req, res) => {
     try {
       const body = req.body || {};
-      assertId(req.params.id, "product");
-      const existing = await products.findById(req.params.id);
+      const id = castIdParam(req.params.id, "product");
+      const existing = await products.findById(id);
       if (!existing) return res.status(404).json({ success: false, message: "Product not found." });
 
       const updates = {};
-      let variants;
       if (body.name !== undefined) updates.name = String(body.name).trim();
-      if (body.shortDescription !== undefined) updates.shortDescription = trim(body.shortDescription);
+      if (body.shortDescription !== undefined) updates.shortDescription = body.shortDescription;
       if (body.description !== undefined) updates.description = body.description;
       if (body.productInfo !== undefined) updates.productInfo = body.productInfo || "";
       if (body.category !== undefined) updates.category = body.category;
-      if (body.images !== undefined)
-        updates.images = Array.isArray(body.images) ? body.images.filter(Boolean).map(String) : [];
-      if (body.weightGrams !== undefined && body.weightGrams) {
-        updates.weightGrams = intOrNull(money(body.weightGrams, "Enter a valid weight."));
-      }
+      if (body.images !== undefined) updates.images = Array.isArray(body.images) ? body.images.filter(Boolean) : [];
+      if (body.weightGrams !== undefined) updates.weightGrams = body.weightGrams ? Number(body.weightGrams) : undefined;
       if (body.status !== undefined) updates.status = body.status === "active" ? "active" : "draft";
       if (body.featured !== undefined) updates.featured = !!body.featured;
       if (body.freeShipping !== undefined) updates.freeShipping = !!body.freeShipping;
-      if (body.tags !== undefined) updates.tags = Array.isArray(body.tags) ? body.tags.map(String) : [];
-      if (body.sortOrder !== undefined) updates.sortOrder = intOrNull(Number(body.sortOrder) || 0);
+      if (body.tags !== undefined) updates.tags = Array.isArray(body.tags) ? body.tags : [];
+      if (body.sortOrder !== undefined) updates.sortOrder = Number(body.sortOrder) || 0;
       if (body.regenerateSlug && body.name) {
         updates.slug = await uniqueSlug(body.name, existing._id);
       }
 
-      const applyPricing = () => {
-        if (body.price !== undefined) updates.price = money(body.price, "Enter a valid price.");
-        if (body.mrp !== undefined && body.mrp) updates.mrp = money(body.mrp, "Enter a valid MRP.");
-        if (body.stock !== undefined)
-          updates.stock = intOrNull(money(Number(body.stock) || 0, "Enter a valid stock count."));
-      };
-
       if (body.hasVariants !== undefined) {
         updates.hasVariants = !!body.hasVariants;
         if (body.hasVariants) {
-          validateVariants(body.variants);
-          variants = body.variants;
+          if (!Array.isArray(body.variants) || body.variants.length === 0) {
+            return res.status(400).json({ success: false, message: "Add at least one variant, or turn variants off." });
+          }
+          updates.variants = body.variants;
+          updates.price = undefined;
+          updates.mrp = undefined;
         } else {
-          variants = [];
-          applyPricing();
+          updates.variants = [];
+          if (body.price !== undefined) updates.price = Number(body.price);
+          if (body.mrp !== undefined) updates.mrp = body.mrp ? Number(body.mrp) : undefined;
+          if (body.stock !== undefined) updates.stock = Number(body.stock) || 0;
         }
       } else {
-        applyPricing();
-        if (body.variants !== undefined) {
-          if (Array.isArray(body.variants) && body.variants.length) validateVariants(body.variants);
-          variants = Array.isArray(body.variants) ? body.variants : [];
-        }
+        if (body.price !== undefined) updates.price = Number(body.price);
+        if (body.mrp !== undefined) updates.mrp = body.mrp ? Number(body.mrp) : undefined;
+        if (body.stock !== undefined) updates.stock = Number(body.stock) || 0;
+        if (body.variants !== undefined) updates.variants = body.variants;
       }
 
+      const { variants, ...set } = castUpdate(PRODUCT, updates);
       const product = await tx(async (client) => {
         const locked = await client.query("SELECT id FROM products WHERE id = $1 FOR UPDATE", [existing._id]);
         if (!locked.rows.length) return null;
-        await products.updateById(existing._id, updates, { client });
-        if (variants !== undefined) await syncVariants(client, existing._id, variants);
+        await products.updateById(existing._id, { ...set, updatedAt: new Date() }, { client });
+        if (variants !== undefined) await replaceVariants(client, existing._id, variants);
         return loadProduct(existing._id, client);
       });
-      if (!product) return res.status(404).json({ success: false, message: "Product not found." });
 
       res.status(200).json({ success: true, message: "Product updated.", product });
     } catch (err) {
-      if (err instanceof BadRequest) return res.status(400).json({ success: false, message: err.message });
       console.error("product.updateProduct error:", err);
       res.status(500).json({ success: false, message: err.message || "Could not update product." });
     }
   },
 
+  // Like Mongoose's save(): a value equal to the stored one is a no-op (updatedAt does not move).
   adjustStock: async (req, res) => {
     try {
       const { variantId, stock } = req.body || {};
@@ -472,27 +450,30 @@ const productController = {
       if (!Number.isFinite(newStock) || newStock < 0) {
         return res.status(400).json({ success: false, message: "Enter a valid stock count." });
       }
-      assertId(req.params.id, "product");
-      const value = Math.round(newStock);
+      const id = castIdParam(req.params.id, "product");
 
       const result = await tx(async (client) => {
-        const row = (
-          await client.query("SELECT id, has_variants FROM products WHERE id = $1 FOR UPDATE", [req.params.id])
-        ).rows[0];
+        const row = (await client.query("SELECT id, has_variants, stock FROM products WHERE id = $1 FOR UPDATE", [id]))
+          .rows[0];
         if (!row) return { status: 404, message: "Product not found." };
         if (row.has_variants) {
           if (!variantId) return { status: 400, message: "Choose which variant to restock." };
-          const upd = isId(String(variantId))
-            ? await client.query("UPDATE product_variants SET stock = $1 WHERE id = $2 AND product_id = $3", [
-                value,
-                String(variantId),
-                row.id,
-              ])
-            : { rowCount: 0 };
-          if (!upd.rowCount) return { status: 404, message: "Variant not found." };
-          await client.query("UPDATE products SET updated_at = now() WHERE id = $1", [row.id]);
-        } else {
-          await client.query("UPDATE products SET stock = $1, updated_at = now() WHERE id = $2", [value, row.id]);
+          const wanted = looseObjectId(variantId);
+          const variants = (
+            await client.query("SELECT position, id, stock FROM product_variants WHERE product_id = $1 ORDER BY position", [row.id])
+          ).rows;
+          const variant = wanted ? variants.find((v) => v.id === wanted) : null;
+          if (!variant) return { status: 404, message: "Variant not found." };
+          if ((variant.stock ?? 0) !== newStock) {
+            await client.query("UPDATE product_variants SET stock = $1 WHERE product_id = $2 AND position = $3", [
+              newStock,
+              row.id,
+              variant.position,
+            ]);
+            await client.query("UPDATE products SET updated_at = $2 WHERE id = $1", [row.id, new Date()]);
+          }
+        } else if ((row.stock ?? 0) !== newStock) {
+          await client.query("UPDATE products SET stock = $1, updated_at = $3 WHERE id = $2", [newStock, row.id, new Date()]);
         }
         return { product: await loadProduct(row.id, client) };
       });
@@ -507,8 +488,12 @@ const productController = {
 
   deleteProduct: async (req, res) => {
     try {
-      assertId(req.params.id, "product");
-      const product = await products.deleteById(req.params.id);
+      const id = castIdParam(req.params.id, "product");
+      const product = await tx(async (client) => {
+        const deleted = await products.deleteById(id, { client });
+        if (deleted) await client.query("DELETE FROM product_variants WHERE product_id = $1", [id]);
+        return deleted;
+      });
       if (!product) return res.status(404).json({ success: false, message: "Product not found." });
       res.status(200).json({ success: true, message: "Product deleted." });
     } catch (err) {
@@ -519,8 +504,8 @@ const productController = {
 
   adminListCategories: async (req, res) => {
     try {
-      const rows = await many(`SELECT * FROM shop_categories ORDER BY sort_order, name COLLATE "C", id`);
-      res.status(200).json({ success: true, categories: rows.map(shopCategories.fromRow) });
+      const rows = await many(`SELECT * FROM shop_categories ORDER BY sort_order NULLS FIRST, name COLLATE "C" NULLS FIRST, id`);
+      res.status(200).json({ success: true, categories: rows.map((r) => shopCategories.fromRow(r, { lean: true })) });
     } catch (err) {
       console.error("product.adminListCategories error:", err);
       res.status(500).json({ success: false, message: "Could not load categories." });
@@ -534,16 +519,17 @@ const productController = {
         return res.status(400).json({ success: false, message: "Category name is required." });
       }
       const slug = slugify(name);
-      const clash = await shopCategories.findOne({ slug });
+      const clash = await shopCategories.findOne({ slug }, { lean: true });
       if (clash) return res.status(400).json({ success: false, message: "A category with that name already exists." });
 
-      const category = await shopCategories.insert({
+      const doc = buildDocument(CATEGORY, {
         name: String(name).trim(),
         slug,
-        description: trim(description),
+        description,
         image,
-        sortOrder: intOrNull(Number(sortOrder) || 0),
+        sortOrder: Number(sortOrder) || 0,
       });
+      const category = await shopCategories.insert({ ...doc, ...stamp() });
       res.status(201).json({ success: true, message: "Category created.", category });
     } catch (err) {
       console.error("product.createCategory error:", err);
@@ -555,15 +541,18 @@ const productController = {
     try {
       const updates = {};
       ["name", "description", "image", "status"].forEach((k) => {
-        if (req.body[k] !== undefined)
-          updates[k] = k === "name" || k === "description" ? trim(req.body[k]) : req.body[k];
+        if (req.body[k] !== undefined) updates[k] = req.body[k];
       });
-      if (updates.status !== undefined && !["active", "hidden"].includes(updates.status)) {
-        return res.status(400).json({ success: false, message: "Status must be active or hidden." });
-      }
-      if (req.body.sortOrder !== undefined) updates.sortOrder = intOrNull(Number(req.body.sortOrder) || 0);
-      assertId(req.params.id, "shopCategory");
-      const category = await shopCategories.updateById(req.params.id, updates);
+      if (req.body.sortOrder !== undefined) updates.sortOrder = Number(req.body.sortOrder) || 0;
+      const set = castUpdate(CATEGORY, updates);
+      const id = castIdParam(req.params.id, "shopCategory");
+      const category = await tx(async (client) => {
+        const updated = await shopCategories.updateById(id, { ...set, updatedAt: new Date() }, { client });
+        if (!updated) return null;
+        if ("status" in set) await setNullMarker("shop_categories", id, "status", set.status, client);
+        const row = (await client.query("SELECT * FROM shop_categories WHERE id = $1", [id])).rows[0];
+        return withNulls(shopCategories.fromRow(row), row, ["status"]);
+      });
       if (!category) return res.status(404).json({ success: false, message: "Category not found." });
       res.status(200).json({ success: true, message: "Category updated.", category });
     } catch (err) {
@@ -574,8 +563,7 @@ const productController = {
 
   deleteCategory: async (req, res) => {
     try {
-      assertId(req.params.id, "shopCategory");
-      const category = await shopCategories.findById(req.params.id);
+      const category = await shopCategories.findById(castIdParam(req.params.id, "shopCategory"));
       if (!category) return res.status(404).json({ success: false, message: "Category not found." });
       const inUse = await products.count({ category: category.slug });
       if (inUse > 0) {
@@ -619,11 +607,16 @@ const productController = {
         updates.freeShippingAbove = v;
       }
       ["announcement", "supportMobile", "deliveryEstimate"].forEach((k) => {
-        if (req.body[k] !== undefined) updates[k] = k === "deliveryEstimate" ? req.body[k] : trim(req.body[k]);
+        if (req.body[k] !== undefined) updates[k] = req.body[k];
       });
 
+      const set = castUpdate(SETTINGS, updates);
       await getShopSettings();
-      const settings = await shopSettings.updateById("default", updates);
+      const settings = await tx(async (client) => {
+        await shopSettings.updateById("default", { ...set, updatedAt: new Date() }, { client });
+        if ("deliveryEstimate" in set) await setNullMarker("shop_settings", "default", "deliveryEstimate", set.deliveryEstimate, client);
+        return readSettings(client);
+      });
       res.status(200).json({ success: true, message: "Shop settings saved.", settings });
     } catch (err) {
       console.error("product.updateSettings error:", err);

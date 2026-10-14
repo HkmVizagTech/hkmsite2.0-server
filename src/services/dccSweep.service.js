@@ -1,4 +1,5 @@
 import { donations, normalizeFilter } from "../domain/donationDb.js";
+import { castPaymentDonationId } from "../domain/paymentCast.js";
 import { syncDonationToDcc, dccTransactionId, isDccConfigured } from "./dcc.service.js";
 import { notifyDrmOfDonation } from "./drmNotify.service.js";
 import { sendDonationWhatsAppReceipt } from "./paymentCompletion.service.js";
@@ -57,7 +58,10 @@ async function releaseStaleLocks() {
 }
 
 async function pushAndSendReceipt(donationId, { sendReceipt = true } = {}) {
-  const before = await donations.findById(donationId, { fields: ["receiptNumber", "manualEntry"] });
+  const before = await donations.findById(castPaymentDonationId(donationId), {
+    fields: ["receiptNumber", "manualEntry"],
+    lean: true,
+  });
   if (!before) return { ok: false, reason: "donation_not_found" };
 
   const dcc = before.receiptNumber
@@ -103,7 +107,7 @@ function pushResultMessage(result) {
 }
 
 async function setReceiptNumberAndSend(donationId, receiptNumber) {
-  const donation = await donations.updateById(donationId, {
+  const donation = await donations.updateById(castPaymentDonationId(donationId), {
     receiptNumber,
     receiptGeneratedAt: new Date(),
     dccSyncStatus: "synced",
@@ -156,6 +160,7 @@ async function sweepDccReceipts({ limit = 25, now = Date.now(), ignoreBackoff = 
       sort: { createdAt: -1, _id: -1 },
       limit: 2000,
       fields: FIELDS,
+      lean: true,
     });
     summary.checked = candidates.length;
 
@@ -185,7 +190,7 @@ async function dccReceiptStatus({ listLimit = 300, includeOld = false, scope = n
   const now = Date.now();
   const query = includeOld ? NO_RECEIPT : { ...NO_RECEIPT, createdAt: { $gte: AUTO_SINCE } };
   const [missing, beforeAutoSince] = await Promise.all([
-    donations.find(scoped(query, scope), { sort: { createdAt: -1, _id: -1 }, limit: 2000, fields: FIELDS }),
+    donations.find(scoped(query, scope), { sort: { createdAt: -1, _id: -1 }, limit: 2000, fields: FIELDS, lean: true }),
     donations.count(scoped({ ...NO_RECEIPT, createdAt: { $lt: AUTO_SINCE } }, scope)),
   ]);
 

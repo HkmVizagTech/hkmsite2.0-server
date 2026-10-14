@@ -2,7 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { tx } from "../db/pg.js";
-import { donations, claimUpdate } from "../domain/donationDb.js";
+import { donations, claimUpdate, mongoLimit, dbDateBound } from "../domain/donationDb.js";
+import { castPaymentDonationId } from "../domain/paymentCast.js";
 import { syncDonationToDcc } from "./dcc.service.js";
 import { isWhatsAppConfigured, sendTemplateMessage, sendTemplateMessageWithAttachment } from "./whatsapp.service.js";
 import { isGupshupReceiptConfigured, sendReceiptWhatsappViaGupshup } from "./gupshup.service.js";
@@ -192,7 +193,7 @@ async function resendRecentFailedReceipts({ hours = 9, limit = 100, dryRun = fal
   };
   // ...of which only these can actually be messaged.
   const sendable = { ...base, donorMobile: { $nin: [null, ""] } };
-  const query = useWindow ? { ...sendable, createdAt: { $gte: since } } : sendable;
+  const query = useWindow ? { ...sendable, createdAt: { $gte: dbDateBound(since) } } : sendable;
 
   const [totalMatching, allTimeSendable, allTimeNeeding] = await Promise.all([
     donations.count(query),
@@ -202,7 +203,7 @@ async function resendRecentFailedReceipts({ hours = 9, limit = 100, dryRun = fal
 
   const candidates = await donations.find(query, {
     sort: { createdAt: 1, _id: 1 },
-    limit: Number(limit),
+    limit: mongoLimit(limit),
     fields: [
       "donorName",
       "donorMobile",
@@ -278,8 +279,8 @@ async function resendRecentFailedReceipts({ hours = 9, limit = 100, dryRun = fal
 // Fast path: marks the donation as completed and sets payment IDs.
 // Returns the donation document (or null if not found).
 async function markDonationCompleted({ donationId, orderId, paymentId }) {
-  if (!donationId && !orderId) return null;
-  const query = donationId ? { _id: String(donationId) } : { razorpayOrderId: orderId };
+  // With no donation id the old code matched `razorpayOrderId: undefined`, i.e. the first donation with no order id.
+  const query = donationId ? { _id: castPaymentDonationId(donationId) } : { razorpayOrderId: orderId ?? null };
 
   let donation = await claimUpdate(
     { ...query, status: { $ne: "completed" } },

@@ -1,78 +1,58 @@
-import { festivalShowcases } from "../db/tables.js";
-import { many } from "../db/pg.js";
-import { splitUser, toBool, toStringArray, toDate } from "../domain/validate.js";
+import { festivalShowcases, users } from "../db/tables.js";
+import { pick } from "../domain/validate.js";
+import { pipelineBodyError } from "../domain/odm.js";
+import { festivalShowcaseSchema } from "../domain/schemas.js";
+import { makeStore, castQueryId } from "../domain/store.js";
 
-const STATUSES = ["upcoming", "completed", "annual"];
+const store = makeStore(festivalShowcases, festivalShowcaseSchema);
 
-const opt = (v) => (v === undefined ? undefined : v === null ? null : String(v));
+// Fields the admin form can set; never createdBy.
+const WRITABLE = [
+  "title",
+  "slug",
+  "subtitle",
+  "heroImage",
+  "cardImage",
+  "eventDate",
+  "location",
+  "description",
+  "status",
+  "featured",
+  "featuredOrder",
+  "active",
+  "ctaLabel",
+  "ctaHref",
+  "donateEnabled",
+  "customLink",
+  "gallery",
+  "schedule",
+  "details",
+  "testimonials",
+];
+// create also took `_id`, `createdAt` and `updatedAt` straight from the body.
+const CREATABLE = [...WRITABLE, "_id", "createdAt", "updatedAt"];
 
-// Only fields the admin form can set; never _id, createdAt, createdBy.
-const writableFields = (body) => {
-  const out = {};
-  for (const k of [
-    "title",
-    "subtitle",
-    "heroImage",
-    "cardImage",
-    "location",
-    "description",
-    "ctaLabel",
-    "ctaHref",
-    "customLink",
-  ]) {
-    if (body[k] !== undefined) out[k] = opt(body[k]);
-  }
-  if (body.eventDate !== undefined) out.eventDate = toDate(body.eventDate, "eventDate");
-  if (body.status !== undefined) {
-    if (!STATUSES.includes(body.status))
-      throw new Error(
-        `festivalShowcase validation failed: status: \`${body.status}\` is not a valid enum value for path \`status\`.`
-      );
-    out.status = body.status;
-  }
-  for (const k of ["featured", "active", "donateEnabled"]) if (body[k] !== undefined) out[k] = toBool(body[k]);
-  if (body.featuredOrder !== undefined) out.featuredOrder = Number(body.featuredOrder) || 0;
-  if (body.gallery !== undefined) out.gallery = toStringArray(body.gallery) || [];
-  if (body.schedule !== undefined) {
-    out.schedule = (Array.isArray(body.schedule) ? body.schedule : []).map((s) => ({
-      start: opt(s?.start),
-      title: opt(s?.title),
-      description: opt(s?.description),
-    }));
-  }
-  if (body.details !== undefined) {
-    out.details = (Array.isArray(body.details) ? body.details : []).map((d) => ({
-      heading: opt(d?.heading),
-      body: opt(d?.body),
-      image: opt(d?.image),
-    }));
-  }
-  if (body.testimonials !== undefined) {
-    out.testimonials = (Array.isArray(body.testimonials) ? body.testimonials : []).map((t) => {
-      const rating = t?.rating === undefined || t?.rating === null || t?.rating === "" ? undefined : Number(t.rating);
-      if (rating !== undefined && (!(rating >= 1) || rating > 5)) {
-        throw new Error("festivalShowcase validation failed: testimonials.rating must be between 1 and 5");
-      }
-      return { name: opt(t?.name), role: opt(t?.role), message: opt(t?.message), rating, avatar: opt(t?.avatar) };
-    });
-    // undefined values are dropped by JSON.stringify
-  }
-  return out;
+const SORT_FEATURED = { featured: -1, featuredOrder: 1 };
+
+// Mongoose `populate("createdBy", "name email")`: a dangling reference becomes null.
+const populateCreator = async (docs) => {
+  const ids = [...new Set(docs.map((d) => d.createdBy).filter(Boolean))];
+  const found = ids.length ? await users.find({ _id: { $in: ids } }, { fields: ["name", "email"], lean: true }) : [];
+  const byId = new Map(found.map((u) => [u._id, u]));
+  return docs.map((d) => (d.createdBy ? { ...d, createdBy: byId.get(d.createdBy) || null } : d));
 };
-
-const FEATURED_ORDER = `f.featured DESC, f.featured_order ASC`;
 
 const festivalShowcaseController = {
   publicList: async (req, res) => {
     try {
-      const rows = await many(
-        `SELECT * FROM festival_showcases WHERE active = true
-          ORDER BY featured DESC, featured_order ASC, event_date DESC NULLS LAST, id`
+      const showcases = await store.find(
+        { active: true },
+        { sort: { ...SORT_FEATURED, eventDate: -1, _id: 1 } }
       );
       res.json(
-        rows.map((r) => {
-          const { createdBy, active, ...doc } = festivalShowcases.fromRow(r);
-          return doc;
+        showcases.map((doc) => {
+          const { createdBy, active, ...rest } = doc;
+          return rest;
         })
       );
     } catch (err) {
@@ -83,9 +63,12 @@ const festivalShowcaseController = {
 
   getBySlug: async (req, res) => {
     try {
-      const slug = String(req.params.slug || "").trim();
-      const showcase = await festivalShowcases.findOne({ slug, active: true });
-      if (!showcase) return res.status(404).json({ message: "Festival not found" });
+      const rawSlug = req.params.slug || "";
+      const slug = String(rawSlug).trim();
+      const showcase = await store.findOne({ slug, active: true });
+      if (!showcase) {
+        return res.status(404).json({ message: "Festival not found" });
+      }
       res.json(showcase);
     } catch (err) {
       console.error("festivalShowcaseController.getBySlug error:", err);
@@ -95,19 +78,8 @@ const festivalShowcaseController = {
 
   list: async (req, res) => {
     try {
-      const rows = await many(
-        `SELECT f.*, u.id AS u_id, u.name AS u_name, u.email AS u_email
-           FROM festival_showcases f LEFT JOIN users u ON u.id = f.created_by
-          ORDER BY ${FEATURED_ORDER}, f.updated_at DESC, f.id`
-      );
-      res.json(
-        rows.map((row) => {
-          const [rest, user] = splitUser(row);
-          const doc = festivalShowcases.fromRow(rest);
-          if (user) doc.createdBy = user;
-          return doc;
-        })
-      );
+      const showcases = await store.find({}, { sort: { ...SORT_FEATURED, updatedAt: -1, _id: 1 } });
+      res.json(await populateCreator(showcases));
     } catch (err) {
       console.error("festivalShowcaseController.list error:", err);
       res.status(500).json({ message: "Server error" });
@@ -118,11 +90,16 @@ const festivalShowcaseController = {
     try {
       let { title, slug } = req.body;
       if (slug) slug = String(slug).trim();
-      if (!title || !slug) return res.status(400).json({ message: "Title and slug are required" });
-      if (await festivalShowcases.findOne({ slug }, { fields: ["slug"] })) {
-        return res.status(409).json({ message: "Slug already exists" });
+      if (!title || !slug) {
+        return res.status(400).json({ message: "Title and slug are required" });
       }
-      const page = await festivalShowcases.insert({ ...writableFields(req.body), slug, createdBy: req.user.userId });
+      const exists = await festivalShowcases.findOne({ slug }, { fields: ["slug"] });
+      if (exists) return res.status(409).json({ message: "Slug already exists" });
+      const page = await store.create({
+        ...pick(req.body, CREATABLE),
+        slug,
+        createdBy: req.user.userId,
+      });
       res.status(201).json({ message: "Festival showcase created", page });
     } catch (err) {
       console.error("festivalShowcaseController.create error:", err);
@@ -132,9 +109,12 @@ const festivalShowcaseController = {
 
   update: async (req, res) => {
     try {
-      const patch = writableFields(req.body);
-      if (req.body.slug) patch.slug = String(req.body.slug).trim();
-      const page = await festivalShowcases.updateById(req.params.id, patch);
+      const { id } = req.params;
+      if (req.body.slug) req.body.slug = String(req.body.slug).trim();
+      const castId = castQueryId(id, "festivalShowcase");
+      const bad = pipelineBodyError(req.body);
+      if (bad) throw bad;
+      const page = await store.updateById(castId, pick(req.body, WRITABLE));
       if (!page) return res.status(404).json({ message: "Festival showcase not found" });
       res.status(200).json({ message: "Festival showcase updated", page });
     } catch (err) {
@@ -145,7 +125,7 @@ const festivalShowcaseController = {
 
   delete: async (req, res) => {
     try {
-      await festivalShowcases.deleteById(req.params.id);
+      await festivalShowcases.deleteById(castQueryId(req.params.id, "festivalShowcase"));
       res.status(200).json({ message: "Festival showcase deleted" });
     } catch (err) {
       console.error("festivalShowcaseController.delete error:", err);

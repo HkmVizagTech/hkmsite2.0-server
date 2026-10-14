@@ -1,5 +1,5 @@
 import { donationPages } from "../db/tables.js";
-import { newId, isId } from "../db/pg.js";
+import { donationPageSchema } from "../domain/schemas.js";
 
 const defaultDonationPage = {
   key: "donations",
@@ -88,40 +88,10 @@ const mergeWithDefaults = (page) => ({
       : defaultDonationPage.galleryImages,
 });
 
-const num = (v) => (v === undefined || v === null || v === "" ? null : Number(v));
-const text = (v) => (v === undefined || v === null ? undefined : String(v));
-const subId = (o) => (isId(o?._id) ? o._id : newId());
-const clean = (obj) => Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined));
-
-// Stored sub-documents keep only the keys the old schema declared.
-const NORMALIZERS = {
-  donationOptions: (list) =>
-    list.map((o) =>
-      clean({
-        _id: subId(o),
-        id: num(o?.id) ?? undefined,
-        category: text(o?.category),
-        title: text(o?.title),
-        amount: o?.amount === undefined ? undefined : num(o.amount),
-      })
-    ),
-  impactItems: (list) => list.map((o) => clean({ _id: subId(o), title: text(o?.title), text: text(o?.text) })),
-  galleryImages: (list) => list.map((x) => String(x)),
-  bankDetails: (o) =>
-    clean({
-      beneficiaryName: text(o?.beneficiaryName),
-      bankName: text(o?.bankName),
-      accountNumber: text(o?.accountNumber),
-      ifsc: text(o?.ifsc),
-    }),
-  contact: (o) => clean({ phone: text(o?.phone), email: text(o?.email), note: text(o?.note) }),
-};
-const ARRAY_FIELDS = new Set(["donationOptions", "impactItems", "galleryImages"]);
-
 const donationPageController = {
   get: async (req, res) => {
     try {
-      const page = await donationPages.findOne({ key: "donations" });
+      const page = await donationPages.findOne({ key: "donations" }, { lean: true });
       return res.json({ page: mergeWithDefaults(page) });
     } catch (err) {
       console.error("donationPageController.get error:", err);
@@ -153,19 +123,20 @@ const donationPageController = {
 
       const payload = {};
       for (const key of allowed) {
-        if (!Object.prototype.hasOwnProperty.call(req.body, key)) continue;
-        const v = req.body[key];
-        if (NORMALIZERS[key]) {
-          if (ARRAY_FIELDS.has(key)) payload[key] = Array.isArray(v) ? NORMALIZERS[key](v) : [];
-          else if (v && typeof v === "object") payload[key] = NORMALIZERS[key](v);
-          else payload[key] = null;
-        } else {
-          payload[key] = v === null ? null : text(v);
-        }
+        if (Object.prototype.hasOwnProperty.call(req.body, key)) payload[key] = req.body[key];
       }
+      payload.key = "donations";
       if (req.user && req.user.userId) payload.updatedBy = req.user.userId;
 
-      const page = await donationPages.upsert({ key: "donations" }, payload);
+      const cast = donationPageSchema.castUpdate(payload);
+      const existing = await donationPages.findOne({ key: "donations" }, { fields: ["key"] });
+      if (existing) await donationPages.updateById(existing._id, cast);
+      else {
+        const defaults = donationPageSchema.create({});
+        await donationPages.insert({ ...defaults, ...cast });
+      }
+      const page = await donationPages.findOne({ key: "donations" }, { lean: true });
+
       return res.json({ message: "Donation page updated", page: mergeWithDefaults(page) });
     } catch (err) {
       console.error("donationPageController.update error:", err);

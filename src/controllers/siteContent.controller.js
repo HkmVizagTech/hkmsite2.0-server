@@ -1,9 +1,10 @@
 import { siteContent } from "../db/tables.js";
 import { query } from "../db/pg.js";
 import { DEFAULT_CONSTRUCTION_VIDEO_ID, siteContentDefaults } from "../domain/siteContent.js";
-import { toBool } from "../domain/validate.js";
+import { siteContentSchema } from "../domain/schemas.js";
 
 const MAX_CONSTRUCTION_PHOTOS = 24;
+const MAX_CAPTION = 80;
 
 // Accepts shorts, watch, youtu.be, embed, live and v/ links, or a bare 11-char id.
 const parseYouTubeId = (raw) => {
@@ -25,38 +26,22 @@ const parseYouTubeId = (raw) => {
   return null;
 };
 
-// Whole sections are replaced on update, keeping only the keys the schema knows.
-const str = (v) => (v === undefined || v === null ? undefined : String(v));
-const strings = (obj, keys) => {
-  const out = {};
-  for (const k of keys) {
-    const v = str(obj?.[k]);
-    if (v !== undefined) out[k] = v;
-  }
-  return out;
-};
-const SECTION_PICKERS = {
-  hero: (v) => strings(v, ["title", "subtitle", "tagline"]),
-  about: (v) => strings(v, ["heading", "body"]),
-  contact: (v) => strings(v, ["phone", "email", "address", "morningHours", "eveningHours"]),
-  navbar: (v) => {
-    const out = strings(v, ["majorFestival"]);
-    if (v?.customLink && typeof v.customLink === "object") {
-      const cl = strings(v.customLink, ["label", "href"]);
-      if (v.customLink.enabled !== undefined) cl.enabled = toBool(v.customLink.enabled);
-      out.customLink = cl;
-    }
-    return out;
-  },
-  festival: (v) => strings(v, ["bannerDesktop", "bannerMobile"]),
-};
-
 // Mongoose filled missing sub-fields with schema defaults whenever a document was read.
+const isPlain = (v) => v && typeof v === "object" && !Array.isArray(v);
 const withDefaults = (doc) => {
   const defaults = siteContentDefaults();
   const out = { ...doc };
-  for (const [section, def] of Object.entries(defaults)) out[section] = { ...def, ...(doc[section] || {}) };
-  out.navbar.customLink = { ...defaults.navbar.customLink, ...(doc.navbar?.customLink || {}) };
+  for (const [section, def] of Object.entries(defaults)) {
+    const v = doc[section];
+    out[section] = isPlain(v) ? { ...def, ...v } : v === undefined || v === null ? { ...def } : v;
+  }
+  if (isPlain(out.navbar)) {
+    out.navbar.customLink = isPlain(out.navbar.customLink)
+      ? { ...defaults.navbar.customLink, ...out.navbar.customLink }
+      : out.navbar.customLink === undefined || out.navbar.customLink === null
+        ? { ...defaults.navbar.customLink }
+        : out.navbar.customLink;
+  }
   return out;
 };
 
@@ -66,6 +51,8 @@ const getOrCreate = async () => {
   await siteContent.insert({ key: "main", ...siteContentDefaults() }, { onConflictDoNothing: true });
   return withDefaults(await siteContent.findOne({ key: "main" }));
 };
+
+const SECTIONS = ["hero", "about", "contact", "navbar", "festival"];
 
 const siteContentController = {
   get: async (req, res) => {
@@ -79,13 +66,14 @@ const siteContentController = {
 
   update: async (req, res) => {
     try {
-      const { construction } = req.body;
-      const sections = {};
-      for (const name of Object.keys(SECTION_PICKERS)) {
-        if (req.body[name]) sections[name] = SECTION_PICKERS[name](req.body[name]);
-      }
+      const { hero, about, contact, navbar, festival, construction } = req.body;
+      const patch = { updatedBy: req.user?.userId };
+      if (hero) patch.hero = hero;
+      if (about) patch.about = about;
+      if (contact) patch.contact = contact;
+      if (navbar) patch.navbar = navbar;
+      if (festival) patch.festival = festival;
 
-      let constructionPatch;
       if (construction) {
         const url = String(construction.videoUrl || "").trim();
         const videoId = parseYouTubeId(url);
@@ -95,35 +83,46 @@ const siteContentController = {
               "That doesn't look like a YouTube link. Paste the Share link from the video — e.g. https://youtube.com/shorts/XXXXXXXXXXX",
           });
         }
-        // Merged key by key so saving the video never wipes the photo gallery.
-        constructionPatch = { videoUrl: url, videoId: videoId || DEFAULT_CONSTRUCTION_VIDEO_ID, updatedAt: new Date() };
+        // Dotted paths so the video and the photo gallery can be saved independently.
+        patch["construction.videoUrl"] = url;
+        patch["construction.videoId"] = videoId || DEFAULT_CONSTRUCTION_VIDEO_ID;
+        patch["construction.updatedAt"] = new Date();
+
         if (Array.isArray(construction.photos)) {
-          constructionPatch.photos = construction.photos
+          patch["construction.photos"] = construction.photos
             .map((p) => ({
               url: String(p?.url || "").trim(),
               caption: String(p?.caption || "")
                 .trim()
-                .slice(0, 80),
+                .slice(0, MAX_CAPTION),
             }))
             .filter((p) => p.url)
             .slice(0, MAX_CONSTRUCTION_PHOTOS);
         }
       }
 
+      const cast = siteContentSchema.castUpdate(patch);
       await getOrCreate();
+
       const params = [];
-      const sets = [];
       const bind = (v) => {
         params.push(v);
         return `$${params.length}`;
       };
-      for (const [name, value] of Object.entries(sections))
-        sets.push(`"${name}" = ${bind(JSON.stringify(value))}::jsonb`);
-      if (constructionPatch)
+      const sets = [];
+      for (const name of SECTIONS) {
+        if (name in cast) sets.push(`"${name}" = ${bind(JSON.stringify(cast[name]))}::jsonb`);
+      }
+      const constructionPatch = {};
+      for (const [key, value] of Object.entries(cast)) {
+        if (key.startsWith("construction.")) constructionPatch[key.slice("construction.".length)] = value;
+      }
+      if (Object.keys(constructionPatch).length) {
         sets.push(
           `construction = COALESCE(construction, '{}'::jsonb) || ${bind(JSON.stringify(constructionPatch))}::jsonb`
         );
-      if (req.user?.userId) sets.push(`updated_by = ${bind(req.user.userId)}`);
+      }
+      if (cast.updatedBy) sets.push(`updated_by = ${bind(cast.updatedBy)}`);
       sets.push("updated_at = now()");
 
       const { rows } = await query(`UPDATE site_content SET ${sets.join(", ")} WHERE key = 'main' RETURNING *`, params);

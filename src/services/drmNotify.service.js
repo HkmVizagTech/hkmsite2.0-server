@@ -1,5 +1,7 @@
 import { donations, donors } from "../db/tables.js";
-import { buildDonorSnapshot } from "../controllers/internal.controller.js"; // Live push to the HKM Vizag DRM (donor relationship manager, a separate
+import { buildDonorSnapshot } from "../controllers/internal.controller.js";
+
+// Live push to the HKM Vizag DRM (donor relationship manager, a separate
 
 const REQUEST_TIMEOUT_MS = 8000;
 
@@ -19,14 +21,14 @@ function isConfigured() {
 
 async function resolveDonorForDonation(donation) {
   if (donation.donorRecordId) {
-    const byId = await donors.findById(donation.donorRecordId);
+    const byId = await donors.findById(donation.donorRecordId, { lean: true });
     if (byId) return byId;
   }
   if (donation.donorMobile) {
     const mobile = String(donation.donorMobile)
       .replace(/\s+/g, "")
       .replace(/^\+?91/, "");
-    if (mobile) return donors.findOne({ mobile });
+    if (mobile) return donors.findOne({ mobile }, { sort: { _id: 1 }, lean: true });
   }
   return null;
 }
@@ -39,7 +41,7 @@ async function notifyDrmOfDonation(donationId, { reason = "donation_completed" }
       return { ok: false, skipped: true, reason: "not_configured" };
     }
 
-    const donation = await donations.findById(donationId);
+    const donation = await donations.findById(donationId, { lean: true });
     if (!donation) return { ok: false, skipped: true, reason: "donation_not_found" };
 
     const donor = await resolveDonorForDonation(donation);

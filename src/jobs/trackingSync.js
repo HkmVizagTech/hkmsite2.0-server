@@ -3,6 +3,7 @@
 
 import { query } from "../db/pg.js";
 import { shopOrders } from "../db/tables.js";
+import { ms, selectRows } from "../domain/shop.js";
 import {
   fetchCourierStatus,
   mapCourierStatusToOrderStatus,
@@ -27,8 +28,8 @@ const STATUS_RANK = {
 
 const pushHistory = (id, entries, extraSet = "", guard = "") =>
   query(
-    `UPDATE shop_orders SET status_history = status_history || $2::jsonb, updated_at = now()${extraSet} WHERE id = $1${guard}`,
-    [id, JSON.stringify(entries)]
+    `UPDATE shop_orders SET status_history = status_history || $2::jsonb, updated_at = $3${extraSet} WHERE id = $1${guard}`,
+    [id, JSON.stringify(entries), new Date()]
   );
 
 async function runTrackingSync() {
@@ -47,19 +48,7 @@ async function runTrackingSync() {
     filter.$raw = ["(shipped_at >= ? OR (shipped_at IS NULL AND created_at >= ?))", [floorDate, floorDate]];
   }
 
-  const orders = await shopOrders.find(filter, {
-    sort: { updatedAt: -1, _id: 1 },
-    limit: BATCH_SIZE,
-    fields: [
-      "orderNumber",
-      "fulfilmentStatus",
-      "tracking",
-      "needsAttention",
-      "statusHistory",
-      "shippedAt",
-      "createdAt",
-    ],
-  });
+  const orders = await selectRows(shopOrders, filter, `${ms("updated_at")} DESC, id`, { limit: BATCH_SIZE });
 
   if (orders.length === 0) {
     return { checked: 0, updated: 0, errors: 0 };
@@ -81,8 +70,8 @@ async function runTrackingSync() {
           const url = buildTrackingUrl(guessed, trackingNumber);
           try {
             await query(
-              "UPDATE shop_orders SET tracking_courier = $2, tracking_url = COALESCE(tracking_url, $3), updated_at = now() WHERE id = $1",
-              [order._id, guessed, url || null]
+              "UPDATE shop_orders SET tracking_courier = $2, tracking_url = COALESCE(tracking_url, $3), updated_at = $4 WHERE id = $1",
+              [order._id, guessed, url || null, new Date()]
             );
           } catch (e) {
             console.error("trackingSync: could not save detected courier", e.message);

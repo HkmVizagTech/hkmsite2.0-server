@@ -2,7 +2,7 @@ import Razorpay from "razorpay";
 import crypto from "node:crypto";
 import { donations, plans, shopOrders, festivalDonations, campaigners, templeDevotees } from "../db/tables.js";
 import { query as sql } from "../db/pg.js";
-import { claimUpdate } from "../domain/donationDb.js";
+import { castPaymentDonation, castPaymentDonationId } from "../domain/paymentCast.js";
 import { sanitizeBannerImage } from "../services/pageBanner.service.js";
 import { recordPaymentFailure, recordDowntime } from "../services/paymentFailure.service.js";
 
@@ -76,18 +76,6 @@ const verifySignature = ({ orderId, paymentId, signature, keySecret }) => {
   const expected = crypto.createHmac("sha256", keySecret).update(body).digest("hex");
   return safeEqual(expected, signature);
 };
-
-// Mongoose's Boolean cast, so form-ish values ("true", "1", "yes") store as before.
-const toBool = (v) => {
-  if (v === undefined || v === null) return v;
-  if (v === true || v === 1 || v === "1" || v === "true" || v === "yes") return true;
-  if (v === false || v === 0 || v === "0" || v === "false" || v === "no") return false;
-  throw new Error(`Cast to Boolean failed for value "${v}"`);
-};
-
-// A payment.failed for one attempt must never overwrite a donation another attempt completed.
-const markFailedIfPending = (donationId, paymentId) =>
-  claimUpdate({ _id: String(donationId), status: "pending" }, { status: "failed", razorpayPaymentId: paymentId });
 
 // Processes a verified Razorpay webhook event in-process (called right after
 // the 200 is sent to Razorpay).
@@ -165,13 +153,13 @@ async function processWebhookEventInline(event) {
               await completeDonation({ orderId, paymentId: captured.id });
               console.log("payment.failed webhook but found captured payment for order", orderId);
             } else {
-              await markFailedIfPending(donation._id, payment.id);
+              await donations.updateById(donation._id, { status: "failed", razorpayPaymentId: payment.id });
               console.log("Donation marked failed for order", orderId);
             }
           }
         } catch (rzpErr) {
           // If Razorpay check fails, still mark as failed based on the webhook event
-          await markFailedIfPending(donation._id, payment.id);
+          await donations.updateById(donation._id, { status: "failed", razorpayPaymentId: payment.id });
           console.log("Donation marked failed (Razorpay check failed) for order", orderId);
         }
       }
@@ -186,7 +174,11 @@ async function processWebhookEventInline(event) {
     case "subscription.activated": {
       const sub = event.payload && event.payload.subscription && event.payload.subscription.entity;
       if (sub)
-        await donations.updateOne({ subscriptionId: sub.id }, { status: "active" }, { sort: { createdAt: 1, _id: 1 } });
+        await donations.updateOne(
+          { subscriptionId: sub.id ?? null },
+          { status: "active" },
+          { sort: { createdAt: 1, _id: 1 } }
+        );
       break;
     }
     case "subscription.charged": {
@@ -204,7 +196,7 @@ async function processWebhookEventInline(event) {
       const sub = event.payload && event.payload.subscription && event.payload.subscription.entity;
       if (sub)
         await donations.updateMany(
-          { subscriptionId: sub.id, isRecurring: true, status: { $nin: ["completed", "cancelled"] } },
+          { subscriptionId: sub.id ?? null, isRecurring: true, status: { $nin: ["completed", "cancelled"] } },
           { status: "cancelled" }
         );
       break;
@@ -213,7 +205,7 @@ async function processWebhookEventInline(event) {
       const sub = event.payload && event.payload.subscription && event.payload.subscription.entity;
       if (sub)
         await donations.updateOne(
-          { subscriptionId: sub.id, isRecurring: true, status: "active" },
+          { subscriptionId: sub.id ?? null, isRecurring: true, status: "active" },
           { status: "completed" },
           { sort: { createdAt: 1, _id: 1 } }
         );
@@ -272,14 +264,19 @@ const paymentController = {
       let resolvedFestivalId = req.body.festivalId;
       if (!resolvedFestivalId && req.body.festivalSlug) {
         try {
-          const fest = await festivalDonations.findOne({ slug: String(req.body.festivalSlug) }, { fields: ["_id"] });
+          // Mongoose threw a CastError for an object/array slug here (swallowed below); never run it as a query.
+          if (typeof req.body.festivalSlug === "object") throw new Error("festivalSlug is not a string");
+          const fest = await festivalDonations.findOne(
+            { slug: String(req.body.festivalSlug) },
+            { fields: ["_id"], sort: { _id: 1 } }
+          );
           if (fest) resolvedFestivalId = fest._id;
         } catch (err) {
           console.warn("Could not resolve festivalSlug to festivalId", req.body.festivalSlug, err);
         }
       }
 
-      const donation = await donations.insert({
+      const donationInput = {
         donorName: name || req.body.donorName || "Anonymous",
         donorEmail: email || req.body.donorEmail,
         donorMobile: mobile || req.body.donorMobile,
@@ -294,20 +291,23 @@ const paymentController = {
         message: message || undefined,
         paymentAccount: account.name,
         panNumber: panNumber || req.body.panNumber,
-        certificate: toBool(certificate || req.body.certificate),
+        certificate: certificate || req.body.certificate,
         sevakName: sevakName || req.body.sevakName || undefined,
         sevaDate: sevaDate || req.body.sevaDate || undefined,
         dob: dob || req.body.dob || undefined,
-        wantPrasadam: toBool(mahaprasadam || req.body.wantPrasadam),
+        wantPrasadam: mahaprasadam || req.body.wantPrasadam,
         prasadamAddress: prasadamAddress || req.body.prasadamAddress,
         festivalSlug: req.body.festivalSlug || undefined,
         campaignerSlug: req.body.campaignerSlug || undefined,
         dccEnrolledById: await (async () => {
           if (!req.body.campaignerSlug) return undefined;
           try {
-            const camp = await campaigners.findOne({ slug: String(req.body.campaignerSlug), status: "active" });
+            const camp = await campaigners.findOne(
+              { slug: String(req.body.campaignerSlug), status: "active" },
+              { sort: { _id: 1 }, lean: true }
+            );
             const devotee = camp?.referredByDevotee
-              ? await templeDevotees.findById(camp.referredByDevotee, { fields: ["dccEnrolledById"] })
+              ? await templeDevotees.findById(camp.referredByDevotee, { fields: ["dccEnrolledById"], lean: true })
               : null;
             const id = devotee?.dccEnrolledById;
             return Number.isFinite(Number(id)) && id != null ? Number(id) : undefined;
@@ -335,7 +335,8 @@ const paymentController = {
         metaClientIp:
           (req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket?.remoteAddress || undefined,
         metaUserAgent: req.headers["user-agent"] ? String(req.headers["user-agent"]).slice(0, 400) : undefined,
-      });
+      };
+      const donation = await donations.insert(castPaymentDonation(donationInput));
 
       return res.status(200).json({ orderId: order.id, key: account.key_id, donationId: donation._id });
     } catch (err) {
@@ -409,7 +410,7 @@ const paymentController = {
       });
 
       // 3) A pending donation record for the first charge, flagged recurring.
-      const donation = await donations.insert({
+      const donationInput = {
         donorName: name || req.body.donorName || "Anonymous",
         donorEmail: email || req.body.donorEmail,
         donorMobile: mobile || req.body.donorMobile,
@@ -419,7 +420,7 @@ const paymentController = {
         sevaName,
         paymentAccount: account.name,
         panNumber: panNumber || req.body.panNumber,
-        certificate: toBool(certificate || req.body.certificate),
+        certificate: certificate || req.body.certificate,
         subscriptionId: subscription.id,
         isRecurring: true,
         status: "pending",
@@ -434,7 +435,8 @@ const paymentController = {
                 term: String(req.body.utm.term || "").slice(0, 100),
               }
             : undefined,
-      });
+      };
+      const donation = await donations.insert(castPaymentDonation(donationInput));
 
       return res.status(200).json({
         subscriptionId: subscription.id,
@@ -477,7 +479,7 @@ const paymentController = {
       }
 
       const query = donationId
-        ? { _id: String(donationId) }
+        ? { _id: castPaymentDonationId(donationId) }
         : isSubscription
           ? { subscriptionId: razorpay_subscription_id }
           : { razorpayOrderId: razorpay_order_id };
@@ -569,7 +571,7 @@ const paymentController = {
   },
   reconcile: async (req, res) => {
     try {
-      const donation = await donations.findById(req.params.donationId);
+      const donation = await donations.findById(castPaymentDonationId(req.params.donationId));
       if (!donation) return res.status(404).json({ message: "Donation not found" });
       if (!donation.razorpayOrderId) {
         return res.status(400).json({ message: "This donation has no Razorpay order ID to check." });
@@ -619,6 +621,7 @@ const paymentController = {
         { razorpayOrderId: orderId },
         {
           sort: { createdAt: 1, _id: 1 },
+          lean: true,
           fields: [
             "status",
             "receiptNumber",
@@ -683,6 +686,7 @@ const paymentController = {
           { subscriptionId: sub.id },
           {
             sort: { createdAt: 1, _id: 1 },
+            lean: true,
             fields: ["donorName", "amount", "status", "razorpayPaymentId", "createdAt", "lastPaymentDate"],
           }
         );
@@ -764,7 +768,7 @@ const paymentController = {
       for (const sub of razorpaySubscriptions.items || []) {
         const ourDonations = await donations.find(
           { subscriptionId: sub.id },
-          { fields: ["razorpayPaymentId", "status"] }
+          { fields: ["razorpayPaymentId", "status"], sort: { createdAt: 1, _id: 1 }, lean: true }
         );
         const ourCompletedCount = ourDonations.filter((d) => d.status === "completed").length;
 
@@ -814,21 +818,23 @@ const paymentController = {
           };
 
           if (execute) {
-            const newDonation = await donations.insert({
-              donorName: entry.donorEmail ? entry.donorEmail.split("@")[0] : "Devotee",
-              donorEmail: entry.donorEmail || undefined,
-              donorMobile: entry.donorMobile ? entry.donorMobile.replace(/^\+91/, "") : undefined,
-              amount: entry.amount,
-              type: "Monthly Seva",
-              sourcePage: "recovered-subscription-backfill",
-              sevaName,
-              paymentAccount: accountName,
-              subscriptionId: sub.id,
-              isRecurring: true,
-              status: "pending",
-              razorpayPaymentId: inv.payment_id,
-              createdAt: entry.chargeDate || new Date(),
-            });
+            const newDonation = await donations.insert(
+              castPaymentDonation({
+                donorName: entry.donorEmail ? entry.donorEmail.split("@")[0] : "Devotee",
+                donorEmail: entry.donorEmail || undefined,
+                donorMobile: entry.donorMobile ? entry.donorMobile.replace(/^\+91/, "") : undefined,
+                amount: entry.amount,
+                type: "Monthly Seva",
+                sourcePage: "recovered-subscription-backfill",
+                sevaName,
+                paymentAccount: accountName,
+                subscriptionId: sub.id,
+                isRecurring: true,
+                status: "pending",
+                razorpayPaymentId: inv.payment_id,
+                createdAt: entry.chargeDate || new Date(),
+              })
+            );
             await completeDonation({ donationId: newDonation._id, paymentId: inv.payment_id });
             entry.donationId = String(newDonation._id);
             entry.action = "CREATED_AND_COMPLETED";

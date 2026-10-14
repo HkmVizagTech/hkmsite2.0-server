@@ -2,10 +2,12 @@ import fs from "node:fs";
 import { galleries } from "../db/tables.js";
 import { uploadToR2 } from "../utils/r2.js";
 import { istDayStart, istDayEnd } from "../config/timezone.js";
-import { validateDoc, pick, toStringArray, toDate } from "../domain/validate.js";
+import { pick } from "../domain/validate.js";
+import { pipelineBodyError } from "../domain/odm.js";
+import { gallerySchema } from "../domain/schemas.js";
+import { makeStore, castQueryId, queryEq } from "../domain/store.js";
 
-const TYPES = ["darshan", "festival", "seva", "community", "other"];
-const STATUSES = ["active", "inactive"];
+const store = makeStore(galleries, gallerySchema);
 const EDITABLE = ["title", "description", "images", "date", "category", "type", "status"];
 
 const fail = (res, label, err) => {
@@ -30,15 +32,15 @@ const galleryController = {
     try {
       const { category, type, date, status } = req.query;
       const filter = {};
-      if (category) filter.category = category;
-      if (type) filter.type = type;
-      if (status) filter.status = status;
+      if (category) filter.category = queryEq(category, "gallery", "category");
+      if (type) filter.type = queryEq(type, "gallery", "type");
+      if (status) filter.status = queryEq(status, "gallery", "status");
       if (date) {
         const start = istDayStart(date);
         const end = istDayEnd(date);
         if (start && end) filter.date = { $gte: start, $lte: end };
       }
-      const items = await galleries.find(filter, { sort: { date: -1, _id: 1 } });
+      const items = await store.find(filter, { sort: { date: -1, _id: 1 } });
       res.status(200).json({ items });
     } catch (err) {
       fail(res, "Gallery list error", err);
@@ -47,7 +49,7 @@ const galleryController = {
 
   get: async (req, res) => {
     try {
-      const item = await galleries.findById(req.params.id);
+      const item = await store.findById(castQueryId(req.params.id, "gallery"));
       if (!item) return res.status(404).json({ message: "Gallery item not found" });
       res.status(200).json({ item });
     } catch (err) {
@@ -58,16 +60,11 @@ const galleryController = {
   create: async (req, res) => {
     try {
       const { title, description, images, date, category, type, status } = req.body;
-      validateDoc(
-        "gallery",
-        { title, date, type, status },
-        { required: ["title", "date"], enums: { type: TYPES, status: STATUSES } }
-      );
-      const item = await galleries.insert({
+      const item = await store.create({
         title,
         description,
-        images: toStringArray(images) || [],
-        date: toDate(date),
+        images,
+        date,
         category,
         type,
         status,
@@ -81,11 +78,10 @@ const galleryController = {
 
   update: async (req, res) => {
     try {
-      const patch = pick(req.body || {}, EDITABLE);
-      if (patch.images !== undefined) patch.images = toStringArray(patch.images) || [];
-      if (patch.date !== undefined) patch.date = toDate(patch.date);
-      validateDoc("gallery", patch, { enums: { type: TYPES, status: STATUSES } });
-      const item = await galleries.updateById(req.params.id, patch);
+      const id = castQueryId(req.params.id, "gallery");
+      const bad = pipelineBodyError(req.body);
+      if (bad) throw bad;
+      const item = await store.updateById(id, pick(req.body || {}, EDITABLE));
       if (!item) return res.status(404).json({ message: "Gallery item not found" });
       res.status(200).json({ message: "Gallery item updated", item });
     } catch (err) {
@@ -95,7 +91,7 @@ const galleryController = {
 
   delete: async (req, res) => {
     try {
-      await galleries.deleteById(req.params.id);
+      await galleries.deleteById(castQueryId(req.params.id, "gallery"));
       res.status(200).json({ message: "Gallery item deleted" });
     } catch (err) {
       fail(res, "Gallery delete error", err);

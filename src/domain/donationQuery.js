@@ -1,4 +1,4 @@
-import { many, isId } from "../db/pg.js";
+import { many } from "../db/pg.js";
 import { donations } from "../db/tables.js";
 
 export const IST_ZONE = "Asia/Kolkata";
@@ -15,11 +15,7 @@ export const EXCLUDE_DONATIONS_PAGE = { $raw: ["(source_page IS NULL OR source_p
 
 export const NEEDS_ATTENTION_OR = [{ dccSyncStatus: "failed" }, { whatsappReceiptSentAt: null }];
 
-export const castId = (id) => {
-  if (!isId(id))
-    throw new Error(`Cast to ObjectId failed for value "${id}" (type string) at path "_id" for model "donation"`);
-  return id;
-};
+export { castId } from "./donationCast.js";
 
 export const castNumber = (v) => {
   const n = Number(v);
@@ -30,10 +26,28 @@ export const castNumber = (v) => {
 export const istMonth = (col) => `to_char(${col} AT TIME ZONE '${IST_ZONE}', 'YYYY-MM')`;
 export const istDay = (col) => `to_char(${col} AT TIME ZONE '${IST_ZONE}', 'YYYY-MM-DD')`;
 
+const FALSE_FILTER = { $raw: ["FALSE", []] };
+
+// aggregate $match does not cast: an array or a plain sub-document compared to a scalar field matches nothing.
+export function aggMatch(filter) {
+  const out = {};
+  let never = false;
+  for (const [key, cond] of Object.entries(filter)) {
+    if (key === "$or" || key === "$and" || key === "$nor") out[key] = cond.map(aggMatch);
+    else if (key === "$raw") out[key] = cond;
+    else if (Array.isArray(cond)) never = true;
+    else if (cond && typeof cond === "object" && !(cond instanceof RegExp) && !(cond instanceof Date)) {
+      if (Object.keys(cond).some((k) => k.startsWith("$"))) out[key] = cond;
+      else never = true;
+    } else out[key] = cond;
+  }
+  return never ? { $and: [FALSE_FILTER, out] } : out;
+}
+
 // Runs SELECT <select> FROM donations WHERE <mongo-style filter> [GROUP BY ..] [ORDER BY ..] [LIMIT n].
 export async function aggregate(filter, select, { groupBy, orderBy, limit, offset } = {}) {
   const params = [];
-  const w = donations.buildWhere(filter, params);
+  const w = donations.buildWhere(aggMatch(filter), params);
   let sql =
     `SELECT ${select} FROM donations` + (w.sql ? ` WHERE ${w.sql}` : "") + (groupBy ? ` GROUP BY ${groupBy}` : "");
   // Wrapped so ORDER BY can use expressions over the output aliases.
@@ -56,7 +70,7 @@ export const sumTotal = async (filter) => (await sumCount(filter)).total;
 // Number of groups for GROUP BY <keyExpr> (Mongo $group + $count).
 export async function countGroups(filter, keyExpr) {
   const params = [];
-  const w = donations.buildWhere(filter, params);
+  const w = donations.buildWhere(aggMatch(filter), params);
   const rows = await many(
     `SELECT COUNT(*) AS n FROM (SELECT 1 FROM donations${w.sql ? ` WHERE ${w.sql}` : ""} GROUP BY ${keyExpr}) g`,
     params

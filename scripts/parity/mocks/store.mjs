@@ -45,17 +45,3 @@ export const getEntity = (kind, id) => readStore().entities[kind]?.[id] ?? null;
 export const listEntities = (kind) => Object.values(readStore().entities[kind] || {});
 
 export const padId = (n, width = 6) => String(n).padStart(width, "0");
-
-// Consumes one scripted failure for a service (failNext counts down in the state file; failAll never does).
-export const takeFailure = (service) => {
-  const state = readState();
-  const cfg = state[service];
-  if (!cfg) return null;
-  if (cfg.failAll) return cfg;
-  if (Number(cfg.failNext) > 0) {
-    cfg.failNext -= 1;
-    writeState(state);
-    return cfg;
-  }
-  return null;
-};

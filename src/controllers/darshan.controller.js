@@ -1,5 +1,9 @@
 import { darshans } from "../db/tables.js";
 import { tx } from "../db/pg.js";
+import { darshanSchema } from "../domain/schemas.js";
+import { makeStore } from "../domain/store.js";
+
+const store = makeStore(darshans, darshanSchema);
 
 const darshanController = {
   // Server-to-server (shared-secret header). The payload is the full active set,
@@ -16,17 +20,26 @@ const darshanController = {
 
       await tx(async (client) => {
         await darshans.deleteMany({ vaikunthamId: { $nin: incomingIds } }, { client });
+
         for (let i = 0; i < photos.length; i++) {
           const p = photos[i];
           const vaikunthamId = Number(p.id);
           if (!Number.isFinite(vaikunthamId) || !p.imageUrl) continue;
+
+          const cast = darshanSchema.castUpdate({
+            vaikunthamId,
+            imageUrl: p.imageUrl,
+            position: typeof p.position === "number" ? p.position : i,
+            status: "active",
+            syncedAt: new Date(),
+          });
           await client.query(
             `INSERT INTO darshans (id, vaikuntham_id, image_url, position, status, synced_at)
-             VALUES ($1, $2, $3, $4, 'active', now())
+             VALUES ($1, $2, $3, $4, $5, $6)
              ON CONFLICT (vaikuntham_id) DO UPDATE
                SET image_url = EXCLUDED.image_url, position = EXCLUDED.position,
-                   status = 'active', synced_at = now(), updated_at = now()`,
-            [darshans.newId(), vaikunthamId, p.imageUrl, typeof p.position === "number" ? p.position : i]
+                   status = EXCLUDED.status, synced_at = EXCLUDED.synced_at, updated_at = now()`,
+            [darshans.newId(), cast.vaikunthamId, cast.imageUrl, cast.position, cast.status, cast.syncedAt]
           );
         }
       });
@@ -40,7 +53,7 @@ const darshanController = {
 
   list: async (req, res) => {
     try {
-      const items = await darshans.find({ status: "active" }, { sort: { position: 1, _id: 1 } });
+      const items = await store.find({ status: "active" }, { sort: { position: 1, _id: 1 } });
       res.status(200).json({ items });
     } catch (err) {
       console.error("Darshan list error:", err && err.stack ? err.stack : err);

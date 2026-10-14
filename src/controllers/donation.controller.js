@@ -1,5 +1,6 @@
 import { donations, donors, templeDevotees, festivalDonations } from "../db/tables.js";
 import { isId } from "../db/pg.js";
+import { castDonationForCreate, castDonationForUpdate, castFilter, defaultsToPersist } from "../domain/donationCast.js";
 import { IST, istDayStart, istDayEnd } from "../config/timezone.js";
 import { reconcilePendingDonations } from "../services/reconciliation.service.js";
 import { findOrCreateDonor } from "../services/donor.service.js";
@@ -107,36 +108,20 @@ const PRASADAM_LIST_FIELDS = [
 
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-const str = (v) => (v === undefined || v === null ? undefined : String(v).trim());
-
-// Fields a donation create/update from the admin may set. Never ids, receipt/DCC fields or status.
-function safeDonationFields(body = {}) {
-  const out = {};
-  for (const key of [
-    "donorName",
-    "donorEmail",
-    "donorMobile",
-    "message",
-    "panNumber",
-    "sevakName",
-    "sevaDate",
-    "dob",
-  ]) {
-    if (body[key] !== undefined && body[key] !== null) out[key] = str(body[key]);
-  }
-  for (const key of ["certificate", "wantPrasadam"]) {
-    if (body[key] !== undefined) out[key] = body[key] === true || body[key] === "true";
-  }
-  const a = body.prasadamAddress;
-  if (a && typeof a === "object" && !Array.isArray(a)) {
-    const addr = {};
-    for (const key of ["doorNo", "house", "street", "area", "country", "state", "city", "pincode"]) {
-      if (a[key] !== undefined && a[key] !== null) addr[key] = String(a[key]).trim();
-    }
-    if (Object.keys(addr).length) out.prasadamAddress = addr;
-  }
-  return out;
-}
+// Fields PUT /donations/:id may change (the old handler passed the whole body to findByIdAndUpdate).
+const UPDATABLE_FIELDS = [
+  "donorName",
+  "donorEmail",
+  "donorMobile",
+  "message",
+  "panNumber",
+  "sevakName",
+  "sevaDate",
+  "dob",
+  "certificate",
+  "wantPrasadam",
+  "prasadamAddress",
+];
 
 const donationController = {
   stats: async (req, res) => {
@@ -284,9 +269,10 @@ const donationController = {
       if (medium) match["utm.medium"] = medium === "none" ? { $in: [null, ""] } : medium;
       if (sourcePage) match.sourcePage = sourcePage === "unknown" ? { $in: [null, ""] } : sourcePage;
 
-      const transactions = await donations.find(match, {
+      const transactions = await donations.find(castFilter(match), {
         sort: BY_NEWEST,
         limit: 200,
+        lean: true,
         fields: [
           "donorName",
           "donorEmail",
@@ -396,9 +382,9 @@ const donationController = {
           orderBy: `amount DESC, k COLLATE "C"`,
           limit: 15,
         }),
-        aggregate(baseMatch, "status AS k, SUM(amount) AS amount, COUNT(*) AS count", {
+        aggregate(baseMatch, "status AS k, SUM(amount) AS amount, COUNT(*) AS count, MIN(id) AS first_id", {
           groupBy: "k",
-          orderBy: `k COLLATE "C"`,
+          orderBy: "first_id",
         }),
         aggregate(completedMatch, `${bucket} AS k, SUM(amount) AS amount, COUNT(*) AS count`, {
           groupBy: "k",
@@ -477,7 +463,7 @@ const donationController = {
 
       let dccEnrolledById;
       if (devoteeId) {
-        const devotee = isId(devoteeId) ? await templeDevotees.findById(devoteeId) : null;
+        const devotee = isId(devoteeId) ? await templeDevotees.findById(devoteeId, { lean: true }) : null;
         if (devotee?.dccEnrolledById != null) dccEnrolledById = devotee.dccEnrolledById;
       }
       if (
@@ -489,7 +475,7 @@ const donationController = {
         dccEnrolledById = Number(dccEnrolledByIdRaw);
       }
 
-      const existingWithUtr = await donations.findOne({ utrNumber: utr });
+      const existingWithUtr = await donations.findOne({ utrNumber: utr }, { lean: true });
       if (existingWithUtr) {
         return res.status(409).json({
           success: false,
@@ -497,31 +483,33 @@ const donationController = {
         });
       }
 
-      const donation = await donations.insert({
-        donorName: name,
-        donorEmail: donorEmail ? String(donorEmail).trim().toLowerCase() : undefined,
-        donorMobile: donorMobile ? String(donorMobile).trim() : undefined,
-        amount: amt,
-        type: type || "Manual Entry",
-        sevaName: sevaName || undefined,
-        sourcePage: "admin-manual",
-        status: "pending",
-        date: paymentDate ? new Date(paymentDate) : new Date(),
-        manualEntry: true,
-        utrNumber: utr,
-        manualPaymentMode: mode,
-        manualEntryNote: manualEntryNote || undefined,
-        manualEnteredBy: req.user?.userId || undefined,
-        dccEnrolledById,
-        panNumber: panNumber || undefined,
-        certificate: !!certificate,
-        wantPrasadam: !!wantPrasadam,
-        // Kept for 80G as well as prasadam: the receipt and DCC both read this address.
-        prasadamAddress: wantPrasadam || certificate ? prasadamAddress : undefined,
-        transactionId: gatewayPaymentId ? String(gatewayPaymentId).trim() : undefined,
-        sevakName: sevakName || undefined,
-        dob: dob || undefined,
-      });
+      const donation = await donations.insert(
+        castDonationForCreate({
+          donorName: name,
+          donorEmail: donorEmail ? String(donorEmail).trim().toLowerCase() : undefined,
+          donorMobile: donorMobile ? String(donorMobile).trim() : undefined,
+          amount: amt,
+          type: type || "Manual Entry",
+          sevaName: sevaName || undefined,
+          sourcePage: "admin-manual",
+          status: "pending",
+          date: paymentDate ? new Date(paymentDate) : new Date(),
+          manualEntry: true,
+          utrNumber: utr,
+          manualPaymentMode: mode,
+          manualEntryNote: manualEntryNote || undefined,
+          manualEnteredBy: req.user?.userId || undefined,
+          dccEnrolledById,
+          panNumber: panNumber || undefined,
+          certificate: !!certificate,
+          wantPrasadam: !!wantPrasadam,
+          // Kept for 80G as well as prasadam: the receipt and DCC both read this address.
+          prasadamAddress: wantPrasadam || certificate ? prasadamAddress : undefined,
+          transactionId: gatewayPaymentId ? String(gatewayPaymentId).trim() : undefined,
+          sevakName: sevakName || undefined,
+          dob: dob || undefined,
+        })
+      );
 
       if (donation.donorMobile) {
         try {
@@ -578,7 +566,7 @@ const donationController = {
         return res.status(409).json({ success: false, message: "This donation is already completed." });
       }
 
-      const existingWithUtr = await donations.findOne({ utrNumber: utr, _id: { $ne: donation._id } });
+      const existingWithUtr = await donations.findOne({ utrNumber: utr, _id: { $ne: donation._id } }, { lean: true });
       if (existingWithUtr) {
         return res.status(409).json({
           success: false,
@@ -589,13 +577,16 @@ const donationController = {
       const validModes = ["upi", "bank", "cash", "cheque"];
       const mode = validModes.includes(manualPaymentMode) ? manualPaymentMode : "upi";
 
-      await donations.updateById(donation._id, {
-        manualEntry: true,
-        utrNumber: utr,
-        manualPaymentMode: mode,
-        manualEntryNote: manualEntryNote || undefined,
-        manualEnteredBy: req.user?.userId || undefined,
-      });
+      await donations.updateById(
+        donation._id,
+        castDonationForUpdate({
+          manualEntry: true,
+          utrNumber: utr,
+          manualPaymentMode: mode,
+          manualEntryNote: manualEntryNote || undefined,
+          manualEnteredBy: req.user?.userId || undefined,
+        })
+      );
 
       await markDonationCompleted({ donationId: donation._id });
 
@@ -692,9 +683,10 @@ const donationController = {
       const limit = Math.min(isExport ? MAX_EXPORT_LIMIT : MAX_BROWSE_LIMIT, Math.max(1, toInt(req.query.limit, 20)));
       const skip = (page - 1) * limit;
 
+      const castedFilter = castFilter(filter);
       const [total, rows, totalAmount] = await Promise.all([
-        donations.count(filter),
-        donations.find(filter, { sort: BY_NEWEST, skip, limit, fields: LIST_FIELDS }),
+        donations.count(castedFilter),
+        donations.find(castedFilter, { sort: BY_NEWEST, skip, limit, fields: LIST_FIELDS, lean: true }),
         sumTotal(filter),
       ]);
 
@@ -717,34 +709,52 @@ const donationController = {
 
   create: async (req, res) => {
     try {
-      const body = req.body || {};
-      const { festivalId, festivalSlug, type, transactionId, razorpayOrderId } = body;
-      if (!body.donorName || !body.amount) {
+      const {
+        donorName,
+        donorEmail,
+        donorMobile,
+        amount,
+        type,
+        message,
+        transactionId,
+        festivalId,
+        festivalSlug,
+        panNumber,
+        certificate,
+        wantPrasadam,
+        prasadamAddress,
+        razorpayOrderId,
+      } = req.body;
+      if (!donorName || !amount) {
         return res.status(400).json({ message: "Name and amount are required" });
-      }
-      const amount = Number(body.amount);
-      if (!Number.isFinite(amount) || amount <= 0) {
-        return res.status(400).json({ message: "A valid amount is required" });
       }
       let resolvedFestivalId = festivalId;
       if (!resolvedFestivalId && festivalSlug) {
         try {
-          const fest = await festivalDonations.findOne({ slug: String(festivalSlug) }, { fields: ["_id"] });
+          const fest = await festivalDonations.findOne({ slug: festivalSlug }, { fields: ["_id"] });
           if (fest) resolvedFestivalId = fest._id;
         } catch (err) {
           console.warn("Could not resolve festivalSlug to festivalId", festivalSlug, err);
         }
       }
-      const donation = await donations.insert({
-        ...safeDonationFields(body),
+      const doc = castDonationForCreate({
+        donorName,
+        donorEmail,
+        donorMobile,
         amount,
-        type: type ? String(type) : undefined,
-        transactionId: str(transactionId),
-        festivalId: resolvedFestivalId ? String(resolvedFestivalId) : undefined,
-        festivalSlug: str(festivalSlug),
-        razorpayOrderId: str(razorpayOrderId),
+        type,
+        message,
+        transactionId,
+        festivalId: resolvedFestivalId,
+        festivalSlug,
+        panNumber,
+        certificate,
+        wantPrasadam,
+        prasadamAddress,
+        razorpayOrderId,
         status: "pending",
       });
+      const donation = await donations.insert(doc);
       res.status(201).json({ message: "Donation created", donation });
     } catch (err) {
       res.status(500).json({ message: "Server error" });
@@ -754,9 +764,11 @@ const donationController = {
   update: async (req, res) => {
     try {
       const { id } = req.params;
-      castId(id);
-      const patch = safeDonationFields(req.body);
-      const donation = Object.keys(patch).length ? await donations.updateById(id, patch) : await donations.findById(id);
+      const body = req.body || {};
+      const input = {};
+      for (const key of UPDATABLE_FIELDS) if (body[key] !== undefined) input[key] = body[key];
+      const patch = castDonationForUpdate(input);
+      const donation = await donations.updateById(castId(id), patch);
       if (!donation) return res.status(404).json({ message: "Donation not found" });
       res.status(200).json({ message: "Donation updated", donation });
     } catch (err) {
@@ -856,6 +868,7 @@ const donationController = {
         {
           sort: BY_NEWEST,
           limit: 200,
+          lean: true,
           fields: [
             "donorName",
             "donorEmail",
@@ -937,7 +950,7 @@ const donationController = {
       const limit = Math.min(300, Math.max(1, parseInt(req.query.limit, 10) || 200));
       const execute = req.query.execute === "true";
 
-      const pending = await donors.find({ dccDonorNumber: null }, { sort: { _id: 1 }, limit });
+      const pending = await donors.find({ dccDonorNumber: null }, { sort: { _id: 1 }, limit, lean: true });
 
       const results = [];
       for (const donor of pending) {
@@ -954,7 +967,7 @@ const donationController = {
         if (!rows.length) {
           entry.action = "NO_SYNCED_DONATION_FOUND";
         } else {
-          const dccDonorNumber = String(rows[0].dn);
+          const dccDonorNumber = rows[0].dn;
           entry.dccDonorNumber = dccDonorNumber;
           if (execute) {
             await donors.updateById(donor._id, { dccDonorNumber });
@@ -990,6 +1003,7 @@ const donationController = {
         {
           sort: BY_NEWEST,
           limit: 200,
+          lean: true,
           fields: [
             "donorName",
             "donorEmail",
@@ -1087,6 +1101,7 @@ const donationController = {
       };
       const stale = await donations.find(query, {
         sort: { _id: 1 },
+        lean: true,
         fields: [
           "_id",
           "donorName",
@@ -1159,12 +1174,15 @@ const donationController = {
       const page = Math.max(1, parseInt(req.query.page || "1", 10));
       const limit = Math.min(200, Math.max(1, parseInt(req.query.limit || "20", 10)));
       const skip = (page - 1) * limit;
+      // Mongoose ignored a NaN skip or limit.
+      const pageOpts = { skip: Number.isNaN(skip) ? 0 : skip, limit: Number.isNaN(limit) ? undefined : limit };
 
       const optMatch = { wantPrasadam: true, status: "completed", ...EXCLUDE_DONATIONS_PAGE };
 
+      const castedFilter = castFilter(filter);
       const [total, requests, counts, sevaAgg, pageAgg] = await Promise.all([
-        donations.count(filter),
-        donations.find(filter, { sort: BY_NEWEST, skip, limit, fields: PRASADAM_LIST_FIELDS }),
+        donations.count(castedFilter),
+        donations.find(castedFilter, { sort: BY_NEWEST, ...pageOpts, fields: PRASADAM_LIST_FIELDS, lean: true }),
         aggregate(optMatch, "prasadam_status AS k, COUNT(*) AS count", { groupBy: "k" }),
         aggregate(optMatch, "seva_name AS k", { groupBy: "k", orderBy: `k COLLATE "C"` }),
         aggregate(optMatch, "source_page AS k", { groupBy: "k", orderBy: `k COLLATE "C"` }),
@@ -1233,7 +1251,17 @@ const donationController = {
         patch.prasadamDeliveredAt = null;
       }
 
-      const updated = await donations.updateById(donation._id, patch);
+      // Mongoose save() wrote nothing (and left updatedAt alone) when no value actually changed.
+      const same = (a, b) => (a ?? null) === (b ?? null) || (a instanceof Date && b instanceof Date && +a === +b);
+      const changed = Object.keys(patch).some((k) => !same(patch[k], donation[k]));
+      let updated = donation;
+      if (changed) {
+        const raw = await donations.findById(donation._id, { lean: true });
+        updated = await donations.updateById(donation._id, {
+          ...defaultsToPersist(raw, donation, ["utm", "prasadamAddress"]),
+          ...patch,
+        });
+      }
       res.status(200).json({ success: true, message: `Prasadam request marked ${prasadamStatus}`, donation: updated });
     } catch (err) {
       console.error("donation.updatePrasadamStatus error:", err);
@@ -1274,9 +1302,10 @@ const donationController = {
         ];
       }
 
-      const rows = await donations.find(filter, {
+      const rows = await donations.find(castFilter(filter), {
         sort: BY_NEWEST,
         limit: 5000,
+        lean: true,
         fields: [
           "donorName",
           "donorEmail",

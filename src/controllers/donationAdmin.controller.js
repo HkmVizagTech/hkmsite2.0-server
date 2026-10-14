@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import { donations } from "../db/tables.js";
-import { isId } from "../db/pg.js";
 import { uploadToR2 } from "../utils/r2.js";
 import { createRazorpayInstance } from "./payment.controller.js";
 import { completeDonation } from "../services/paymentCompletion.service.js";
+import { castFilter } from "../domain/donationCast.js";
 import { istDayStart, istDayEnd } from "../config/timezone.js";
 import {
   dccReceiptStatus,
@@ -22,6 +22,7 @@ import {
   sumCount,
   sumTotal,
   countGroups,
+  castId,
   istDay,
 } from "../domain/donationQuery.js";
 
@@ -192,6 +193,9 @@ const donationAdminController = {
         and.push({ status: statuses.length === 1 ? statuses[0] : { $in: statuses } });
       }
 
+      // Quirk kept from the Mongo build: sourcePage + search without needs_attention built an invalid $or and failed.
+      if (search && sourcePage && status !== "needs_attention") throw new Error("Invalid query: $or must be an array");
+
       if (search) {
         and.push({
           $or: [
@@ -212,9 +216,10 @@ const donationAdminController = {
       const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
       const skip = (pageNum - 1) * limitNum;
 
+      const castedQuery = castFilter(query);
       const [transactions, totalCount, totalAmount] = await Promise.all([
-        donations.find(query, { sort: BY_NEWEST, skip, limit: limitNum }),
-        donations.count(query),
+        donations.find(castedQuery, { sort: BY_NEWEST, skip, limit: limitNum, lean: true }),
+        donations.count(castedQuery),
         sumTotal(query),
       ]);
 
@@ -263,7 +268,7 @@ const donationAdminController = {
       if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
         return res.status(400).json({ success: false, message: "Invalid transaction ID" });
       }
-      const txn = await donations.findOne({ _id: id, ...DONATIONS_PAGE_FILTER });
+      const txn = await donations.findOne({ _id: id, ...DONATIONS_PAGE_FILTER }, { lean: true });
       if (!txn) return res.status(404).json({ success: false, message: "Transaction not found" });
       res.status(200).json({ success: true, transaction: txn });
     } catch (error) {
@@ -309,7 +314,7 @@ const donationAdminController = {
       const { id } = req.params;
       if (!id || !id.match(/^[0-9a-fA-F]{24}$/))
         return res.status(400).json({ success: false, message: "Invalid transaction ID" });
-      const txn = await donations.findOne({ _id: id, ...DONATIONS_PAGE_FILTER }, { fields: ["status"] });
+      const txn = await donations.findOne({ _id: id, ...DONATIONS_PAGE_FILTER }, { fields: ["status"], lean: true });
       if (!txn) return res.status(404).json({ success: false, message: "Transaction not found" });
       if (txn.status !== "completed")
         return res.status(400).json({ success: false, message: "Only successful donations get a DCC receipt." });
@@ -338,7 +343,7 @@ const donationAdminController = {
       if (!id || !id.match(/^[0-9a-fA-F]{24}$/))
         return res.status(400).json({ success: false, message: "Invalid transaction ID" });
       if (!clean) return res.status(400).json({ success: false, message: "receiptNumber is required." });
-      const txn = await donations.findOne({ _id: id, ...DONATIONS_PAGE_FILTER }, { fields: ["_id"] });
+      const txn = await donations.findOne({ _id: id, ...DONATIONS_PAGE_FILTER }, { fields: ["_id"], lean: true });
       if (!txn) return res.status(404).json({ success: false, message: "Transaction not found" });
 
       const result = await setReceiptNumberAndSend(id, clean);
@@ -372,9 +377,10 @@ const donationAdminController = {
         { campaign, source, medium }
       );
 
-      const transactions = await donations.find(match, {
+      const transactions = await donations.find(castFilter(match), {
         sort: BY_NEWEST,
         limit: 200,
+        lean: true,
         fields: [
           "donorName",
           "donorEmail",
@@ -409,7 +415,7 @@ const donationAdminController = {
       }
       Object.assign(query, buildDateRangeMatch(startDate, endDate));
 
-      const transactions = await donations.find(query, { sort: BY_NEWEST });
+      const transactions = await donations.find(castFilter(query), { sort: BY_NEWEST, lean: true });
 
       const headers = [
         "Transaction ID",
@@ -535,11 +541,7 @@ const donationAdminController = {
       if (!donationId || !razorpayPaymentId) {
         return res.status(400).json({ message: "donationId and razorpayPaymentId are required." });
       }
-      if (!isId(donationId))
-        throw new Error(
-          `Cast to ObjectId failed for value "${donationId}" (type string) at path "_id" for model "donation"`
-        );
-      const donation = await donations.findById(donationId);
+      const donation = await donations.findById(castId(donationId));
       if (!donation) return res.status(404).json({ message: "Donation not found" });
       if (donation.status === "completed") {
         return res.status(200).json({ message: "Already marked completed.", receiptNumber: donation.receiptNumber });
@@ -576,6 +578,7 @@ const donationAdminController = {
         {
           sort: { createdAt: 1, _id: 1 },
           limit,
+          lean: true,
           fields: ["_id", "donorName", "amount", "razorpayOrderId", "paymentAccount", "createdAt"],
         }
       );

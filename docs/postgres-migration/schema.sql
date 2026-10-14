@@ -542,3 +542,34 @@ CREATE TABLE payment_downtimes (
 );
 CREATE INDEX payment_downtimes_dtid_idx ON payment_downtimes(downtime_id);
 CREATE INDEX payment_downtimes_recv_idx ON payment_downtimes(received_at);
+
+-- ───────────── Mongoose-compatible relaxations (shop): store every value Mongoose accepted ─────────────
+ALTER TABLE products
+  ALTER COLUMN price TYPE numeric, ALTER COLUMN mrp TYPE numeric, ALTER COLUMN stock TYPE numeric,
+  ALTER COLUMN weight_grams TYPE numeric, ALTER COLUMN sort_order TYPE numeric;
+ALTER TABLE products DROP CONSTRAINT IF EXISTS products_price_check, DROP CONSTRAINT IF EXISTS products_mrp_check,
+  DROP CONSTRAINT IF EXISTS products_stock_check;
+
+ALTER TABLE product_variants
+  ALTER COLUMN price TYPE numeric, ALTER COLUMN mrp TYPE numeric, ALTER COLUMN stock TYPE numeric,
+  ALTER COLUMN weight_grams TYPE numeric;
+ALTER TABLE product_variants ALTER COLUMN label DROP NOT NULL, ALTER COLUMN price DROP NOT NULL;
+ALTER TABLE product_variants DROP CONSTRAINT IF EXISTS product_variants_price_check,
+  DROP CONSTRAINT IF EXISTS product_variants_mrp_check, DROP CONSTRAINT IF EXISTS product_variants_stock_check;
+-- Mongo allowed the same variant _id twice (inside one product or across products).
+ALTER TABLE product_variants DROP CONSTRAINT product_variants_pkey;
+ALTER TABLE product_variants ALTER COLUMN id DROP NOT NULL;
+ALTER TABLE product_variants ALTER COLUMN position SET NOT NULL;
+ALTER TABLE product_variants ADD PRIMARY KEY (product_id, position);
+CREATE INDEX IF NOT EXISTS product_variants_id_idx ON product_variants(id);
+
+ALTER TABLE shop_categories ALTER COLUMN name DROP NOT NULL, ALTER COLUMN sort_order TYPE numeric;
+ALTER TABLE shop_categories DROP CONSTRAINT IF EXISTS shop_categories_status_check;
+
+ALTER TABLE shop_orders
+  ALTER COLUMN subtotal TYPE numeric, ALTER COLUMN shipping_charge TYPE numeric, ALTER COLUMN total TYPE numeric,
+  ALTER COLUMN shipping_rule_flat TYPE numeric, ALTER COLUMN shipping_rule_free_above TYPE numeric;
+ALTER TABLE shop_order_items
+  ALTER COLUMN unit_price TYPE numeric, ALTER COLUMN mrp TYPE numeric, ALTER COLUMN line_total TYPE numeric;
+ALTER TABLE shop_settings
+  ALTER COLUMN flat_shipping_charge TYPE numeric, ALTER COLUMN free_shipping_above TYPE numeric;

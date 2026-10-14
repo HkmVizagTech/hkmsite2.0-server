@@ -53,7 +53,7 @@ async function claimUpdate(filter, patch, { client, order = "created_at, id" } =
 }
 
 // SELECT with an explicit (trusted, literal) ORDER BY, for orderings the repo cannot express (NULLS FIRST).
-async function selectDonations(filter, { orderBy = "", limit, skip } = {}) {
+async function selectDonations(filter, { orderBy = "", limit, skip, lean = false } = {}) {
   const params = [];
   let sql = `SELECT * FROM donations${whereOf(filter, params)}${orderBy ? ` ORDER BY ${orderBy}` : ""}`;
   if (limit != null) {
@@ -64,8 +64,26 @@ async function selectDonations(filter, { orderBy = "", limit, skip } = {}) {
     params.push(skip);
     sql += ` OFFSET $${params.length}`;
   }
-  return (await query(sql, params)).rows.map(donations.fromRow);
+  return (await query(sql, params)).rows.map((r) => donations.fromRow(r, { lean }));
 }
+
+// Mongo's .limit(): 0, NaN and Infinity mean "no limit"; negatives and fractions use their truncated magnitude.
+const mongoLimit = (n) => {
+  const x = Math.trunc(Math.abs(Number(n)));
+  return Number.isFinite(x) && x > 0 ? Math.min(x, 2147483647) : undefined;
+};
+
+// A Date used as a filter bound: Mongoose rejected Invalid Date; dates before Postgres' minimum match everything.
+const dbDateBound = (d, path = "createdAt") => {
+  if (Number.isNaN(d.getTime())) {
+    const err = new Error(
+      `Cast to date failed for value "Invalid Date" (type Date) at path "${path}" for model "donation"`
+    );
+    err.name = "CastError";
+    throw err;
+  }
+  return d.getTime() < -62135596800000 ? new Date(-62135596800000) : d;
+};
 
 const PAYMENT_ERROR_KEYS = [
   "paymentId",
@@ -90,6 +108,8 @@ export {
   donations,
   claimUpdate,
   selectDonations,
+  mongoLimit,
+  dbDateBound,
   wholePaymentError,
   normalize as normalizeFilter,
   DONATIONS_PAGE_SQL_REGEX,

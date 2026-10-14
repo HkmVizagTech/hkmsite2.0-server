@@ -79,9 +79,10 @@ async function ensureDefaultShopCategories() {
 
   for (const c of DEFAULT_SHOP_CATEGORIES) {
     const slug = slugify(c.name);
-    const inserted = (await shopCategories.findOne({ slug }))
+    const now = new Date();
+    const inserted = (await shopCategories.findOne({ slug }, { lean: true }))
       ? null
-      : await shopCategories.insert({ ...c, slug }, { onConflictDoNothing: true });
+      : await shopCategories.insert({ ...c, slug, createdAt: now, updatedAt: now }, { onConflictDoNothing: true });
     if (inserted) createdNames.push(c.name);
     else skipped += 1;
   }

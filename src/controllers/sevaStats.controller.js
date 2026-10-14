@@ -59,6 +59,7 @@ const sevaStatsController = {
             sort: { date: -1, _id: 1 },
             limit: MAX_DONOR_WALL,
             fields: ["donorName", "amount", "date"],
+            lean: true,
           }),
           sumCount(filter),
         ]);
@@ -122,10 +123,16 @@ const sevaStatsController = {
         SQFT_TTL,
         async () => {
           const [latestDocs, largestDocs, agg] = await Promise.all([
-            donations.find(filter, { sort: { date: -1, _id: 1 }, limit: 5, fields: ["donorName", "amount", "date"] }),
+            donations.find(filter, {
+              sort: { date: -1, _id: 1 },
+              limit: 5,
+              fields: ["donorName", "amount", "date"],
+              lean: true,
+            }),
             donations.find(filter, {
               sort: { amount: -1, date: -1, _id: 1 },
               limit: 5,
+              lean: true,
               fields: ["donorName", "amount", "date"],
             }),
             sumCount(filter),
@@ -180,6 +187,7 @@ const sevaStatsController = {
             donations.find(filter, {
               sort: { date: -1, _id: 1 },
               limit: 15,
+              lean: true,
               fields: ["donorName", "amount", "date", "sevaName", "type"],
             }),
           ]);

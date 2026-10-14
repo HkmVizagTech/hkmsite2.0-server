@@ -1,5 +1,6 @@
 import { donors, donations } from "../db/tables.js";
 import { castId } from "../domain/donationQuery.js";
+import { defaultsToPersist } from "../domain/donationCast.js";
 import { toEnglish } from "../utils/toEnglish.js";
 import { sendDonationWhatsAppReceipt } from "../services/paymentCompletion.service.js";
 import { donationController } from "./donation.controller.js";
@@ -141,7 +142,7 @@ function collapseSubscriptions(donations) {
 async function buildDonorSnapshot(donor) {
   const rows = await donations.find(
     { donorRecordId: donor._id },
-    { sort: { createdAt: -1, _id: 1 }, fields: DONATION_FIELDS }
+    { sort: { createdAt: -1, _id: 1 }, fields: DONATION_FIELDS, lean: true }
   );
 
   return {
@@ -157,7 +158,7 @@ async function buildDonorSnapshots(donorList) {
 
   const rows = await donations.find(
     { donorRecordId: { $in: ids } },
-    { sort: { createdAt: -1, _id: 1 }, fields: DONATION_FIELDS }
+    { sort: { createdAt: -1, _id: 1 }, fields: DONATION_FIELDS, lean: true }
   );
 
   const byDonor = new Map();
@@ -186,7 +187,7 @@ const internalController = {
         return res.status(400).json({ success: false, message: "Mobile number required" });
       }
 
-      const donor = await donors.findOne({ mobile });
+      const donor = await donors.findOne({ mobile }, { lean: true });
       if (!donor) return res.json({ success: true, found: false });
 
       const snapshot = await buildDonorSnapshot(donor);
@@ -205,7 +206,7 @@ const internalController = {
       const skip = (page - 1) * limit;
 
       const [donorRows, total] = await Promise.all([
-        donors.find({}, { sort: { _id: 1 }, skip, limit }),
+        donors.find({}, { sort: { _id: 1 }, skip, limit, lean: true }),
         donors.count({}),
       ]);
 
@@ -350,6 +351,7 @@ const internalController = {
           sort: { createdAt: -1, _id: 1 },
           skip: (page - 1) * limit,
           limit,
+          lean: true,
           fields: [
             "donorName",
             "donorMobile",
@@ -467,7 +469,8 @@ const internalController = {
         return res.json({ success: true, applied: false, message: "Nothing here differed." });
       }
 
-      await donors.updateById(donor._id, patch);
+      const raw = await donors.findById(donor._id, { lean: true });
+      await donors.updateById(donor._id, { ...defaultsToPersist(raw, donor, ["savedAddress"]), ...patch });
       res.json({ success: true, applied: true, changed, message: `Updated ${changed.join(", ")}.` });
     } catch (err) {
       console.error("internal.updateDonorProfile error:", err);

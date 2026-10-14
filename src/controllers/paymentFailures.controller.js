@@ -24,20 +24,21 @@ const paymentFailuresController = {
         `pe_description AS description, pe_reason AS reason, pe_source AS source,
          COUNT(*) AS donations,
          SUM(COALESCE(failed_attempts, 1)) AS attempts,
-         SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS paid_later`,
+         SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS paid_later,
+         MIN(id) AS first_id`,
         {
           groupBy: "pe_description, pe_reason, pe_source",
-          orderBy: `donations DESC, description COLLATE "C", reason COLLATE "C", source COLLATE "C"`,
+          orderBy: "donations DESC, first_id",
           limit: 15,
         }
       );
 
       const byMethod = await aggregate(
         withError,
-        "pe_method AS method, COALESCE(pe_bank, pe_wallet, pe_upi_flow, pe_card_network) AS via, COUNT(*) AS donations",
+        "pe_method AS method, COALESCE(pe_bank, pe_wallet, pe_upi_flow, pe_card_network) AS via, COUNT(*) AS donations, MIN(id) AS first_id",
         {
           groupBy: "pe_method, COALESCE(pe_bank, pe_wallet, pe_upi_flow, pe_card_network)",
-          orderBy: `donations DESC, method COLLATE "C", via COLLATE "C"`,
+          orderBy: "donations DESC, first_id",
           limit: 15,
         }
       );
@@ -45,6 +46,7 @@ const paymentFailuresController = {
       const recent = await donations.find(withError, {
         sort: { "paymentError.at": -1, _id: 1 },
         limit: 60,
+        lean: true,
         fields: [
           "donorName",
           "donorMobile",
@@ -62,7 +64,7 @@ const paymentFailuresController = {
 
       const downtimes = await paymentDowntimes.find(
         { receivedAt: { $gte: since }, event: "started" },
-        { sort: { receivedAt: -1, _id: 1 }, limit: 200 }
+        { sort: { receivedAt: -1, _id: 1 }, limit: 200, lean: true }
       );
       const downtimeGroups = {};
       for (const d of downtimes) {

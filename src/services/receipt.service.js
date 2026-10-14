@@ -84,7 +84,7 @@ const buildAddress = (prasadamAddress) => {
 };
 
 async function generateReceiptBuffer(donationId) {
-  const donation = await donations.findById(donationId);
+  const donation = await donations.findById(donationId, { lean: true });
   if (!donation) throw new Error("Donation not found for receipt generation");
 
   const amountWords = `${numToWord.toWords(Math.round(donation.amount)).toUpperCase()} RUPEES ONLY`;
@@ -99,13 +99,16 @@ async function generateReceiptBuffer(donationId) {
   // came through a P2P Square Foot Seva link, otherwise blank.
   let enrolledByName = "---";
   if (donation.campaignerSlug) {
-    const campaigner = await campaigners.findOne({ slug: donation.campaignerSlug });
+    const campaigner = await campaigners.findOne({ slug: donation.campaignerSlug }, { sort: { _id: 1 }, lean: true });
     if (campaigner?.name) enrolledByName = campaigner.name;
   }
 
   let displayDonorId = donation.donorId || "---";
   if (donation.donorRecordId) {
-    const donorRecord = await donors.findById(donation.donorRecordId, { fields: ["dccDonorNumber", "donorId"] });
+    const donorRecord = await donors.findById(donation.donorRecordId, {
+      fields: ["dccDonorNumber", "donorId"],
+      lean: true,
+    });
     if (donorRecord) displayDonorId = donorRecord.dccDonorNumber || donorRecord.donorId || displayDonorId;
   }
 

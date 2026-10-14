@@ -5,6 +5,7 @@
 import crypto from "node:crypto";
 import { MongoClient, ObjectId } from "mongodb";
 import pg from "pg";
+pg.types.setTypeParser(1700, (v) => (v === null ? null : parseFloat(v)));
 import { sign, call, normalize, diff, discover } from "./lib.mjs";
 
 const [A, B] = [process.argv[2], process.argv[3]];

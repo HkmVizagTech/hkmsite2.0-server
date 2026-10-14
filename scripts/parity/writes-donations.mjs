@@ -6,7 +6,10 @@ import crypto from "node:crypto";
 import { MongoClient } from "mongodb";
 import { discover, sign, call, normalize, diff, orderOnly } from "./lib.mjs";
 
+import { setState, readLog, compareLogs } from "./mocks/ctl.mjs";
+
 const [A, B] = [process.argv[2], process.argv[3]];
+const MOCK_ENV = process.argv[4] || process.env.PARITY_ENV; // env name when the servers run with MOCKS=1
 const MONGO = process.env.SRC_MONGO_URI;
 const ctx = await discover(MONGO);
 const { donations: pgDonations, donors: pgDonors, donorIssues: pgIssues } = await import("../../src/db/tables.js");
@@ -76,28 +79,61 @@ async function create(name, body, key) {
 const id = (key) => (side) => side.ids[key];
 
 const MARK = "ParityTest";
+const festivalSlug = (await mdb.collection("festivaldonations").findOne({}))?.slug;
 const MOBILE1 = "9000000011";
 const MOBILE2 = "9000000012";
 
-// ---------- create (fixes 2) ----------
+// ---------- create (old behaviour kept: amount cast like Mongoose, negatives accepted) ----------
 await step("create: missing body", req("POST", "/donations", {}));
+await step("create: non-numeric amount", req("POST", "/donations", { donorName: `${MARK} X`, amount: "abc" }));
+await step("create: negative amount", req("POST", "/donations", { donorName: `${MARK} Neg`, amount: -5 }));
+await step("create: amount '0' string", req("POST", "/donations", { donorName: `${MARK} Zero`, amount: "0" }));
+await step("create: fractional amount", req("POST", "/donations", { donorName: `${MARK} Frac`, amount: 12.5 }));
+await step("create: amount true", req("POST", "/donations", { donorName: `${MARK} True`, amount: true }));
+await step("create: amount object", req("POST", "/donations", { donorName: `${MARK} Obj`, amount: { a: 1 } }));
+await step("create: type object", req("POST", "/donations", { donorName: `${MARK} T1`, amount: 5, type: { a: 1 } }));
+await step("create: type number", req("POST", "/donations", { donorName: `${MARK} T2`, amount: 5, type: 7 }));
 await step(
-  "create: non-numeric amount (old 500 / new 400)",
-  req("POST", "/donations", { donorName: `${MARK} X`, amount: "abc" }),
-  { expectDiff: "FIX: amount validated" }
+  "create: certificate yes",
+  req("POST", "/donations", { donorName: `${MARK} C1`, amount: 5, certificate: "yes" })
 );
 await step(
-  "create: negative amount (old accepted / new 400)",
-  req("POST", "/donations", { donorName: `${MARK} Neg`, amount: -5 }),
-  { expectDiff: "FIX: amount validated" }
+  "create: certificate maybe",
+  req("POST", "/donations", { donorName: `${MARK} C2`, amount: 5, certificate: "maybe" })
+);
+await step(
+  "create: bad festivalId",
+  req("POST", "/donations", { donorName: `${MARK} F1`, amount: 5, festivalId: "abc" })
+);
+await step(
+  "create: festivalSlug resolves",
+  req("POST", "/donations", { donorName: `${MARK} F2`, amount: 5, festivalSlug: festivalSlug || "nope" })
+);
+await step(
+  "create: name as number",
+  req("POST", "/donations", { donorName: 12345, amount: 5, donorEmail: 99, prasadamAddress: { city: "X", zip: 1 } })
+);
+await step(
+  "create: address field array",
+  req("POST", "/donations", { donorName: `${MARK} A1`, amount: 5, prasadamAddress: { city: ["x"] } })
+);
+await step(
+  "create: unknown/protected fields dropped",
+  req("POST", "/donations", {
+    donorName: `${MARK} P1`,
+    amount: 5,
+    status: "completed",
+    receiptNumber: "R1",
+    sevakName: "S",
+  })
 );
 await step(
   "create: no auth (baseline route was public / new route is admin-only)",
-  req("POST", "/donations", { donorName: `${MARK} X`, amount: 5 }, { token: null }),
+  req("POST", "/donations", { donorName: `${MARK} NoAuth`, amount: 5 }, { token: null }),
   { expectDiff: "route change by lead: create is admin-only" }
 );
-// the baseline accepted the two requests above; remove what it created so the state comparison stays aligned
-await mdb.collection("donations").deleteMany({ donorName: { $in: [`${MARK} X`, `${MARK} Neg`] } });
+// the baseline accepted the request above; remove what it created so the state comparison stays aligned
+await mdb.collection("donations").deleteMany({ donorName: `${MARK} NoAuth` });
 await create(
   "create D1 (prasadam)",
   {
@@ -134,6 +170,7 @@ await create(
   "d5"
 );
 await create("create Dh (hack target)", { donorName: `${MARK} Hack`, amount: 10 }, "dh");
+await create("create D6 (update variants)", { donorName: `${MARK} Six`, amount: 66, donorMobile: "9000000019" }, "d6");
 
 // ---------- read / update ----------
 await step(
@@ -154,6 +191,47 @@ await step(
 await step(
   "update D1 empty body",
   req("PUT", (s) => `/donations/${s.ids.d1}`, {})
+);
+await step(
+  "update D6 casts (numbers to strings, bool strings)",
+  req("PUT", (s) => `/donations/${s.ids.d6}`, {
+    donorName: 12,
+    message: true,
+    certificate: "yes",
+    wantPrasadam: 0,
+    dob: "1991-02-03",
+  })
+);
+await step(
+  "update D6 null clears",
+  req("PUT", (s) => `/donations/${s.ids.d6}`, { message: null, panNumber: null })
+);
+await step(
+  "update D6 array value",
+  req("PUT", (s) => `/donations/${s.ids.d6}`, { donorName: ["a"] })
+);
+await step(
+  "update D6 object value",
+  req("PUT", (s) => `/donations/${s.ids.d6}`, { message: { a: 1 } })
+);
+await step(
+  "update D6 bad boolean",
+  req("PUT", (s) => `/donations/${s.ids.d6}`, { certificate: "maybe" })
+);
+await step(
+  "update D6 address",
+  req("PUT", (s) => `/donations/${s.ids.d6}`, {
+    wantPrasadam: true,
+    prasadamAddress: { city: "Vizag", pincode: "530001" },
+  })
+);
+await step(
+  "update D6 empty address object",
+  req("PUT", (s) => `/donations/${s.ids.d6}`, { prasadamAddress: {} })
+);
+await step(
+  "get D6 after updates",
+  req("GET", (s) => `/donations/${s.ids.d6}`)
 );
 await step("update unknown id", req("PUT", "/donations/000000000000000000000000", { message: "x" }));
 await step("update bad id", req("PUT", "/donations/zz", { message: "x" }));
@@ -199,6 +277,10 @@ await step("prasadam: back to dispatched", pr({ prasadamStatus: "dispatched" }))
 await step("prasadam: pending", pr({ prasadamStatus: "pending", prasadamNotes: "" }));
 await step("prasadam: cancelled", pr({ prasadamStatus: "cancelled" }));
 await step("prasadam: delivered straight", pr({ prasadamStatus: "delivered", prasadamCourier: "X" }));
+await step("prasadam: cancelled again (nothing changes)", pr({ prasadamStatus: "cancelled" }));
+await step("prasadam: cancelled again with notes", pr({ prasadamStatus: "cancelled", prasadamNotes: "  zz " }));
+await step("prasadam: cancelled same notes", pr({ prasadamStatus: "cancelled", prasadamNotes: "zz" }));
+await step("prasadam: courier object", pr({ prasadamStatus: "pending", prasadamCourier: { a: 1 } }));
 await step(
   "prasadam: unknown donation",
   req("PUT", "/donations/000000000000000000000000/prasadam-status", { prasadamStatus: "pending" })
@@ -239,6 +321,42 @@ const [m1a, m1b] = await step(
 );
 sides.A.ids.m1 = m1a.data?.donation?._id;
 sides.B.ids.m1 = m1b.data?.donation?._id;
+const man = (extra, n) => ({
+  donorName: `${MARK} MV${n}`,
+  donorMobile: `90000001${40 + n}`,
+  amount: 11 + n,
+  utrNumber: `PARITYMV${n}`,
+  ...extra,
+});
+let mvn = 0;
+for (const [label, extra] of [
+  ["type object", { type: { a: 1 } }],
+  ["type number", { type: 5 }],
+  ["sevaName array", { sevaName: ["x"] }],
+  ["dob object + type object", { dob: { y: 1 }, type: { b: 2 } }],
+  ["manualEntryNote object", { manualEntryNote: { a: 1 } }],
+  ["panNumber array", { panNumber: ["A"] }],
+  ["bad paymentDate", { paymentDate: "garbage" }],
+  ["paymentDate ok", { paymentDate: "2026-03-04" }],
+  ["paymentDate number", { paymentDate: 1700000000000 }],
+  ["amount string", { amount: "123.5" }],
+  ["amount negative", { amount: -3 }],
+  ["amount NaN string", { amount: "abc" }],
+  ["address city array", { certificate: true, prasadamAddress: { city: ["q"] } }],
+  ["address string", { certificate: true, prasadamAddress: "abc" }],
+  ["address not kept without 80G/prasadam", { prasadamAddress: { city: "Z" } }],
+  ["wantPrasadam + address", { wantPrasadam: true, prasadamAddress: { city: "Y", pincode: "530005", extra: "x" } }],
+  ["sevakName/dob/sevaName", { sevakName: "Sevak", dob: "2000-01-01", sevaName: "S1", transactionId: " pay_zz " }],
+  ["bad devoteeId", { devoteeId: "nope" }],
+  ["dccEnrolledById string", { dccEnrolledById: "42" }],
+  ["dccEnrolledById junk", { dccEnrolledById: "x" }],
+  ["note + mode", { manualEntryNote: "  hello  ", manualPaymentMode: "cheque" }],
+  ["mode invalid", { manualPaymentMode: "x" }],
+  ["email only", { donorMobile: undefined, donorEmail: " Mixed@Case.COM " }],
+]) {
+  mvn++;
+  await step(`manual variant: ${label}`, req("POST", "/donations/manual", man(extra, mvn)));
+}
 await step(
   "manual: duplicate utr",
   req("POST", "/donations/manual", { donorName: "x", amount: 5, utrNumber: "PARITYUTR1", donorMobile: MOBILE1 })
@@ -353,6 +471,59 @@ await step(
 );
 await step("upi-claims all after", req("GET", "/donations/upi-claims?status=all"));
 
+// ---------- UPI QR payments through the mock Razorpay ----------
+if (MOCK_ENV) {
+  const nowEpoch = Math.floor(Date.now() / 1000);
+  setState(MOCK_ENV, "both", {
+    razorpay: {
+      qrPayments: [
+        { id: "pay_qr1", amount: 33300, created_at: nowEpoch - 30 },
+        { id: "pay_qr2", amount: 44400, created_at: nowEpoch - 60 },
+        { id: "pay_qr3", amount: 99900, created_at: nowEpoch - 90 },
+      ],
+      payments: { pay_qr2: { amount: 44400 }, pay_qr3: { amount: 99900 } },
+    },
+  });
+}
+await create(
+  "create D7 (upi match by payment id)",
+  { donorName: `${MARK} Seven`, amount: 444, donorMobile: "9000000020", razorpayOrderId: "order_parity7" },
+  "d7"
+);
+await step(
+  "upi opened on D7",
+  up("/payments/upi-fallback/opened", (s) => ({ donationId: s.ids.d7, orderId: "order_parity7" }))
+);
+await step(
+  "upi candidates D4",
+  req("GET", (s) => `/donations/upi-claims/${s.ids.d4}/candidates`)
+);
+await step(
+  "upi candidates D7",
+  req("GET", (s) => `/donations/upi-claims/${s.ids.d7}/candidates`)
+);
+await step("upi candidates bad id", req("GET", "/donations/upi-claims/zz/candidates"));
+await step("upi candidates unknown", req("GET", "/donations/upi-claims/000000000000000000000000/candidates"));
+await step("upi-qr-payments", req("GET", "/donations/upi-qr-payments?days=7"));
+await step("upi-qr-payments days=0", req("GET", "/donations/upi-qr-payments?days=0"));
+await step(
+  "upi-match: payment unknown",
+  req("POST", "/donations/upi-match", (s) => ({ donationId: s.ids.d7, paymentId: "pay_missing" }))
+);
+await step(
+  "upi-match: amount differs",
+  req("POST", "/donations/upi-match", (s) => ({ donationId: s.ids.d7, paymentId: "pay_qr3" }))
+);
+await step(
+  "upi-match: by payment id",
+  req("POST", "/donations/upi-match", (s) => ({ donationId: s.ids.d7, paymentId: "pay_qr2" }))
+);
+await step("upi-qr-payments after match", req("GET", "/donations/upi-qr-payments?days=7"));
+await step(
+  "get D7 after match",
+  req("GET", (s) => `/donations/${s.ids.d7}`)
+);
+
 // ---------- resend / admin tools ----------
 await step("resend-receipt unknown", req("POST", "/donations/000000000000000000000000/resend-receipt"));
 await step(
@@ -443,7 +614,14 @@ async function setOtp(attempts = 0, expiresInMs = 600000) {
 const au = (path, body) => req("POST", path, body, { token: null });
 await step("send-otp: bad mobile", au("/donor-auth/send-otp", { mobile: "123" }));
 await step("send-otp: unknown mobile", au("/donor-auth/send-otp", { mobile: "9000000099" }));
-await step("send-otp: known mobile (WhatsApp unconfigured)", au("/donor-auth/send-otp", { mobile: donorMobile }));
+await step("send-otp: known mobile", au("/donor-auth/send-otp", { mobile: donorMobile }));
+await step("send-otp: known mobile again (cooldown)", au("/donor-auth/send-otp", { mobile: donorMobile }));
+await step("shop send-otp: bad mobile", au("/donor-auth/shop/send-otp", { mobile: "12" }));
+await step(
+  "shop send-otp: new customer",
+  au("/donor-auth/shop/send-otp", { mobile: "9000000032", name: "Parity Shop Customer" })
+);
+await step("shop send-otp: same customer (cooldown)", au("/donor-auth/shop/send-otp", { mobile: "9000000032" }));
 await step("verify-otp: missing fields", au("/donor-auth/verify-otp", { mobile: donorMobile }));
 await step("verify-otp: unknown mobile", au("/donor-auth/verify-otp", { mobile: "9000000099", otp: "1" }));
 await setOtp(0, -1000);
@@ -489,6 +667,14 @@ await step(
   dreq("POST", "/donor/issues", { subject: " Parity subject ", message: " Parity message " })
 );
 await step("donor issues list", dreq("GET", "/donor/issues"));
+await step("donor issue raw keys", async (side) => {
+  const r = await dreq("POST", "/donor/issues", { subject: "Parity raw", message: "m" })(side);
+  const l = await dreq("GET", "/donor/issues")(side);
+  return {
+    status: r.status,
+    data: { created: Object.keys(r.data.issue || {}).sort(), listed: Object.keys(l.data.issues?.[0] || {}).sort() },
+  };
+});
 await step("donor cancel: unknown subscription", dreq("POST", "/donor/subscriptions/sub_nope/cancel"));
 await step("donor receipt: unknown donation", dreq("GET", "/donor/receipt/000000000000000000000000"));
 await step("donor my-summary", dreq("GET", "/donor/my-summary"));
@@ -509,6 +695,55 @@ await step(
 await step(
   "preacher donor donations: bad id",
   req("GET", "/preacher/my-donors/zz/donations", undefined, { token: prTok })
+);
+
+// raised by a preacher: donor gets assigned, then the preacher views
+const [pm1a, pm1b] = await step(
+  "preacher raises manual receipt",
+  req(
+    "POST",
+    "/donations/manual",
+    { donorName: `${MARK} PreachDonor`, donorMobile: "9000000031", amount: 555, utrNumber: "PARITYPR1" },
+    { token: prTok }
+  )
+);
+sides.A.ids.pm1 = pm1a.data?.donation?._id;
+sides.B.ids.pm1 = pm1b.data?.donation?._id;
+await step(
+  "preacher search-donor by mobile",
+  req("GET", "/preacher/search-donor?q=9000000031", undefined, { token: prTok })
+);
+await step(
+  "preacher search-donor by name",
+  req("GET", `/preacher/search-donor?q=${MARK}`, undefined, { token: prTok })
+);
+await step("preacher search-donor numeric", req("GET", "/preacher/search-donor?q=100", undefined, { token: prTok }));
+await step("preacher search-donor short", req("GET", "/preacher/search-donor?q=ab", undefined, { token: prTok }));
+await step("preacher search-donor regex junk", req("GET", "/preacher/search-donor?q=(((", undefined, { token: prTok }));
+await step("preacher my-donors", req("GET", "/preacher/my-donors", undefined, { token: prTok }));
+await step("preacher my-reports", req("GET", "/preacher/my-reports", undefined, { token: prTok }));
+await step(
+  "preacher my-reports range",
+  req("GET", "/preacher/my-reports?from=2026-01-01&to=2026-12-31", undefined, { token: prTok })
+);
+await step("preacher my-reports bad range", req("GET", "/preacher/my-reports?from=abc", undefined, { token: prTok }));
+const prDonor = (side) =>
+  call(side.base, { path: "/preacher/my-donors", token: prTok }).then(
+    (r) => r.data?.donors?.find((d) => d.mobile === "9000000031")?._id
+  );
+sides.A.ids.prd = await prDonor(sides.A);
+sides.B.ids.prd = await prDonor(sides.B);
+await step(
+  "preacher donor donations",
+  req("GET", (s) => `/preacher/my-donors/${s.ids.prd}/donations`, undefined, { token: prTok })
+);
+await step(
+  "preacher resend-whatsapp own donation",
+  req("POST", (s) => `/preacher/donations/${s.ids.pm1}/resend-whatsapp`, undefined, { token: prTok })
+);
+await step(
+  "preacher resend-whatsapp not theirs",
+  req("POST", (s) => `/preacher/donations/${s.ids.d1}/resend-whatsapp`, undefined, { token: prTok })
 );
 
 // ---------- DRM / internal ----------
@@ -590,20 +825,23 @@ function compareState(name, a, b) {
   if (p.length) stateProblems.push(`${name}: ${p.join("; ")}`);
 }
 
+const byNameAmount = (a, b) => (a.donorName < b.donorName ? -1 : a.donorName > b.donorName ? 1 : a.amount - b.amount);
 const mDon = (
   await mdb
     .collection("donations")
     .find({ donorName: new RegExp(MARK) })
-    .sort({ donorName: 1, amount: 1 })
     .toArray()
-).map(jsonDoc);
-const pDon = (await pgDonations.find({ donorName: { $regex: MARK } }, { sort: { donorName: 1, amount: 1 } })).map(
-  jsonDoc
-);
+)
+  .map(jsonDoc)
+  .sort(byNameAmount);
+const pDon = (await pgDonations.find({ donorName: { $regex: MARK } }, { lean: true })).map(jsonDoc).sort(byNameAmount);
 const dropVolatile = (d) => {
   const c = { ...d };
   delete c._id;
   delete c.__v;
+  delete c.otpCodeHash; // random per send
+  delete c.otpExpiresAt;
+  delete c.otpLastRequestedAt;
   return c;
 };
 compareState("donations: ParityTest count", mDon.length, pDon.length);
@@ -615,7 +853,20 @@ const mDonors = (
     .collection("donors")
     .find({
       $or: [
-        { mobile: { $in: [donorMobile, "9000000016", "9000000017", "9000000018", "9000000013", "9000000014"] } },
+        {
+          mobile: {
+            $in: [
+              donorMobile,
+              "9000000016",
+              "9000000017",
+              "9000000018",
+              "9000000013",
+              "9000000014",
+              "9000000031",
+              "9000000032",
+            ],
+          },
+        },
         { name: new RegExp(MARK) },
       ],
     })
@@ -626,11 +877,24 @@ const pDonors = (
   await pgDonors.find(
     {
       $or: [
-        { mobile: { $in: [donorMobile, "9000000016", "9000000017", "9000000018", "9000000013", "9000000014"] } },
+        {
+          mobile: {
+            $in: [
+              donorMobile,
+              "9000000016",
+              "9000000017",
+              "9000000018",
+              "9000000013",
+              "9000000014",
+              "9000000031",
+              "9000000032",
+            ],
+          },
+        },
         { name: { $regex: MARK } },
       ],
     },
-    { sort: { mobile: 1 } }
+    { sort: { mobile: 1 }, lean: true }
   )
 ).map(jsonDoc);
 compareState("donors: touched count", mDonors.length, pDonors.length);
@@ -643,7 +907,7 @@ const mIssues = (
     .find({ subject: /Parity/ })
     .toArray()
 ).map(jsonDoc);
-const pIssues = (await pgIssues.find({ subject: { $regex: "Parity" } })).map(jsonDoc);
+const pIssues = (await pgIssues.find({ subject: { $regex: "Parity" } }, { lean: true })).map(jsonDoc);
 compareState("donor issues", mIssues.map(dropVolatile), pIssues.map(dropVolatile));
 
 const mAgg = await mdb
@@ -684,6 +948,11 @@ compareState(
     (await mdb.collection("counters").findOne({ name: "donorId" }))?.seq,
   (await query("SELECT seq FROM counters WHERE name='donorId'")).rows[0]?.seq
 );
+
+if (MOCK_ENV) {
+  const { equal, report } = compareLogs(readLog(MOCK_ENV, "baseline"), readLog(MOCK_ENV, "new"));
+  if (!equal) stateProblems.push(`outbound service calls differ: ${String(report).slice(0, 1500)}`);
+}
 
 await mongo.close();
 await closeDb();

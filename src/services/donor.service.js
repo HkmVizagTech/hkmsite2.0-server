@@ -27,24 +27,15 @@ async function findOrCreateDonor({ mobile, name, email, raisedByPreacherId, crea
   const year = new Date().toLocaleDateString("en-GB", { timeZone: IST, year: "numeric" });
   const donorId = `HKM-${year}-${String(seq).padStart(5, "0")}`;
 
-  try {
-    return await donors.insert({
-      donorId,
-      mobile: cleanMobile,
-      name: name?.trim() || (createdVia === "shop" ? "Devotee" : "Donor"),
-      email: email?.trim() || undefined,
-      createdVia,
-      assignedPreacherId: raisedByPreacherId || undefined,
-      firstRaisedByPreacherId: raisedByPreacherId || undefined,
-    });
-  } catch (err) {
-    // Two concurrent first donations for one mobile: use the record the other request just created.
-    if (err && err.code === "23505") {
-      const existing = await donors.findOne({ mobile: cleanMobile });
-      if (existing) return existing;
-    }
-    throw err;
-  }
+  return donors.insert({
+    donorId,
+    mobile: cleanMobile,
+    name: name?.trim() || (createdVia === "shop" ? "Devotee" : "Donor"),
+    email: email?.trim() || undefined,
+    createdVia,
+    assignedPreacherId: raisedByPreacherId || undefined,
+    firstRaisedByPreacherId: raisedByPreacherId || undefined,
+  });
 }
 
 async function findOrCreateShopCustomer({ mobile, name, email }) {

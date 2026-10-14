@@ -256,7 +256,10 @@ function defineTable({
       sets.push(`${qi(c)} = COALESCE(${qi(c)}, 0) + $${params.length}`);
     }
     for (const c of unsets) sets.push(`${qi(c)} = NULL`);
-    if (touch && timestamps && !("updated_at" in cols)) sets.push(`"updated_at" = now()`);
+    if (touch && timestamps && !("updated_at" in cols)) {
+      params.push(new Date());
+      sets.push(`"updated_at" = $${params.length}`);
+    }
     return sets;
   };
 
@@ -307,7 +310,9 @@ function defineTable({
 
     async insert(doc, { client, onConflictDoNothing = false, lean = false } = {}) {
       const { cols } = toColumns({ ...doc });
-      const all = serialId ? { ...cols } : { id: doc._id || doc.id || newId(), ...cols };
+      const now = new Date();
+      const stamps = timestamps ? { created_at: cols.created_at ?? now, updated_at: cols.updated_at ?? now } : {};
+      const all = serialId ? { ...cols } : { id: doc._id || doc.id || newId(), ...stamps, ...cols };
       const names = Object.keys(all);
       const sql =
         `INSERT INTO ${qi(table)} (${names.map(qi).join(",")}) VALUES (${names.map((_, i) => `$${i + 1}`).join(",")})` +

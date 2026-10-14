@@ -31,12 +31,12 @@ const donorController = {
   // address, "donor since" date, and assigned preacher's name if any.
   me: async (req, res) => {
     try {
-      const donor = await donors.findById(req.donor.donorId);
+      const donor = await donors.findById(req.donor.donorId, { lean: true });
       if (!donor) return res.status(404).json({ success: false, message: "Donor not found." });
 
       let preacherName = null;
       if (donor.assignedPreacherId) {
-        const preacher = await users.findById(donor.assignedPreacherId, { fields: ["name"] });
+        const preacher = await users.findById(donor.assignedPreacherId, { fields: ["name"], lean: true });
         preacherName = preacher ? preacher.name : null;
       }
 
@@ -143,6 +143,7 @@ const donorController = {
         { donorRecordId: req.donor.donorId },
         {
           sort: { createdAt: -1, _id: 1 },
+          lean: true,
           fields: [
             "amount",
             "sevaName",
@@ -165,12 +166,12 @@ const donorController = {
   // GET /donor/stats — lifetime giving summary for the dashboard hero:
   stats: async (req, res) => {
     try {
-      const donor = await donors.findById(req.donor.donorId, { fields: ["createdAt"] });
+      const donor = await donors.findById(req.donor.donorId, { fields: ["createdAt"], lean: true });
       if (!donor) return res.status(404).json({ success: false, message: "Donor not found." });
 
       const completed = await donations.find(
         { donorRecordId: req.donor.donorId, status: "completed" },
-        { fields: ["amount", "sevaName", "type"] }
+        { fields: ["amount", "sevaName", "type"], lean: true }
       );
 
       const lifetimeTotal = completed.reduce((sum, d) => sum + (Number(d.amount) || 0), 0);
@@ -198,6 +199,7 @@ const donorController = {
         { donorRecordId: req.donor.donorId, isRecurring: true, subscriptionId: { $ne: null } },
         {
           sort: { createdAt: 1, _id: 1 },
+          lean: true,
           fields: ["subscriptionId", "amount", "sevaName", "type", "status", "createdAt", "paymentAccount"],
         }
       );
@@ -259,7 +261,7 @@ const donorController = {
       // Ownership check only — NOT used to decide cancellability. Any
       const owned = await donations.findOne(
         { subscriptionId, donorRecordId: req.donor.donorId },
-        { sort: { _id: 1 }, fields: ["subscriptionId", "paymentAccount"] }
+        { sort: { _id: 1 }, fields: ["subscriptionId", "paymentAccount"], lean: true }
       );
 
       if (!owned) {
@@ -384,7 +386,8 @@ const donorController = {
         subject: subject.trim(),
         message: message.trim(),
       });
-      res.status(201).json({ success: true, issue });
+      // donorIssue has Mongoose's default versionKey, which the API always exposed.
+      res.status(201).json({ success: true, issue: { ...issue, __v: 0 } });
     } catch (err) {
       console.error("donor.raiseIssue error:", err);
       res.status(500).json({ success: false, message: "Could not submit your issue. Please try again." });
@@ -394,8 +397,11 @@ const donorController = {
   // GET /donor/issues — this donor's own raised issues, with status.
   myIssues: async (req, res) => {
     try {
-      const issues = await donorIssues.find({ donorRecordId: req.donor.donorId }, { sort: { createdAt: -1, _id: 1 } });
-      res.status(200).json({ success: true, issues });
+      const issues = await donorIssues.find(
+        { donorRecordId: req.donor.donorId },
+        { sort: { createdAt: -1, _id: 1 }, lean: true }
+      );
+      res.status(200).json({ success: true, issues: issues.map((i) => ({ ...i, __v: 0 })) });
     } catch (err) {
       console.error("donor.myIssues error:", err);
       res.status(500).json({ success: false, message: "Server error" });

@@ -1,8 +1,36 @@
 import { donors as donorsTable, donations } from "../db/tables.js";
+import { many } from "../db/pg.js";
 import { istDayStart, istDayEnd } from "../config/timezone.js";
 import { aggregate, castId } from "../domain/donationQuery.js";
 import { isWhatsAppConfigured } from "../services/whatsapp.service.js";
 import { sendDonationWhatsAppReceipt } from "../services/paymentCompletion.service.js";
+
+// Mongo served this $or through one index scan per clause (donorId, mobile, name, dccDonorNumber), so rows come back clause by clause in index-key order.
+async function searchDonorsInIndexOrder(q, digitsOnly) {
+  const branches = [
+    ["donor_id", "~*", q],
+    ...(digitsOnly.length >= 3 ? [["mobile", "~", digitsOnly]] : []),
+    ["name", "~*", q],
+    ["dcc_donor_number", "~*", q],
+  ];
+  const params = branches.map((b) => b[2]);
+  const sql = branches
+    .map(
+      ([col, op], i) =>
+        `(SELECT *, ${i} AS branch, ${col} AS sort_key FROM donors WHERE ${col} ${op} $${i + 1} ORDER BY ${col} COLLATE "C", id LIMIT 10)`
+    )
+    .join(" UNION ALL ");
+  const rows = await many(`SELECT * FROM (${sql}) u ORDER BY branch, sort_key COLLATE "C", id`, params);
+  const seen = new Set();
+  const out = [];
+  for (const row of rows) {
+    if (seen.has(row.id)) continue;
+    seen.add(row.id);
+    out.push(donorsTable.fromRow(row, { lean: true }));
+    if (out.length === 10) break;
+  }
+  return out;
+}
 
 const preacherController = {
   // GET /preacher/search-donor?q=<mobile, name, or donor ID>
@@ -19,7 +47,7 @@ const preacherController = {
       ];
       if (digitsOnly.length >= 3) conditions.push({ mobile: { $regex: digitsOnly } });
 
-      const donors = await donorsTable.find({ $or: conditions }, { sort: { _id: 1 }, limit: 10 });
+      const donors = await searchDonorsInIndexOrder(q, digitsOnly);
       res.status(200).json({
         success: true,
         // DCC's DonorNumber is the real, authoritative ID once it exists;
@@ -43,7 +71,10 @@ const preacherController = {
   myDonors: async (req, res) => {
     try {
       const preacherId = req.user.userId;
-      const donors = await donorsTable.find({ assignedPreacherId: preacherId }, { sort: { createdAt: -1, _id: 1 } });
+      const donors = await donorsTable.find(
+        { assignedPreacherId: preacherId },
+        { sort: { createdAt: -1, _id: 1 }, lean: true }
+      );
 
       const donorIds = donors.map((d) => d._id);
       const rollups = donorIds.length
@@ -82,16 +113,20 @@ const preacherController = {
   // full donation history, only if that donor is assigned to THIS preacher.
   donorDonations: async (req, res) => {
     try {
-      const donor = await donorsTable.findOne({
-        _id: castId(req.params.donorRecordId),
-        assignedPreacherId: req.user.userId,
-      });
+      const donor = await donorsTable.findOne(
+        {
+          _id: castId(req.params.donorRecordId, "donor"),
+          assignedPreacherId: req.user.userId,
+        },
+        { lean: true }
+      );
       if (!donor) return res.status(404).json({ success: false, message: "Donor not found or not assigned to you." });
 
       const rows = await donations.find(
         { donorRecordId: donor._id },
         {
           sort: { createdAt: -1, _id: 1 },
+          lean: true,
           fields: [
             "donorName",
             "amount",
@@ -124,6 +159,7 @@ const preacherController = {
 
       const match = { manualEnteredBy: preacherId, status: "completed" };
 
+      let emptyRange = false;
       if (from || to) {
         match.createdAt = {};
         if (from) {
@@ -134,7 +170,13 @@ const preacherController = {
           const d = istDayEnd(to);
           if (d) match.createdAt.$lte = d;
         }
+        // Mongo matched createdAt == {} here, i.e. nothing.
+        if (!Object.keys(match.createdAt).length) {
+          delete match.createdAt;
+          emptyRange = true;
+        }
       }
+      if (emptyRange) match.$raw = ["FALSE", []];
 
       const [summary, bySeva] = await Promise.all([
         aggregate(match, "COALESCE(SUM(amount), 0) AS total, COUNT(*) AS count"),
@@ -157,7 +199,7 @@ const preacherController = {
 
   resendWhatsApp: async (req, res) => {
     try {
-      const donation = await donations.findById(castId(req.params.id));
+      const donation = await donations.findById(castId(req.params.id, "donation"));
       if (!donation) return res.status(404).json({ success: false, message: "Donation not found." });
 
       const ownedDirectly = String(donation.manualEnteredBy || "") === String(req.user.userId);

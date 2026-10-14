@@ -3,6 +3,7 @@ import {
   donations,
   claimUpdate,
   selectDonations,
+  mongoLimit,
   wholePaymentError,
   DONATIONS_PAGE_SQL_REGEX,
 } from "../domain/donationDb.js";
@@ -38,7 +39,7 @@ async function closeStalePendingWithoutOrder({ limit = 200, fix = false } = {}) 
   const subCutoff = new Date(Date.now() - CLOSE_UNAUTHORISED_SUBSCRIPTION_AFTER_HOURS * 60 * 60 * 1000);
   const stale = await selectDonations(
     { status: "pending", razorpayOrderId: { $in: [null, ""] }, createdAt: { $lte: cutoff } },
-    { orderBy: LEAST_RECENTLY_CHECKED_FIRST, limit }
+    { orderBy: LEAST_RECENTLY_CHECKED_FIRST, limit: mongoLimit(limit), lean: true }
   );
 
   for (const d of stale) {
@@ -100,7 +101,12 @@ async function reconcilePendingDonations({
     Object.assign(baseFilter, EXCLUDE_DONATIONS_PAGE);
   }
 
-  const pending = await selectDonations(baseFilter, { orderBy: LEAST_RECENTLY_CHECKED_FIRST, skip, limit });
+  const pending = await selectDonations(baseFilter, {
+    orderBy: LEAST_RECENTLY_CHECKED_FIRST,
+    skip,
+    limit: mongoLimit(limit),
+    lean: true,
+  });
 
   const results = [];
   const summary = {
@@ -248,13 +254,10 @@ async function reconcilePendingDonations({
           entry.action = "CONFIRMED_FAILED (already correct)";
           summary.confirmedFailed++;
         } else if (fix) {
-          await claimUpdate(
-            { _id: String(donation._id), status: { $ne: "completed" } },
-            {
-              status: "failed",
-              razorpayPaymentId: failedPayments[0].id,
-            }
-          );
+          await donations.updateById(donation._id, {
+            status: "failed",
+            razorpayPaymentId: failedPayments[0].id,
+          });
           // keep Razorpay's reason (the most recent failed attempt)
           const latest = failedPayments.slice().sort((a, b) => (b.created_at || 0) - (a.created_at || 0))[0];
           await recordPaymentFailure(donation._id, latest).catch(() => {});

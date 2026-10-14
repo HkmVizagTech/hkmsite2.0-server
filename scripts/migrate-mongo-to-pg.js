@@ -94,6 +94,8 @@ const base = [
 ];
 
 // ── table specs: [mongoCollection, pgTable, mapName|null, columns[]] ───────
+const validVariants = (v) => Array.isArray(v) && v.every((x) => x !== null && typeof x === "object");
+
 const CHILD_ARRAYS = { products: ["variants"], shoporders: ["items"] };
 
 const SPECS = [
@@ -774,6 +776,8 @@ async function main() {
     for (const d of docs) {
       try {
         const unknown = Object.fromEntries(Object.entries(d).filter(([k]) => !knownRoots.has(k)));
+        if (coll === "products" && d.variants !== undefined && !validVariants(d.variants))
+          unknown.variants = d.variants;
         rows.push([
           ...cols.map(([col, fn]) =>
             nullable.has(`${table}.${col}`) && fn.path !== undefined && get(d, fn.path) === undefined ? null : nn(fn(d))
@@ -799,7 +803,7 @@ async function main() {
       const vrows = [];
       for (const p of docs) {
         const pid = String(p._id);
-        (p.variants || []).forEach((v, i) =>
+        (validVariants(p.variants) ? p.variants : []).forEach((v, i) =>
           vrows.push([
             String(v._id),
             pid,

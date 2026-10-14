@@ -1,14 +1,17 @@
 import { templeDevotees } from "../db/tables.js";
 import { many } from "../db/pg.js";
+import { templeDevoteeSchema } from "../domain/schemas.js";
+import { makeStore, castQueryId } from "../domain/store.js";
 
-// Mongo stored an explicit null here; keep that shape in responses.
+const store = makeStore(templeDevotees, templeDevoteeSchema);
+
+// The old schema stored an explicit null here; keep it in responses.
 const shape = (d) => (d ? { dccEnrolledById: null, ...d } : d);
 
 const byName = async (where, params = []) =>
   many(`SELECT * FROM temple_devotees ${where} ORDER BY name COLLATE "C", id`, params);
 
 const templeDevoteeController = {
-  // Names and ids only: never exposes dccEnrolledById.
   publicList: async (req, res) => {
     try {
       const rows = await byName("WHERE status = 'active'");
@@ -22,7 +25,7 @@ const templeDevoteeController = {
   adminList: async (req, res) => {
     try {
       const rows = await byName("");
-      res.status(200).json({ success: true, devotees: rows.map((r) => shape(templeDevotees.fromRow(r))) });
+      res.status(200).json({ success: true, devotees: rows.map((r) => shape(templeDevotees.fromRow(r, { lean: true }))) });
     } catch (err) {
       console.error("templeDevotee.adminList error:", err);
       res.status(500).json({ success: false, message: "Server error" });
@@ -39,7 +42,7 @@ const templeDevoteeController = {
       if (dccEnrolledById != null && !Number.isFinite(dccEnrolledById)) {
         return res.status(400).json({ success: false, message: "DCC Enrolled-By ID must be a number." });
       }
-      const devotee = await templeDevotees.insert({ name, dccEnrolledById });
+      const devotee = await store.create({ name, dccEnrolledById });
       res.status(201).json({ success: true, devotee: shape(devotee) });
     } catch (err) {
       console.error("templeDevotee.create error:", err);
@@ -67,7 +70,7 @@ const templeDevoteeController = {
       if (req.body.status != null) {
         updates.status = req.body.status === "hidden" ? "hidden" : "active";
       }
-      const devotee = await templeDevotees.updateById(req.params.id, updates);
+      const devotee = await store.updateById(castQueryId(req.params.id, "templeDevotee"), updates);
       if (!devotee) return res.status(404).json({ success: false, message: "Devotee not found" });
       res.status(200).json({ success: true, devotee: shape(devotee) });
     } catch (err) {

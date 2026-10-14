@@ -1,54 +1,38 @@
-import { festivalDonations, donations, events } from "../db/tables.js";
-import { many, newId, isId } from "../db/pg.js";
-import { splitUser, toBool, toStringArray } from "../domain/validate.js";
+import { festivalDonations, donations, events, users } from "../db/tables.js";
+import { many } from "../db/pg.js";
+import { pick } from "../domain/validate.js";
+import { pipelineBodyError } from "../domain/odm.js";
+import { festivalDonationSchema, eventSchema } from "../domain/schemas.js";
+import { makeStore, castQueryId } from "../domain/store.js";
+
+const store = makeStore(festivalDonations, festivalDonationSchema);
 
 const PUBLIC_FIELDS = ["title", "slug", "description", "images", "active", "donationOptions", "meta", "createdAt"];
+// Fields the admin form can set; create never accepted eventId.
+const EDITABLE = ["title", "slug", "description", "images", "active", "donationOptions", "eventId", "meta"];
 
-const normalizeOptions = (list) =>
-  (Array.isArray(list) ? list : []).map((o) => {
-    const out = { _id: isId(o?._id) ? o._id : newId() };
-    if (o?.label !== undefined) out.label = String(o.label);
-    if (o?.amount !== undefined && o.amount !== null && o.amount !== "") out.amount = Number(o.amount);
-    if (o?.description !== undefined) out.description = String(o.description);
+// populate('createdBy', 'name email') and populate('eventId'): dangling references become null.
+const populate = async (docs) => {
+  const userIds = [...new Set(docs.map((d) => d.createdBy).filter(Boolean))];
+  const eventIds = [...new Set(docs.map((d) => d.eventId).filter(Boolean))];
+  const [found, eventDocs] = await Promise.all([
+    userIds.length ? users.find({ _id: { $in: userIds } }, { fields: ["name", "email"], lean: true }) : [],
+    eventIds.length ? events.find({ _id: { $in: eventIds } }) : [],
+  ]);
+  const userMap = new Map(found.map((u) => [u._id, u]));
+  const eventMap = new Map(eventDocs.map((e) => [e._id, eventSchema.shape(e)]));
+  return docs.map((d) => {
+    const out = { ...d };
+    if (d.createdBy) out.createdBy = userMap.get(d.createdBy) || null;
+    if (d.eventId) out.eventId = eventMap.get(d.eventId) || null;
     return out;
-  });
-
-// Only fields the admin form can set; never _id, createdAt, createdBy.
-const writableFields = (body) => {
-  const out = {};
-  if (body.title !== undefined) out.title = String(body.title);
-  if (body.description !== undefined) out.description = body.description === null ? null : String(body.description);
-  if (body.images !== undefined) out.images = toStringArray(body.images) || [];
-  if (body.active !== undefined) out.active = toBool(body.active);
-  if (body.donationOptions !== undefined) out.donationOptions = normalizeOptions(body.donationOptions);
-  if (body.eventId !== undefined) out.eventId = body.eventId || null;
-  if (body.meta !== undefined) out.meta = body.meta && typeof body.meta === "object" ? body.meta : null;
-  return out;
-};
-
-const loadPopulated = async (where, params) => {
-  const rows = await many(
-    `SELECT f.*, u.id AS u_id, u.name AS u_name, u.email AS u_email
-       FROM festival_donations f LEFT JOIN users u ON u.id = f.created_by
-      ${where} ORDER BY f.created_at, f.id`,
-    params
-  );
-  const eventIds = [...new Set(rows.map((r) => r.event_id).filter(Boolean))];
-  const eventDocs = eventIds.length ? await events.find({ _id: { $in: eventIds } }) : [];
-  const eventMap = new Map(eventDocs.map((e) => [e._id, e]));
-  return rows.map((row) => {
-    const [rest, user] = splitUser(row);
-    const doc = festivalDonations.fromRow(rest);
-    if (user) doc.createdBy = user;
-    if (rest.event_id) doc.eventId = eventMap.get(rest.event_id) || null;
-    return doc;
   });
 };
 
 const festivalDonationController = {
   publicList: async (req, res) => {
     try {
-      const festivals = await festivalDonations.find(
+      const festivals = await store.find(
         { active: true, slug: { $ne: "" }, title: { $ne: "" } },
         { fields: PUBLIC_FIELDS, sort: { createdAt: 1, _id: 1 } }
       );
@@ -57,7 +41,9 @@ const festivalDonationController = {
         if (doc.slug) doc.slug = String(doc.slug).trim();
         return doc;
       });
-      if (!clean.length) return res.json({ message: "Currently there are no festivals" });
+      if (!clean || clean.length === 0) {
+        return res.json({ message: "Currently there are no festivals" });
+      }
       res.json(clean);
     } catch (err) {
       console.error("festivalDonationController.publicList error:", err);
@@ -67,7 +53,7 @@ const festivalDonationController = {
 
   list: async (req, res) => {
     try {
-      const festivals = await loadPopulated("", []);
+      const festivals = await populate(await store.find({}, { sort: { _id: 1 } }));
       const counts = await many(
         `SELECT festival_id, count(*)::int AS n FROM donations WHERE festival_id IS NOT NULL GROUP BY festival_id`
       );
@@ -81,10 +67,14 @@ const festivalDonationController = {
 
   getBySlug: async (req, res) => {
     try {
-      const slug = String(req.params.slug || "").trim();
-      const [festival] = await loadPopulated("WHERE f.slug = $1", [slug]);
-      if (!festival) return res.status(404).json({ message: "Festival donation page not found" });
-
+      const rawSlug = req.params.slug || "";
+      const slug = String(rawSlug).trim();
+      const [festival] = await populate(
+        [await store.findOne({ slug })].filter(Boolean)
+      );
+      if (!festival) {
+        return res.status(404).json({ message: "Festival donation page not found" });
+      }
       const recent = await donations.find(
         { $or: [{ festivalId: festival._id }, { festivalSlug: slug }] },
         { sort: { createdAt: -1, _id: -1 }, limit: 10 }
@@ -98,14 +88,20 @@ const festivalDonationController = {
 
   create: async (req, res) => {
     try {
-      let { slug } = req.body;
+      let { title, slug, description, images, donationOptions, meta } = req.body;
       if (slug) slug = String(slug).trim();
-      if (!req.body.title || !slug) return res.status(400).json({ message: "Title and slug are required" });
-      if (await festivalDonations.findOne({ slug }, { fields: ["slug"] })) {
-        return res.status(409).json({ message: "Slug already exists" });
-      }
-      const { eventId, ...fields } = writableFields(req.body); // create has never accepted eventId
-      const page = await festivalDonations.insert({ ...fields, slug, createdBy: req.user.userId });
+      if (!title || !slug) return res.status(400).json({ message: "Title and slug are required" });
+      const exists = await festivalDonations.findOne({ slug }, { fields: ["slug"] });
+      if (exists) return res.status(409).json({ message: "Slug already exists" });
+      const page = await store.create({
+        title,
+        slug,
+        description,
+        images,
+        donationOptions,
+        meta,
+        createdBy: req.user.userId,
+      });
       res.status(201).json({ message: "Festival donation page created", page });
     } catch (err) {
       console.error("festivalDonationController.create error:", err);
@@ -115,9 +111,12 @@ const festivalDonationController = {
 
   update: async (req, res) => {
     try {
-      const patch = writableFields(req.body);
-      if (req.body.slug) patch.slug = String(req.body.slug).trim();
-      const page = await festivalDonations.updateById(req.params.id, patch);
+      const { id } = req.params;
+      if (req.body.slug) req.body.slug = String(req.body.slug).trim();
+      const castId = castQueryId(id, "festivalDonation");
+      const bad = pipelineBodyError(req.body);
+      if (bad) throw bad;
+      const page = await store.updateById(castId, pick(req.body, EDITABLE));
       if (!page) return res.status(404).json({ message: "Festival page not found" });
       res.status(200).json({ message: "Festival donation page updated", page });
     } catch (err) {
@@ -128,7 +127,7 @@ const festivalDonationController = {
 
   delete: async (req, res) => {
     try {
-      await festivalDonations.deleteById(req.params.id);
+      await festivalDonations.deleteById(castQueryId(req.params.id, "festivalDonation"));
       res.status(200).json({ message: "Festival donation page deleted" });
     } catch (err) {
       console.error("festivalDonationController.delete error:", err);

@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { many, tx, isId } from "../db/pg.js";
+import { many, query, tx } from "../db/pg.js";
 import { products, shopOrders, donors } from "../db/tables.js";
 import {
   resolvePurchasable,
@@ -8,8 +8,12 @@ import {
   attachVariants,
   attachItems,
   insertOrderItems,
-  escapeLike,
+  ms,
+  selectRows,
+  wholeNumber,
+  searchMatcher,
 } from "../domain/shop.js";
+import { castIdParam, castString, idFilterValue, looseObjectId, queryValue } from "../domain/shopSchema.js";
 import { getNextSequence } from "../utils/counter.js";
 import { IST } from "../config/timezone.js";
 import { createRazorpayInstance } from "./payment.controller.js";
@@ -36,14 +40,25 @@ async function generateOrderNumber() {
   return `HKMS-${year}-${String(seq).padStart(5, "0")}`;
 }
 
-async function loadOrder(filter, client) {
-  const order = await shopOrders.findOne(filter, { client });
+async function loadOrder(filter, client, { lean = false } = {}) {
+  const order = await shopOrders.findOne(filter, { client, lean });
   if (!order) return null;
-  await attachItems([order], client);
+  await attachItems([order], client, { lean });
   return order;
 }
 
 const historyEntry = (status, note, extra = {}) => ({ status, note: note || undefined, at: new Date(), ...extra });
+
+// What `new Model(...).save()` would reject on a history entry: note/status are strings, byUserId an ObjectId.
+function checkedHistory(entries) {
+  return entries.map((e) => {
+    const note = castString(e.note, "statusHistory.note");
+    if (e.byUserId !== undefined && e.byUserId !== null && looseObjectId(e.byUserId) === null) {
+      throw new Error(`Cast to ObjectId failed for value ${JSON.stringify(e.byUserId)} at path "byUserId"`);
+    }
+    return { ...e, note, byUserId: e.byUserId == null ? e.byUserId : looseObjectId(e.byUserId) };
+  });
+}
 
 // Rebuilds the cart from the catalog; the browser only sends ids and quantities, never prices.
 async function buildCartFromRequest(rawItems) {
@@ -71,10 +86,8 @@ async function buildCartFromRequest(rawItems) {
 
     let product = null;
     if (raw.productId !== undefined && raw.productId !== null) {
-      if (!isId(String(raw.productId)))
-        throw new Error(`Cast to ObjectId failed for value ${JSON.stringify(raw.productId)}`);
-      product = await products.findById(String(raw.productId).toLowerCase());
-      if (product) await attachVariants([product]);
+      product = await products.findOne({ _id: idFilterValue(raw.productId, "product", "_id") }, { lean: true });
+      if (product) await attachVariants([product], undefined, { lean: true });
     }
     if (!product || product.status !== "active") {
       problems.push({ productId: raw.productId, reason: "unavailable", message: "This item is no longer available." });
@@ -133,15 +146,15 @@ async function decrementStock(client, item) {
          UPDATE product_variants SET stock = stock - $1
          WHERE id = $2 AND product_id = $3 AND stock >= $1 RETURNING product_id
        )
-       UPDATE products SET updated_at = now() WHERE id IN (SELECT product_id FROM v) RETURNING id`,
-      [item.quantity, item.variantId, item.productId]
+       UPDATE products SET updated_at = $4 WHERE id IN (SELECT product_id FROM v) RETURNING id`,
+      [item.quantity, item.variantId, item.productId, new Date()]
     );
     return r.rowCount > 0;
   }
   if (!item.productId) return false;
   const r = await client.query(
-    "UPDATE products SET stock = stock - $1, updated_at = now() WHERE id = $2 AND has_variants = false AND stock >= $1 RETURNING id",
-    [item.quantity, item.productId]
+    "UPDATE products SET stock = stock - $1, updated_at = $3 WHERE id = $2 AND stock >= $1 RETURNING id",
+    [item.quantity, item.productId, new Date()]
   );
   return r.rowCount > 0;
 }
@@ -151,16 +164,17 @@ async function restoreStock(client, item) {
   if (item.variantId) {
     await client.query(
       `WITH v AS (
-         UPDATE product_variants SET stock = stock + $1 WHERE id = $2 AND product_id = $3 RETURNING product_id
+         UPDATE product_variants SET stock = COALESCE(stock, 0) + $1 WHERE id = $2 AND product_id = $3 RETURNING product_id
        )
-       UPDATE products SET updated_at = now() WHERE id IN (SELECT product_id FROM v)`,
-      [item.quantity, item.variantId, item.productId]
+       UPDATE products SET updated_at = $4 WHERE id IN (SELECT product_id FROM v)`,
+      [item.quantity, item.variantId, item.productId, new Date()]
     );
   } else {
-    await client.query(
-      "UPDATE products SET stock = stock + $1, updated_at = now() WHERE id = $2 AND has_variants = false",
-      [item.quantity, item.productId]
-    );
+    await client.query("UPDATE products SET stock = COALESCE(stock, 0) + $1, updated_at = $3 WHERE id = $2", [
+      item.quantity,
+      item.productId,
+      new Date(),
+    ]);
   }
 }
 
@@ -181,20 +195,22 @@ async function availableStock(client, item) {
 // second call (verify racing the webhook) a no-op, so stock is decremented exactly once.
 async function confirmShopOrderPaid({ orderId, razorpayOrderId, paymentId }) {
   if (!orderId && !razorpayOrderId) return { ok: false, reason: "no_identifier" };
+  const paymentIdText = castString(paymentId, "razorpayPaymentId");
 
   const claimed = await tx(async (client) => {
-    const params = [paymentId ?? null, JSON.stringify([historyEntry("paid", "Payment confirmed")])];
+    const now = new Date();
+    const params = [paymentIdText ?? null, JSON.stringify([historyEntry("paid", "Payment confirmed")]), now];
     let match;
     if (orderId) {
       params.push(orderId);
-      match = "id = $3";
+      match = "id = $4";
     } else {
       params.push(razorpayOrderId);
-      match = "razorpay_order_id = $3";
+      match = "razorpay_order_id = $4";
     }
     const r = await client.query(
-      `UPDATE shop_orders SET payment_status = 'paid', paid_at = now(), razorpay_payment_id = $1,
-         status_history = status_history || $2::jsonb, updated_at = now()
+      `UPDATE shop_orders SET payment_status = 'paid', paid_at = $3, razorpay_payment_id = COALESCE($1, razorpay_payment_id),
+         status_history = status_history || $2::jsonb, updated_at = $3
        WHERE id = (SELECT id FROM shop_orders WHERE payment_status = 'pending' AND ${match} ORDER BY created_at, id LIMIT 1 FOR UPDATE)
        RETURNING *`,
       params
@@ -239,9 +255,9 @@ async function confirmShopOrderPaid({ orderId, razorpayOrderId, paymentId }) {
       `UPDATE shop_orders SET stock_committed = true,
          stock_shortfall = CASE WHEN $1::jsonb = '[]'::jsonb THEN stock_shortfall ELSE $1::jsonb END,
          needs_attention = needs_attention OR $2,
-         status_history = status_history || $3::jsonb, updated_at = now()
+         status_history = status_history || $3::jsonb, updated_at = $5
        WHERE id = $4 RETURNING *`,
-      [JSON.stringify(shortfall), shortfall.length > 0, JSON.stringify(history), order._id]
+      [JSON.stringify(shortfall), shortfall.length > 0, JSON.stringify(history), order._id, new Date()]
     );
     const final = shopOrders.fromRow(updated.rows[0]);
     final.items = order.items;
@@ -270,12 +286,30 @@ async function sendOrderWhatsApp(order) {
       `We'll message you again when it ships. Thank you for your support.`;
 
     await sendUtilityMessage(order.customerMobile, message);
-    await shopOrders.updateById(order._id, { whatsappConfirmationSentAt: new Date() });
+    await shopOrders.updateById(order._id, { whatsappConfirmationSentAt: new Date(), updatedAt: new Date() });
   } catch (err) {
     const message = err && err.message ? err.message : String(err);
     console.warn("shopOrder WhatsApp confirmation failed:", message);
-    await shopOrders.updateById(order._id, { whatsappConfirmationError: message.slice(0, 300) }).catch(() => {});
+    await shopOrders
+      .updateById(order._id, { whatsappConfirmationError: message.slice(0, 300), updatedAt: new Date() })
+      .catch(() => {});
   }
+}
+
+// What Mongoose's required/cast rules would have rejected when saving the order.
+function assertOrderSavable({ name, mobile, email, items, subtotal, total }) {
+  const bad = (what) => new Error(`shopOrder validation failed: ${what}`);
+  if (!name) throw bad("customerName");
+  if (typeof mobile !== "string" || !mobile.length) throw bad("customerMobile");
+  if (typeof subtotal !== "number" || typeof total !== "number") throw bad("subtotal/total");
+  if (!items.length) throw bad("items");
+  for (const i of items) {
+    if (typeof i.productName !== "string" || !i.productName.length) throw bad("items.productName");
+    if (typeof i.unitPrice !== "number" || typeof i.lineTotal !== "number") throw bad("items.unitPrice");
+    castString(i.slug, "slug");
+    castString(i.image, "image");
+  }
+  return castString(email, "customerEmail");
 }
 
 const shopOrderController = {
@@ -312,7 +346,8 @@ const shopOrderController = {
           .json({ success: false, message: "The shop is temporarily closed. Please try again later." });
       }
 
-      const donor = await donors.findById(req.donor.donorId);
+      const donorKey = idFilterValue(req.donor.donorId, "donor", "_id");
+      const donor = donorKey === null ? null : await donors.findOne({ _id: donorKey }, { lean: true });
       if (!donor) return res.status(404).json({ success: false, message: "Customer record not found." });
 
       const { shippingAddress = {}, customerNote, customerName, customerEmail } = req.body || {};
@@ -360,6 +395,15 @@ const shopOrderController = {
         notes: { type: "shop_order", orderNumber, mobile: donor.mobile },
       });
 
+      const email = assertOrderSavable({
+        name,
+        mobile: donor.mobile,
+        email: customerEmail || donor.email,
+        items: cart.items,
+        subtotal: cart.subtotal,
+        total,
+      });
+      const now = new Date();
       const order = await tx(async (client) => {
         const created = await shopOrders.insert(
           {
@@ -367,7 +411,7 @@ const shopOrderController = {
             donorRecordId: donor._id,
             customerName: name,
             customerMobile: donor.mobile,
-            customerEmail: customerEmail || donor.email,
+            customerEmail: email,
             subtotal: cart.subtotal,
             shippingCharge,
             total,
@@ -380,6 +424,8 @@ const shopOrderController = {
             razorpayOrderId: rzpOrder.id,
             paymentAccount: razorpay.account.name,
             statusHistory: [historyEntry("placed", "Order created")],
+            createdAt: now,
+            updatedAt: now,
           },
           { client }
         );
@@ -413,7 +459,12 @@ const shopOrderController = {
         return res.status(400).json({ success: false, message: "Payment details missing." });
       }
 
-      const order = await shopOrders.findOne({ razorpayOrderId: razorpay_order_id });
+      const [order] = await selectRows(
+        shopOrders,
+        { razorpayOrderId: queryValue(razorpay_order_id, "razorpayOrderId", "shopOrder") },
+        'razorpay_order_id COLLATE "C" NULLS FIRST, id',
+        { limit: 1 }
+      );
       if (!order) return res.status(404).json({ success: false, message: "Order not found." });
       if (req.donor && String(order.donorRecordId) !== String(req.donor.donorId)) {
         return res.status(403).json({ success: false, message: "This order belongs to another account." });
@@ -454,12 +505,19 @@ const shopOrderController = {
 
   myOrders: async (req, res) => {
     try {
-      const orders = await shopOrders.find(
-        { donorRecordId: req.donor.donorId },
-        {
-          sort: { createdAt: -1, _id: -1 },
-          fields: [
+      const donorId = idFilterValue(req.donor.donorId, "shopOrder", "donorRecordId");
+      const orders = await selectRows(shopOrders, { donorRecordId: donorId }, `${ms("created_at")} DESC, id`, {
+        lean: true,
+      });
+      await attachItems(orders, undefined, { lean: true });
+      res.status(200).json({
+        success: true,
+        orders: orders.map((o) => {
+          const out = {};
+          for (const k of [
+            "_id",
             "orderNumber",
+            "items",
             "subtotal",
             "shippingCharge",
             "total",
@@ -468,11 +526,11 @@ const shopOrderController = {
             "tracking",
             "createdAt",
             "shippingAddress",
-          ],
-        }
-      );
-      await attachItems(orders);
-      res.status(200).json({ success: true, orders });
+          ])
+            if (o[k] !== undefined) out[k] = o[k];
+          return out;
+        }),
+      });
     } catch (err) {
       console.error("shopOrder.myOrders error:", err);
       res.status(500).json({ success: false, message: "Could not load your orders." });
@@ -482,7 +540,10 @@ const shopOrderController = {
   // Ownership is part of the query, so a guessed order number returns nothing.
   getMyOrder: async (req, res) => {
     try {
-      const order = await loadOrder({ orderNumber: req.params.orderNumber, donorRecordId: req.donor.donorId });
+      const donorId = idFilterValue(req.donor.donorId, "shopOrder", "donorRecordId");
+      const order = req.params.orderNumber.includes("\0")
+        ? null
+        : await loadOrder({ orderNumber: req.params.orderNumber, donorRecordId: donorId }, undefined, { lean: true });
       if (!order) return res.status(404).json({ success: false, message: "Order not found." });
       res.status(200).json({ success: true, order });
     } catch (err) {
@@ -495,28 +556,41 @@ const shopOrderController = {
     try {
       const { paymentStatus, fulfilmentStatus, search, needsAttention, page = 1, limit = 30 } = req.query;
       const filter = {};
-      if (paymentStatus && paymentStatus !== "all") filter.paymentStatus = paymentStatus;
-      if (fulfilmentStatus && fulfilmentStatus !== "all") filter.fulfilmentStatus = fulfilmentStatus;
+      if (paymentStatus && paymentStatus !== "all")
+        filter.paymentStatus = queryValue(paymentStatus, "paymentStatus", "shopOrder");
+      if (fulfilmentStatus && fulfilmentStatus !== "all")
+        filter.fulfilmentStatus = queryValue(fulfilmentStatus, "fulfilmentStatus", "shopOrder");
       if (String(needsAttention) === "true") filter.needsAttention = true;
-      if (search && String(search).trim()) {
-        const pattern = `%${escapeLike(String(search).trim())}%`;
-        filter.$raw = [
-          "(order_number ILIKE ? OR customer_mobile ILIKE ? OR customer_name ILIKE ?)",
-          [pattern, pattern, pattern],
-        ];
-      }
+      const matcher = search && String(search).trim() ? searchMatcher(String(search).trim()) : null;
 
       const pageNum = Math.max(1, Number(page) || 1);
       const perPage = Math.min(100, Math.max(1, Number(limit) || 30));
+      const skip = wholeNumber((pageNum - 1) * perPage);
+      const order = `${ms("created_at")} DESC, id`;
 
-      const [orders, total, stats] = await Promise.all([
-        shopOrders.find(filter, { sort: { createdAt: -1, _id: -1 }, skip: (pageNum - 1) * perPage, limit: perPage }),
-        shopOrders.count(filter),
-        many(
-          "SELECT coalesce(sum(total), 0) AS revenue, count(*) AS count FROM shop_orders WHERE payment_status = 'paid'"
-        ),
-      ]);
-      await attachItems(orders);
+      let orders;
+      let total;
+      if (matcher) {
+        const params = [];
+        const where = shopOrders.buildWhere(filter, params).sql;
+        const all = await many(
+          `SELECT id, order_number, customer_mobile, customer_name FROM shop_orders${where ? ` WHERE ${where}` : ""} ORDER BY ${order}`,
+          params
+        );
+        const hits = all.filter((r) => matcher([r.order_number, r.customer_mobile, r.customer_name])).map((r) => r.id);
+        total = hits.length;
+        const pageIds = hits.slice(skip, skip + wholeNumber(perPage));
+        const found = pageIds.length ? await selectRows(shopOrders, { _id: { $in: pageIds } }, "id", { lean: true }) : [];
+        const byId = new Map(found.map((o) => [o._id, o]));
+        orders = pageIds.map((id) => byId.get(id));
+      } else {
+        orders = await selectRows(shopOrders, filter, order, { limit: wholeNumber(perPage), offset: skip, lean: true });
+        total = await shopOrders.count(filter);
+      }
+      const stats = await many(
+        "SELECT coalesce(sum(total), 0) AS revenue, count(*) AS count FROM shop_orders WHERE payment_status = 'paid'"
+      );
+      await attachItems(orders, undefined, { lean: true });
 
       res.status(200).json({
         success: true,
@@ -530,92 +604,97 @@ const shopOrderController = {
     }
   },
 
-  // Cancelling a paid order returns its stock, once (guarded by stockCommitted under a row lock).
+  // Cancelling a paid order returns its stock. As before, the stock is restored before the order is saved, so a
+  // save that then fails leaves the restore in place.
   adminUpdateOrder: async (req, res) => {
     try {
       const { fulfilmentStatus, tracking, adminNote, note, needsAttention, paymentStatus } = req.body || {};
-      if (!isId(req.params.id)) {
-        throw new Error(`Cast to ObjectId failed for value ${JSON.stringify(req.params.id)}`);
-      }
+      const id = castIdParam(req.params.id, "shopOrder");
+      const order = await loadOrder({ _id: id });
+      if (!order) return res.status(404).json({ success: false, message: "Order not found." });
 
-      const result = await tx(async (client) => {
-        const locked = await client.query("SELECT id FROM shop_orders WHERE id = $1 FOR UPDATE", [req.params.id]);
-        if (!locked.rows.length) return { status: 404, message: "Order not found." };
-        const order = await loadOrder({ _id: req.params.id }, client);
+      const patch = {};
+      const history = [...(order.statusHistory || [])];
+      let currentFulfilment = order.fulfilmentStatus;
 
-        const patch = {};
-        const history = [...(order.statusHistory || [])];
-        let currentFulfilment = order.fulfilmentStatus;
-
-        if (fulfilmentStatus && fulfilmentStatus !== order.fulfilmentStatus) {
-          const valid = ["placed", "packed", "shipped", "delivered", "cancelled"];
-          if (!valid.includes(fulfilmentStatus)) return { status: 400, message: "Unknown fulfilment status." };
-
-          if (fulfilmentStatus === "cancelled" && order.stockCommitted) {
-            for (const item of order.items) await restoreStock(client, item);
-            patch.stockCommitted = false;
-            history.push(
-              historyEntry("stock_restored", "Stock returned to inventory on cancellation", {
-                byUserId: req.user.userId,
-              })
-            );
-          }
-
-          patch.fulfilmentStatus = fulfilmentStatus;
-          currentFulfilment = fulfilmentStatus;
-          history.push(historyEntry(fulfilmentStatus, note, { byUserId: req.user.userId }));
+      if (fulfilmentStatus && fulfilmentStatus !== order.fulfilmentStatus) {
+        const valid = ["placed", "packed", "shipped", "delivered", "cancelled"];
+        if (!valid.includes(fulfilmentStatus)) {
+          return res.status(400).json({ success: false, message: "Unknown fulfilment status." });
         }
 
-        if (paymentStatus && ["pending", "paid", "failed", "refunded"].includes(paymentStatus)) {
-          patch.paymentStatus = paymentStatus;
+        if (fulfilmentStatus === "cancelled" && order.stockCommitted) {
+          for (const item of order.items) await restoreStock({ query }, item);
+          patch.stockCommitted = false;
           history.push(
-            historyEntry(`payment_${paymentStatus}`, note || "Payment status set manually", {
+            historyEntry("stock_restored", "Stock returned to inventory on cancellation", {
               byUserId: req.user.userId,
             })
           );
         }
 
-        if (tracking) {
-          const newTracking = {
-            courier: tracking.courier || order.tracking?.courier,
-            trackingNumber: tracking.trackingNumber || order.tracking?.trackingNumber,
-            url: tracking.url || order.tracking?.url,
-          };
-          if (!newTracking.courier && newTracking.trackingNumber) {
-            newTracking.courier = trackingService.detectCourier(newTracking.trackingNumber) || undefined;
-          }
-          if (!newTracking.url && newTracking.courier && newTracking.trackingNumber) {
-            newTracking.url =
-              trackingService.buildTrackingUrl(newTracking.courier, newTracking.trackingNumber) || undefined;
-          }
-          patch.tracking = newTracking;
+        patch.fulfilmentStatus = fulfilmentStatus;
+        currentFulfilment = fulfilmentStatus;
+        history.push(historyEntry(fulfilmentStatus, note, { byUserId: req.user.userId }));
+      }
+
+      if (paymentStatus && ["pending", "paid", "failed", "refunded"].includes(paymentStatus)) {
+        if (paymentStatus !== order.paymentStatus) patch.paymentStatus = paymentStatus;
+        history.push(
+          historyEntry(`payment_${paymentStatus}`, note || "Payment status set manually", {
+            byUserId: req.user.userId,
+          })
+        );
+      }
+
+      if (tracking) {
+        const newTracking = {
+          courier: tracking.courier || order.tracking?.courier,
+          trackingNumber: tracking.trackingNumber || order.tracking?.trackingNumber,
+          url: tracking.url || order.tracking?.url,
+        };
+        if (!newTracking.courier && newTracking.trackingNumber) {
+          newTracking.courier = trackingService.detectCourier(newTracking.trackingNumber) || undefined;
         }
-
-        if (fulfilmentStatus === "shipped" && currentFulfilment === "shipped" && !order.shippedAt) {
-          patch.shippedAt = new Date();
+        if (!newTracking.url && newTracking.courier && newTracking.trackingNumber) {
+          newTracking.url =
+            trackingService.buildTrackingUrl(newTracking.courier, newTracking.trackingNumber) || undefined;
         }
-        if (adminNote !== undefined) patch.adminNote = adminNote;
-        if (needsAttention !== undefined) patch.needsAttention = !!needsAttention;
-        if (history.length !== (order.statusHistory || []).length) patch.statusHistory = history;
+        const changed = {};
+        for (const k of ["courier", "trackingNumber", "url"]) {
+          const v = castString(newTracking[k], `tracking.${k}`);
+          if (v !== undefined && v !== (order.tracking?.[k] ?? undefined)) changed[k] = v;
+        }
+        if (Object.keys(changed).length) patch.tracking = changed;
+      }
 
-        const saved = Object.keys(patch).length ? await shopOrders.updateById(order._id, patch, { client }) : order;
-        saved.items = order.items;
-        return { order: saved };
-      });
+      if (fulfilmentStatus === "shipped" && currentFulfilment === "shipped" && !order.shippedAt) {
+        patch.shippedAt = new Date();
+      }
+      if (adminNote !== undefined) {
+        const v = castString(adminNote, "adminNote");
+        if ((v ?? null) !== (order.adminNote ?? null)) patch.adminNote = v;
+      }
+      if (needsAttention !== undefined && !!needsAttention !== !!order.needsAttention) {
+        patch.needsAttention = !!needsAttention;
+      }
+      if (history.length !== (order.statusHistory || []).length) patch.statusHistory = checkedHistory(history);
 
-      if (result.status) return res.status(result.status).json({ success: false, message: result.message });
-      const order = result.order;
+      const saved = Object.keys(patch).length
+        ? await shopOrders.updateById(order._id, { ...patch, updatedAt: new Date() })
+        : order;
+      saved.items = order.items;
 
       if (fulfilmentStatus === "shipped") {
         setImmediate(async () => {
           try {
             if (!isWhatsAppConfigured()) return;
-            const trackingLine = order.tracking?.trackingNumber
-              ? `\nTracking: ${order.tracking.courier || ""} ${order.tracking.trackingNumber}`.trim()
+            const trackingLine = saved.tracking?.trackingNumber
+              ? `\nTracking: ${saved.tracking.courier || ""} ${saved.tracking.trackingNumber}`.trim()
               : "";
             await sendUtilityMessage(
-              order.customerMobile,
-              `Hare Krishna ${order.customerName}! Your order ${order.orderNumber} has been shipped.${trackingLine}`
+              saved.customerMobile,
+              `Hare Krishna ${saved.customerName}! Your order ${saved.orderNumber} has been shipped.${trackingLine}`
             );
           } catch (e) {
             console.warn("shop ship notification failed:", e && e.message ? e.message : e);
@@ -623,7 +702,7 @@ const shopOrderController = {
         });
       }
 
-      res.status(200).json({ success: true, message: "Order updated.", order });
+      res.status(200).json({ success: true, message: "Order updated.", order: saved });
     } catch (err) {
       console.error("shopOrder.adminUpdateOrder error:", err);
       res.status(500).json({ success: false, message: "Could not update order." });

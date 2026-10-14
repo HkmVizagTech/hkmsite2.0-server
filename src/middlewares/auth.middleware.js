@@ -1,6 +1,7 @@
 import jwt from "jsonwebtoken";
 import { getJwtSecret } from "../utils/utils.js";
 import { users } from "../db/tables.js";
+import { castQueryId } from "../domain/store.js";
 
 const authMiddleware = (req, res, next) => {
   let token;
@@ -65,7 +66,9 @@ const preacherModuleMiddleware = (moduleName) => async (req, res, next) => {
     return res.status(403).json({ message: "Preacher access required" });
   }
   try {
-    const user = await users.findById(req.user.userId, { fields: ["status", "allowedModules", "role"] });
+    const user = await users.findById(castQueryId(req.user.userId, "user"), {
+      fields: ["status", "allowedModules", "role"],
+    });
     if (!user || user.role !== "preacher" || user.status !== "active") {
       return res.status(403).json({ message: "Preacher account not active" });
     }

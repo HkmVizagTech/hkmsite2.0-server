@@ -67,7 +67,7 @@ async function donorAlreadyCompleted(donation) {
       status: { $in: SUCCESS_STATUSES },
       createdAt: { $gte: since },
     },
-    { sort: { createdAt: 1, _id: 1 }, fields: ["amount", "sevaName", "createdAt"] }
+    { sort: { createdAt: 1, _id: 1 }, fields: ["amount", "sevaName", "createdAt"], lean: true }
   );
 
   return completed || false;
@@ -320,7 +320,7 @@ async function findReminderCandidates(cutoff, floor) {
       createdAt: { $lte: cutoff, $gte: floor },
       whatsappPendingReminderSent: { $ne: true },
       // Give up on records that have already failed MAX_ATTEMPTS times.
-      whatsappPendingReminderAttempts: { $lt: MAX_ATTEMPTS },
+      $or: [{ whatsappPendingReminderAttempts: null }, { whatsappPendingReminderAttempts: { $lt: MAX_ATTEMPTS } }],
       // Recurring first-charges stay "pending" until the subscription activates.
       isRecurring: { $ne: true },
       // PhonePe / UPI fallback opened or claimed: an admin is matching it.
