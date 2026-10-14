@@ -189,7 +189,7 @@ function defineTable({ table, nests = {}, json = [], renames = {}, keepNull = []
       const sets = buildSet(patch, params);
       if (!sets.length) return repo.findOne(filter, { sort });
       const w = wherePart(filter, params);
-      const sql = `UPDATE ${qi(table)} SET ${sets.join(", ")} WHERE id = (SELECT id FROM ${qi(table)}${w}${orderBy(sort)} LIMIT 1) RETURNING *`;
+      const sql = `UPDATE ${qi(table)} SET ${sets.join(", ")} WHERE id = (SELECT id FROM ${qi(table)}${w}${orderBy(sort)} LIMIT 1 FOR UPDATE) RETURNING *`;
       const r = await (client || { query }).query(sql, params);
       return fromRow(r.rows[0]);
     },

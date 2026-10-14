@@ -1,33 +1,21 @@
-// Asks Razorpay directly whether a donation's order has been paid, for the
-// moments when the donor's browser needs to know NOW rather than wait for the
-// webhook (which can lag a few seconds): before offering the "Pay with
-// PhonePe / UPI" fallback, and before recording an "I've paid" claim.
-// A captured payment completes the donation through the normal pipeline.
-
-import { donationModel } from "../models/donation.model.js";
 import { completeDonation } from "./paymentCompletion.service.js";
 import { createRazorpayInstance } from "../controllers/payment.controller.js";
 
 const IN_PROGRESS = ["created", "authorized"];
+const NOT_CHECKED = { completed: false, inProgress: false, checked: false };
 
-/**
- * @returns {Promise<{ completed: boolean, inProgress: boolean, checked: boolean }>}
- */
-async function liveCheckDonationOrder(donation) {
-  if (!donation || !donation.razorpayOrderId) return { completed: false, inProgress: false, checked: false };
+export const liveCheckDonationOrder = async (donation) => {
+  if (!donation?.razorpayOrderId) return NOT_CHECKED;
   if (donation.status === "completed") return { completed: true, inProgress: false, checked: false };
-  // required lazily: payment.controller requires services that require this file
 
   const created = createRazorpayInstance(donation.paymentAccount);
-  if (!created) return { completed: false, inProgress: false, checked: false };
-  const res = await created.instance.orders.fetchPayments(donation.razorpayOrderId);
-  const items = (res && res.items) || [];
+  if (!created) return NOT_CHECKED;
+
+  const { items = [] } = (await created.instance.orders.fetchPayments(donation.razorpayOrderId)) ?? {};
   const captured = items.find((p) => p.status === "captured");
   if (captured) {
     await completeDonation({ orderId: donation.razorpayOrderId, paymentId: captured.id });
     return { completed: true, inProgress: false, checked: true };
   }
   return { completed: false, inProgress: items.some((p) => IN_PROGRESS.includes(p.status)), checked: true };
-}
-
-export { liveCheckDonationOrder };
+};
