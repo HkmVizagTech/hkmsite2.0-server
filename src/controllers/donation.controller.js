@@ -1246,26 +1246,28 @@ const donationController = {
       if (prasadamNotes !== undefined) patch.prasadamNotes = String(prasadamNotes || "").trim();
 
       const now = new Date();
+      const unset = [];
       if (prasadamStatus === "dispatched") {
         patch.prasadamDispatchedAt = now;
-        patch.prasadamDeliveredAt = null;
+        unset.push("prasadamDeliveredAt");
       } else if (prasadamStatus === "delivered") {
         if (!donation.prasadamDispatchedAt) patch.prasadamDispatchedAt = now;
         patch.prasadamDeliveredAt = now;
       } else {
-        patch.prasadamDispatchedAt = null;
-        patch.prasadamDeliveredAt = null;
+        unset.push("prasadamDispatchedAt", "prasadamDeliveredAt");
       }
 
       // Mongoose save() wrote nothing (and left updatedAt alone) when no value actually changed.
       const same = (a, b) => (a ?? null) === (b ?? null) || (a instanceof Date && b instanceof Date && +a === +b);
-      const changed = Object.keys(patch).some((k) => !same(patch[k], donation[k]));
+      const changed =
+        Object.keys(patch).some((k) => !same(patch[k], donation[k])) || unset.some((k) => donation[k] != null);
       let updated = donation;
       if (changed) {
         const raw = await donations.findById(donation._id, { lean: true });
         updated = await donations.updateById(donation._id, {
           ...defaultsToPersist(raw, donation, ["utm", "prasadamAddress"]),
           ...patch,
+          ...(unset.length ? { $unset: unset } : {}),
         });
       }
       res.status(200).json({ success: true, message: `Prasadam request marked ${prasadamStatus}`, donation: updated });
