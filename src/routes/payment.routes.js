@@ -28,8 +28,9 @@ const orderRateLimit = rateLimit({
 });
 
 paymentRouter.post('/order', orderRateLimit, express.json(), paymentController.createOrder);
-paymentRouter.post('/subscription', express.json(), paymentController.createSubscription);
-paymentRouter.post('/verify', express.json(), paymentController.verifyPayment);
+paymentRouter.post('/subscription', orderRateLimit, express.json(), paymentController.createSubscription);
+const verifyRateLimit = rateLimit({ windowMs: 60 * 1000, max: 60, standardHeaders: true, legacyHeaders: false });
+paymentRouter.post('/verify', verifyRateLimit, express.json(), paymentController.verifyPayment);
 
 // "Prefer PhonePe / UPI?" fallback after a failed/closed Razorpay checkout:
 // the donor opened a UPI app, then tapped "I've paid". Both only annotate the

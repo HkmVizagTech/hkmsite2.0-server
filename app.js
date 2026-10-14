@@ -8,6 +8,7 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import compression from "compression";
 import helmet from "helmet";
+import { secretMatches } from "./src/middlewares/internalAuth.middleware.js";
 import { dbState } from "./src/db/pg.js";
 
 
@@ -157,7 +158,7 @@ app.use("/webhooks/whatsapp", whatsappWebhookRouter);
 // in-process scheduler in index.js also calls the same logic, and the
 // whatsappPendingReminderSent flag keeps both safe from double-sending.
 app.get("/api/internal/send-pending-reminders", async (req, res) => {
-  if (req.headers["x-internal-secret"] !== process.env.INTERNAL_SECRET) {
+  if (!secretMatches(req.headers["x-internal-secret"], process.env.INTERNAL_SECRET)) {
     return res.status(401).json({ error: "Unauthorized" });
   }
 
@@ -193,7 +194,7 @@ app.get("/api/internal/send-pending-reminders", async (req, res) => {
 // the logs, or just run it again.
 const handleResendReceipts = async (req, res) => {
   const supplied = req.headers["x-internal-secret"] || req.query.secret;
-  if (!process.env.INTERNAL_SECRET || supplied !== process.env.INTERNAL_SECRET) {
+  if (!secretMatches(supplied, process.env.INTERNAL_SECRET)) {
     return res.status(401).json({ error: "Unauthorized" });
   }
 

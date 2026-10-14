@@ -6,7 +6,7 @@ import { authMiddleware, adminMiddleware, preacherModuleMiddleware } from "../mi
 
 const donationRouter = express.Router();
 
-donationRouter.post("/", donationController.create);
+donationRouter.post("/", authMiddleware, adminMiddleware, donationController.create);
 
 donationRouter.get("/", authMiddleware, adminMiddleware, donationController.list);
 donationRouter.post("/manual", authMiddleware, preacherModuleMiddleware("raise-receipt"), donationController.createManual);

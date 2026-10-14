@@ -1,20 +1,10 @@
 import express from "express";
+import { internalAuth } from "../middlewares/internalAuth.middleware.js";
 import { internalController } from "../controllers/internal.controller.js";
 
 const internalRouter = express.Router();
 
-// Shared-secret auth — same convention as the other /api/internal endpoints
-// already defined in app.js (x-internal-secret checked against
-// process.env.INTERNAL_SECRET). Server-to-server only, never called from a
-// browser. Currently used by the HKM Vizag DRM (donor relationship manager,
-// D:\projects\drm) to sync donor identity, donation/receipt history,
-// recurring subscriptions, and prasadam delivery status.
-internalRouter.use((req, res, next) => {
-  if (!process.env.INTERNAL_SECRET || req.headers["x-internal-secret"] !== process.env.INTERNAL_SECRET) {
-    return res.status(401).json({ success: false, message: "Unauthorized" });
-  }
-  next();
-});
+internalRouter.use(internalAuth);
 
 // Order matters: the literal /donors list must be registered before the
 // /donors/by-mobile/:mobile pattern so it isn't swallowed by it.
