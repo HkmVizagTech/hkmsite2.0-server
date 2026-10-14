@@ -23,7 +23,7 @@ Method: old build (Mongo, branch main, worktree) and new build (Postgres) run si
 4. A prasadam-status fix made at the very end (old code unset fields; new code wrote null) is verified only by the donations suite (it removed 9 failures).
 5. Success paths needing real outside services were exercised only through mocks: DCC duplicate-donor handling and courier payload shapes are guesses.
 
-6. Payment-flow re-run on the final code was interrupted (laptop session ended) after 3 scenarios: `one-time verify path` PASS, `razorpay error on createOrder` PASS, **`createOrder validation + wrong types` FAIL**: the new donation row has `prasadamAddress: {}` where the old row has no such field (an insert with an empty/null address creates an empty nested object; fix in `src/db/table.js` insert/`toColumns` null-marker handling or in `paymentCast.js`; then re-run the whole `writes-payments-flows.mjs`).
+6. RESOLVED 19:00 (fixed `$absent` nest handling; scenario passes). Earlier note: payment-flow re-run on the final code was interrupted (laptop session ended) after 3 scenarios: `one-time verify path` PASS, `razorpay error on createOrder` PASS, **`createOrder validation + wrong types` FAIL**: the new donation row has `prasadamAddress: {}` where the old row has no such field (an insert with an empty/null address creates an empty nested object; fix in `src/db/table.js` insert/`toColumns` null-marker handling or in `paymentCast.js`; then re-run the whole `writes-payments-flows.mjs`).
 
 ## Restarting the local test infrastructure (it was stopped)
 ```
@@ -40,3 +40,6 @@ Mongo `$group`/tie order is arbitrary (varies on Mongo itself); NUL characters i
 
 ## Production steps (unchanged)
 Staging rehearsal on Railway Postgres, then `CUTOVER.md`. Two receipt numbers are duplicated in the data (`HKMI|2026|D/VSP|10374`, `...|10267`): resolve before adding a unique index. Delete `/Users/giridhar/Developer/hkm-vizag/.localdb` when finished (real donor data).
+
+## Update 19:02
+Payment-flow re-run on final code: 11 of 20 scenarios completed and all 11 PASS (one-time on all four Razorpay accounts, verify path, createOrder wrong types, Razorpay error, failed-payment webhooks, subscriptions x2, DCC down + sweep + resend + reconcile). The remaining 9 scenarios were still running when the session stopped: re-run `node scripts/parity/writes-payments-flows.mjs eq-payments 9510` to finish them.

@@ -111,6 +111,10 @@ function defineTable({
       unsetPaths = [];
     const put = (field, value) => {
       if (value === undefined) return;
+      if (value && value.$absent === true && nests[field]) {
+        for (const col of Object.values(nests[field])) if (knownCol(col)) cols[col] = null;
+        return;
+      }
       if (value === null && nests[field]) {
         for (const col of Object.values(nests[field])) if (knownCol(col)) cols[col] = null;
         nulls.push(field);

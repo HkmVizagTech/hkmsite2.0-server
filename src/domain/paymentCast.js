@@ -126,7 +126,7 @@ function castPaymentDonation(input) {
   const present = (key) => Object.prototype.hasOwnProperty.call(input, key) && input[key] !== undefined;
 
   const castAddress = (raw) => {
-    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return { country: null }; // stored as nothing
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return { $absent: true };
     const addr = {};
     for (const key of ADDRESS_KEYS) {
       if (raw[key] === undefined) continue;
