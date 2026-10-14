@@ -339,8 +339,8 @@ CREATE INDEX shop_orders_created_idx ON shop_orders(created_at DESC);
 CREATE TABLE shop_order_items (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   order_id text NOT NULL REFERENCES shop_orders(id) ON DELETE CASCADE,
-  product_id text REFERENCES products(id) ON DELETE SET NULL,
-  variant_id text REFERENCES product_variants(id) ON DELETE SET NULL,
+  product_id text,
+  variant_id text,
   product_name text NOT NULL, slug text, image text, variant_label text,   -- snapshots, keep
   unit_price numeric(12,2) NOT NULL, mrp numeric(12,2),
   quantity int NOT NULL CHECK (quantity >= 1),

@@ -206,6 +206,12 @@ const SPECS = [
     ["needs_attention", B("needsAttention")], ["whatsapp_confirmation_sent_at", T("whatsappConfirmationSentAt")],
     ["whatsapp_confirmation_error", S("whatsappConfirmationError")],
   ]],
+  ["shopsettings", "shop_settings", null, [
+    ["id", OID], ["created_at", TS("createdAt")], ["updated_at", TS("updatedAt")], ["shop_enabled", B("shopEnabled", true)],
+    ["flat_shipping_charge", N("flatShippingCharge", 60)], ["free_shipping_above", N("freeShippingAbove", 1000)],
+    ["announcement", S("announcement")], ["support_mobile", S("supportMobile")],
+    ["delivery_estimate", S("deliveryEstimate", "Usually dispatched in 3–5 working days")], ["updated_by", FK("users", "updatedBy")],
+  ]],
   ["blogs", "blogs", null, [
     ...base, ["title", S("title", "")], ["slug", S("slug", "")], ["excerpt", S("excerpt", "")], ["content", S("content", "")],
     ["cover_image", S("coverImage", "")], ["images", A("images")], ["category", S("category", "Spiritual Knowledge")],
@@ -347,8 +353,8 @@ async function main() {
       for (const o of docs) {
         const oid = String(o._id);
         for (const it of o.items || []) {
-          const pid = it.productId && maps.products.has(String(it.productId)) ? String(it.productId) : null;
-          const vid = it.variantId && maps.variants.has(String(it.variantId)) ? String(it.variantId) : null;
+          const pid = it.productId ? String(it.productId) : null;
+          const vid = it.variantId ? String(it.variantId) : null;
           irows.push([oid, pid, vid, it.productName ?? "", nn(it.slug), nn(it.image), nn(it.variantLabel),
             N("unitPrice", 0)(it), N("mrp")(it), I("quantity", 1)(it), N("lineTotal", 0)(it), Boolean(it.freeShipping)]);
         }
