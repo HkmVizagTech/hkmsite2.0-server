@@ -96,13 +96,24 @@ async function replaceVariants(client, productId, variants) {
     );
     return;
   }
-  await client.query("UPDATE products SET extra = NULLIF(extra - 'variants', '{}'::jsonb) WHERE id = $1 AND extra ? 'variants'", [
-    productId,
-  ]);
+  await client.query(
+    "UPDATE products SET extra = NULLIF(extra - 'variants', '{}'::jsonb) WHERE id = $1 AND extra ? 'variants'",
+    [productId]
+  );
   for (const [position, v] of variants.entries()) {
     await client.query(
       "INSERT INTO product_variants (id, product_id, label, sku, price, mrp, stock, weight_grams, position) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
-      [v._id, productId, v.label ?? null, v.sku ?? null, v.price ?? null, v.mrp ?? null, v.stock ?? null, v.weightGrams ?? null, position]
+      [
+        v._id,
+        productId,
+        v.label ?? null,
+        v.sku ?? null,
+        v.price ?? null,
+        v.mrp ?? null,
+        v.stock ?? null,
+        v.weightGrams ?? null,
+        position,
+      ]
     );
   }
 }
@@ -246,7 +257,9 @@ const productController = {
   listCategories: async (req, res) => {
     try {
       const [rows, counts] = await Promise.all([
-        many(`SELECT * FROM shop_categories WHERE status = 'active' ORDER BY sort_order NULLS FIRST, name COLLATE "C" NULLS FIRST, id`),
+        many(
+          `SELECT * FROM shop_categories WHERE status = 'active' ORDER BY sort_order NULLS FIRST, name COLLATE "C" NULLS FIRST, id`
+        ),
         many("SELECT category, count(*) AS n FROM products WHERE status = 'active' GROUP BY category"),
       ]);
       const countBySlug = new Map(counts.map((c) => [c.category, Number(c.n)]));
@@ -460,7 +473,10 @@ const productController = {
           if (!variantId) return { status: 400, message: "Choose which variant to restock." };
           const wanted = looseObjectId(variantId);
           const variants = (
-            await client.query("SELECT position, id, stock FROM product_variants WHERE product_id = $1 ORDER BY position", [row.id])
+            await client.query(
+              "SELECT position, id, stock FROM product_variants WHERE product_id = $1 ORDER BY position",
+              [row.id]
+            )
           ).rows;
           const variant = wanted ? variants.find((v) => v.id === wanted) : null;
           if (!variant) return { status: 404, message: "Variant not found." };
@@ -473,7 +489,11 @@ const productController = {
             await client.query("UPDATE products SET updated_at = $2 WHERE id = $1", [row.id, new Date()]);
           }
         } else if ((row.stock ?? 0) !== newStock) {
-          await client.query("UPDATE products SET stock = $1, updated_at = $3 WHERE id = $2", [newStock, row.id, new Date()]);
+          await client.query("UPDATE products SET stock = $1, updated_at = $3 WHERE id = $2", [
+            newStock,
+            row.id,
+            new Date(),
+          ]);
         }
         return { product: await loadProduct(row.id, client) };
       });
@@ -504,7 +524,9 @@ const productController = {
 
   adminListCategories: async (req, res) => {
     try {
-      const rows = await many(`SELECT * FROM shop_categories ORDER BY sort_order NULLS FIRST, name COLLATE "C" NULLS FIRST, id`);
+      const rows = await many(
+        `SELECT * FROM shop_categories ORDER BY sort_order NULLS FIRST, name COLLATE "C" NULLS FIRST, id`
+      );
       res.status(200).json({ success: true, categories: rows.map((r) => shopCategories.fromRow(r, { lean: true })) });
     } catch (err) {
       console.error("product.adminListCategories error:", err);
@@ -614,7 +636,8 @@ const productController = {
       await getShopSettings();
       const settings = await tx(async (client) => {
         await shopSettings.updateById("default", { ...set, updatedAt: new Date() }, { client });
-        if ("deliveryEstimate" in set) await setNullMarker("shop_settings", "default", "deliveryEstimate", set.deliveryEstimate, client);
+        if ("deliveryEstimate" in set)
+          await setNullMarker("shop_settings", "default", "deliveryEstimate", set.deliveryEstimate, client);
         return readSettings(client);
       });
       res.status(200).json({ success: true, message: "Shop settings saved.", settings });

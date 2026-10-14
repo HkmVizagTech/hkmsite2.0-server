@@ -241,7 +241,8 @@ function buildSubdoc(def, raw) {
       castErrors.push(["_id", e.message, e]);
     }
   }
-  for (const [p, d] of def) if (!(p in values) && !castErrors.some(([k]) => k === p) && "default" in d) values[p] = d.default;
+  for (const [p, d] of def)
+    if (!(p in values) && !castErrors.some(([k]) => k === p) && "default" in d) values[p] = d.default;
   return { values, castErrors, setOrder };
 }
 
@@ -258,7 +259,10 @@ const validateValue = (d, value, p) => {
 };
 
 function validationOrder(def, setPaths, invalid) {
-  const required = def.filter(([p, d]) => d.required && !setPaths.includes(p) && !invalid.has(p)).map(([p]) => p).reverse();
+  const required = def
+    .filter(([p, d]) => d.required && !setPaths.includes(p) && !invalid.has(p))
+    .map(([p]) => p)
+    .reverse();
   return [...required, ...setPaths.filter((p) => !invalid.has(p))];
 }
 
@@ -330,7 +334,8 @@ function buildDocument(schema, raw) {
   const doc = {};
   for (const [p, d] of schema.paths) {
     if (!(p in values)) continue;
-    doc[p] = d.t === "subdocs" && Array.isArray(values[p]) ? values[p].map((sub) => (sub ? sub.values : null)) : values[p];
+    doc[p] =
+      d.t === "subdocs" && Array.isArray(values[p]) ? values[p].map((sub) => (sub ? sub.values : null)) : values[p];
   }
   return doc;
 }
@@ -345,13 +350,16 @@ function castUpdate(schema, raw) {
     const d = def[1];
     if (d.t === "subdocs") {
       const list = asList(raw[p]);
-      out[p] = list == null ? list : list.map((el) => {
-        if (!el) return el;
-        if (!isObjectLike(el)) throw new CastError("embedded", el, p, new ObjectParameterError());
-        const sub = buildSubdoc(d.schema, el);
-        if (sub.castErrors.length) throw new CastError("embedded", el, p, sub.castErrors[0][2]);
-        return sub.values;
-      });
+      out[p] =
+        list == null
+          ? list
+          : list.map((el) => {
+              if (!el) return el;
+              if (!isObjectLike(el)) throw new CastError("embedded", el, p, new ObjectParameterError());
+              const sub = buildSubdoc(d.schema, el);
+              if (sub.castErrors.length) throw new CastError("embedded", el, p, sub.castErrors[0][2]);
+              return sub.values;
+            });
     } else out[p] = castScalar(d, raw[p], p);
   }
   return out;

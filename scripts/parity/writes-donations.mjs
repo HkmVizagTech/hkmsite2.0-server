@@ -819,16 +819,14 @@ const recDoc = {
   paymentAccount: "default",
   sevaName: "Monthly Seva",
 };
-await mdb
-  .collection("donations")
-  .insertOne({
-    _id: recId,
-    ...recDoc,
-    donorRecordId: new ObjectId(ctx.donorWithDonations),
-    createdAt: new Date(),
-    updatedAt: new Date(),
-    date: new Date(),
-  });
+await mdb.collection("donations").insertOne({
+  _id: recId,
+  ...recDoc,
+  donorRecordId: new ObjectId(ctx.donorWithDonations),
+  createdAt: new Date(),
+  updatedAt: new Date(),
+  date: new Date(),
+});
 await pgDonations.insert({ _id: String(recId), ...recDoc, donorRecordId: ctx.donorWithDonations });
 await mdb
   .collection("donations")
@@ -846,13 +844,11 @@ await step("donor subscriptions", dreq("GET", "/donor/subscriptions"));
 await step("donor my-donations with recurring", dreq("GET", "/donor/my-donations"));
 await step("donor cancel subscription", dreq("POST", "/donor/subscriptions/sub_parity1/cancel"));
 await step("donor subscriptions after cancel", dreq("GET", "/donor/subscriptions"));
-const ownReceipt = await mdb
-  .collection("donations")
-  .findOne({
-    donorRecordId: new ObjectId(ctx.donorWithDonations),
-    status: "completed",
-    receiptNumber: { $exists: true },
-  });
+const ownReceipt = await mdb.collection("donations").findOne({
+  donorRecordId: new ObjectId(ctx.donorWithDonations),
+  status: "completed",
+  receiptNumber: { $exists: true },
+});
 if (ownReceipt) await step("donor receipt: own", dreq("GET", `/donor/receipt/${ownReceipt._id}`));
 await step("donor receipt: no receipt yet", dreq("GET", `/donor/receipt/${recId}`));
 await step("donor my-summary after", dreq("GET", "/donor/my-summary"));

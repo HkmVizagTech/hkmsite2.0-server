@@ -580,7 +580,9 @@ const shopOrderController = {
         const hits = all.filter((r) => matcher([r.order_number, r.customer_mobile, r.customer_name])).map((r) => r.id);
         total = hits.length;
         const pageIds = hits.slice(skip, skip + wholeNumber(perPage));
-        const found = pageIds.length ? await selectRows(shopOrders, { _id: { $in: pageIds } }, "id", { lean: true }) : [];
+        const found = pageIds.length
+          ? await selectRows(shopOrders, { _id: { $in: pageIds } }, "id", { lean: true })
+          : [];
         const byId = new Map(found.map((o) => [o._id, o]));
         orders = pageIds.map((id) => byId.get(id));
       } else {
