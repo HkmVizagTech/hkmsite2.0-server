@@ -5,6 +5,7 @@ const camel = (s) => s.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase());
 const qi = (c) => `"${c.replace(/"/g, '""')}"`;
 
 const columnDefaults = new Map();
+const tableColumns = new Map();
 
 export async function loadDefaults() {
   const { rows } = await query(
@@ -13,6 +14,14 @@ export async function loadDefaults() {
        AND column_name NOT IN ('id', 'created_at', 'updated_at')`
   );
   columnDefaults.clear();
+  tableColumns.clear();
+  const { rows: cols } = await query(
+    `SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public'`
+  );
+  for (const c of cols) {
+    if (!tableColumns.has(c.table_name)) tableColumns.set(c.table_name, new Set());
+    tableColumns.get(c.table_name).add(c.column_name);
+  }
   for (const r of rows) {
     if (/\(\)/.test(r.column_default)) continue;
     const { rows: v } = await query(`SELECT (${r.column_default}) AS v`);
@@ -47,6 +56,7 @@ function defineTable({
     if (renames[f]) return renames[f];
     return snake(f);
   };
+  const knownCol = (col) => !tableColumns.has(table) || tableColumns.get(table).has(col);
   const jsonSet = new Set(json);
   const keepNullSet = new Set(keepNull);
   const hiddenSet = new Set(hidden);
@@ -89,10 +99,12 @@ function defineTable({
     const put = (field, value) => {
       if (value === undefined) return;
       if (nests[field] && value && typeof value === "object" && !Array.isArray(value) && !(value instanceof Date)) {
-        for (const key of Object.keys(nests[field])) if (value[key] !== undefined) cols[nests[field][key]] = value[key];
+        for (const key of Object.keys(nests[field]))
+          if (value[key] !== undefined && knownCol(nests[field][key])) cols[nests[field][key]] = value[key];
         return;
       }
       const col = fieldToCol(field);
+      if (!knownCol(col)) return;
       cols[col] = jsonSet.has(field) && value !== null ? JSON.stringify(value) : value;
     };
     for (const [k, v] of Object.entries(patch)) {
@@ -139,7 +151,8 @@ function defineTable({
         parts.push("(" + text.replace(/\?/g, () => bind(vals[i++])) + ")");
         continue;
       }
-      const col = qi(fieldToCol(key));
+      const colName = fieldToCol(key);
+      const col = knownCol(colName) ? qi(colName) : "NULL::text";
       if (cond === null) {
         parts.push(`${col} IS NULL`);
         continue;

@@ -51,6 +51,7 @@
   "devDependencies": {
     "mongodb": "^6.16.0",
     "mongoose": "^8.15.1",
+    "nock": "^15.0.1",
     "nodemon": "^3.1.10",
     "prettier": "^3.9.10"
   }

@@ -60,6 +60,21 @@ const newId = () => {
 };
 const isId = (v) => typeof v === "string" && /^[0-9a-f]{24}$/i.test(v);
 
+const isObjectIdLike = (v) => isId(v) || (typeof v === "string" && v.length === 12);
+
+const castError = (value, model, path = "_id") =>
+  Object.assign(
+    new Error(
+      `Cast to ObjectId failed for value ${JSON.stringify(value)} (type ${typeof value}) at path "${path}" for model "${model}"`
+    ),
+    { name: "CastError", kind: "ObjectId", value, path }
+  );
+
+const castId = (value, model, path = "_id") => {
+  if (value === undefined || value === null || isObjectIdLike(value)) return value;
+  throw castError(value, model, path);
+};
+
 async function connectDb() {
   const r = await query("SELECT 1 AS ok");
   if (!r.rows[0] || r.rows[0].ok !== 1) throw new Error("Postgres ping failed");
@@ -81,4 +96,4 @@ const closeDb = async () => {
   }
 };
 
-export { getPool, query, one, many, tx, newId, isId, connectDb, dbState, closeDb };
+export { getPool, query, one, many, tx, newId, isId, isObjectIdLike, castError, castId, connectDb, dbState, closeDb };

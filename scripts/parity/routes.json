@@ -1,0 +1,1765 @@
+[
+ {
+  "method": "POST",
+  "path": "/payments/order",
+  "mw": [
+   "jsonParser",
+   "createOrder"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/payments/subscription",
+  "mw": [
+   "jsonParser",
+   "createSubscription"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/payments/verify",
+  "mw": [
+   "jsonParser",
+   "verifyPayment"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/payments/upi-fallback/opened",
+  "mw": [
+   "jsonParser",
+   "opened"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/payments/upi-fallback/claim",
+  "mw": [
+   "jsonParser",
+   "claim"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/payments/status/:orderId",
+  "mw": [
+   "jsonParser",
+   "checkStatus"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/payments/webhook",
+  "mw": [
+   "rawParser"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/payments/webhook/donations",
+  "mw": [
+   "rawParser"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/payments/webhook/touchstone",
+  "mw": [
+   "rawParser"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/payments/webhook/shop",
+  "mw": [
+   "rawParser"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/payments/reconcile/:donationId",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "jsonParser",
+   "reconcile"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/payments/audit-subscriptions",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "auditSubscriptions"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/payments/backfill-subscription-gaps",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "backfillSubscriptionGaps"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/users/register",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "register"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/users/register-admin",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "registerAdmin"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/users/login",
+  "mw": [
+   "login"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/users/logout",
+  "mw": [
+   "logout"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/users/change-password",
+  "mw": [
+   "authMiddleware",
+   "changePassword"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/users/profile",
+  "mw": [
+   "authMiddleware",
+   "profile"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/users/update",
+  "mw": [
+   "authMiddleware",
+   "update"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/users/",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "getUser"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/users/:id",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "delete"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/events/",
+  "mw": [
+   "list"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/events/:id",
+  "mw": [
+   "get"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/events/:id/register",
+  "mw": [
+   "multerMiddleware",
+   "register"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/events/",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "multerMiddleware",
+   "middleware",
+   "middleware",
+   "middleware",
+   "middleware",
+   "middleware",
+   "create"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/events/:id",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "multerMiddleware",
+   "middleware",
+   "middleware",
+   "middleware",
+   "middleware",
+   "middleware",
+   "update"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/events/:id",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "delete"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/events/:id/registrations",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "listRegistrations"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/events/:id/registrations/:token/attendance",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "markAttendance"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/events/:id/checkin/:token",
+  "mw": [
+   "publicCheckin"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/gallery/",
+  "mw": [
+   "list"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/gallery/:id",
+  "mw": [
+   "get"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/gallery/upload-image",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "multerMiddleware",
+   "uploadImage"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/gallery/",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "jsonParser",
+   "create"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/gallery/:id",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "jsonParser",
+   "update"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/gallery/:id",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "delete"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/darshan/",
+  "mw": [
+   "list"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/darshan/sync",
+  "mw": [
+   "jsonParser",
+   "sync"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/donations/",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "create"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/donations/",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "list"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/donations/manual",
+  "mw": [
+   "authMiddleware",
+   "createManual"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/donations/stats",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "stats"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/donations/audit-pending",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "auditPending"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/donations/utm-stats",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "getUtmStats"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/donations/utm-transactions",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "getUtmTransactions"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/donations/report",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "getReport"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/donations/whatsapp-audit",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "whatsappAudit"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/donations/needs-manual-receipt",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "needsManualReceipt"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/donations/dcc-status",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "dccStatus"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/donations/dcc-push-all",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "dccPushAll"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/donations/backfill-dcc-donor-numbers",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "backfillDccDonorNumbers"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/donations/needs-whatsapp",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "needsWhatsApp"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/donations/backfill-donors",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "backfillDonors"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/donations/resend-recent-whatsapp",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "resendRecentWhatsApp"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/donations/prasadam-requests",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "listPrasadamRequests"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/donations/prasadam-export",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "exportPrasadamCsv"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/donations/:id/prasadam-status",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "updatePrasadamStatus"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/donations/payment-failures",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "summary"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/donations/upi-claims",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "listClaims"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/donations/upi-claims/:id/candidates",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "candidates"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/donations/upi-qr-payments",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "qrPayments"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/donations/upi-match",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "match"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/donations/upi-dismiss",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "dismiss"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/donations/:id",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "get"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/donations/:id/resend-receipt",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "resendReceipt"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/donations/:id/receipt-number",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "patchReceiptNumber"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/donations/:id/resend-whatsapp",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "resendWhatsApp"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/donations/:id/manual-complete",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "completeManualPending"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/donations/:id",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "update"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/donations/:id",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "delete"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/preacher/search-donor",
+  "mw": [
+   "authMiddleware",
+   "searchDonor"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/preacher/my-donors",
+  "mw": [
+   "authMiddleware",
+   "myDonors"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/preacher/my-donors/:donorRecordId/donations",
+  "mw": [
+   "authMiddleware",
+   "donorDonations"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/preacher/my-reports",
+  "mw": [
+   "authMiddleware",
+   "myReports"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/preacher/donations/:id/resend-whatsapp",
+  "mw": [
+   "authMiddleware",
+   "resendWhatsApp"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/donor-auth/send-otp",
+  "mw": [
+   "sendOtp"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/donor-auth/shop/send-otp",
+  "mw": [
+   "sendShopOtp"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/donor-auth/lookup",
+  "mw": []
+ },
+ {
+  "method": "POST",
+  "path": "/donor-auth/verify-otp",
+  "mw": [
+   "verifyOtp"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/donor/me",
+  "mw": [
+   "donorAuthMiddleware",
+   "me"
+  ]
+ },
+ {
+  "method": "PATCH",
+  "path": "/donor/me",
+  "mw": [
+   "donorAuthMiddleware",
+   "updateProfile"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/donor/my-donations",
+  "mw": [
+   "donorAuthMiddleware",
+   "myDonations"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/donor/stats",
+  "mw": [
+   "donorAuthMiddleware",
+   "stats"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/donor/subscriptions",
+  "mw": [
+   "donorAuthMiddleware",
+   "subscriptions"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/donor/subscriptions/:subscriptionId/cancel",
+  "mw": [
+   "donorAuthMiddleware",
+   "cancelSubscription"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/donor/my-summary",
+  "mw": [
+   "donorAuthMiddleware",
+   "mySummary"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/donor/receipt/:donationId",
+  "mw": [
+   "donorAuthMiddleware",
+   "downloadReceipt"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/donor/issues",
+  "mw": [
+   "donorAuthMiddleware",
+   "raiseIssue"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/donor/issues",
+  "mw": [
+   "donorAuthMiddleware",
+   "myIssues"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/shop/products",
+  "mw": [
+   "listProducts"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/shop/categories",
+  "mw": [
+   "listCategories"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/shop/settings",
+  "mw": [
+   "getPublicSettings"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/shop/products/:slug",
+  "mw": [
+   "getProduct"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/shop/cart/quote",
+  "mw": [
+   "quoteCart"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/shop/orders",
+  "mw": [
+   "donorAuthMiddleware",
+   "createOrder"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/shop/orders/verify",
+  "mw": [
+   "verifyPayment"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/shop/my-orders",
+  "mw": [
+   "donorAuthMiddleware",
+   "myOrders"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/shop/my-orders/:orderNumber",
+  "mw": [
+   "donorAuthMiddleware",
+   "getMyOrder"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/shop-admin/products",
+  "mw": [
+   "adminListProducts"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/shop-admin/products",
+  "mw": [
+   "createProduct"
+  ]
+ },
+ {
+  "method": "PATCH",
+  "path": "/shop-admin/products/:id",
+  "mw": [
+   "updateProduct"
+  ]
+ },
+ {
+  "method": "PATCH",
+  "path": "/shop-admin/products/:id/stock",
+  "mw": [
+   "adjustStock"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/shop-admin/products/:id",
+  "mw": [
+   "deleteProduct"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/shop-admin/upload-image",
+  "mw": [
+   "multerMiddleware",
+   "uploadImage"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/shop-admin/categories",
+  "mw": [
+   "adminListCategories"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/shop-admin/categories",
+  "mw": [
+   "createCategory"
+  ]
+ },
+ {
+  "method": "PATCH",
+  "path": "/shop-admin/categories/:id",
+  "mw": [
+   "updateCategory"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/shop-admin/categories/:id",
+  "mw": [
+   "deleteCategory"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/shop-admin/orders",
+  "mw": [
+   "adminListOrders"
+  ]
+ },
+ {
+  "method": "PATCH",
+  "path": "/shop-admin/orders/:id",
+  "mw": [
+   "adminUpdateOrder"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/shop-admin/settings",
+  "mw": [
+   "getAdminSettings"
+  ]
+ },
+ {
+  "method": "PATCH",
+  "path": "/shop-admin/settings",
+  "mw": [
+   "updateSettings"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/donation-page/",
+  "mw": [
+   "get"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/donation-page/",
+  "mw": [
+   "authMiddleware",
+   "donationsAdminMiddleware",
+   "update"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/donations-admin/dashboard-stats",
+  "mw": [
+   "authMiddleware",
+   "donationsAdminMiddleware",
+   "getDashboardStats"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/donations-admin/report",
+  "mw": [
+   "authMiddleware",
+   "donationsAdminMiddleware",
+   "getReport"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/donations-admin/transactions",
+  "mw": [
+   "authMiddleware",
+   "donationsAdminMiddleware",
+   "getAllTransactions"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/donations-admin/transactions/:id",
+  "mw": [
+   "authMiddleware",
+   "donationsAdminMiddleware",
+   "getTransactionById"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/donations-admin/dcc-status",
+  "mw": [
+   "authMiddleware",
+   "donationsAdminMiddleware",
+   "dccStatus"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/donations-admin/dcc-push-all",
+  "mw": [
+   "authMiddleware",
+   "donationsAdminMiddleware",
+   "dccPushAll"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/donations-admin/transactions/:id/dcc-push",
+  "mw": [
+   "authMiddleware",
+   "donationsAdminMiddleware",
+   "dccPushOne"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/donations-admin/transactions/:id/receipt-number",
+  "mw": [
+   "authMiddleware",
+   "donationsAdminMiddleware",
+   "setReceiptNumber"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/donations-admin/utm-stats",
+  "mw": [
+   "authMiddleware",
+   "donationsAdminMiddleware",
+   "getUtmStats"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/donations-admin/utm-transactions",
+  "mw": [
+   "authMiddleware",
+   "donationsAdminMiddleware",
+   "getUtmTransactions"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/donations-admin/export",
+  "mw": [
+   "authMiddleware",
+   "donationsAdminMiddleware",
+   "exportTransactions"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/donations-admin/diagnose-order",
+  "mw": [
+   "authMiddleware",
+   "donationsAdminMiddleware",
+   "diagnoseOrder"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/donations-admin/manual-complete",
+  "mw": [
+   "authMiddleware",
+   "donationsAdminMiddleware",
+   "manualComplete"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/donations-admin/reconcile-pending",
+  "mw": [
+   "authMiddleware",
+   "donationsAdminMiddleware",
+   "reconcilePending"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/donations-admin/upload-image",
+  "mw": [
+   "authMiddleware",
+   "donationsAdminMiddleware",
+   "multerMiddleware",
+   "uploadImage"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/blogs/landing",
+  "mw": [
+   "landing"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/blogs/categories",
+  "mw": [
+   "categories"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/blogs/",
+  "mw": [
+   "list"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/blogs/upload-inline",
+  "mw": [
+   "authMiddleware",
+   "blogsAdminMiddleware",
+   "multerMiddleware",
+   "uploadInline"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/blogs/deletion-requests",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "deletionRequests"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/blogs/",
+  "mw": [
+   "authMiddleware",
+   "blogsAdminMiddleware",
+   "multerMiddleware",
+   "middleware",
+   "middleware",
+   "middleware",
+   "middleware",
+   "middleware",
+   "middleware",
+   "create"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/blogs/:idOrSlug",
+  "mw": [
+   "get"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/blogs/:id/related",
+  "mw": [
+   "related"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/blogs/:id",
+  "mw": [
+   "authMiddleware",
+   "blogsAdminMiddleware",
+   "multerMiddleware",
+   "middleware",
+   "middleware",
+   "middleware",
+   "middleware",
+   "middleware",
+   "middleware",
+   "update"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/blogs/:id",
+  "mw": [
+   "authMiddleware",
+   "blogsAdminMiddleware",
+   "delete"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/blogs/:id/approve-deletion",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "approveDeletion"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/blogs/:id/reject-deletion",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "rejectDeletion"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/contact-messages/",
+  "mw": [
+   "create"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/contact-messages/",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "list"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/contact-messages/:id/status",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "updateStatus"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/contact-messages/:id",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "delete"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/dashboard/stats",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "stats"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/devotees/",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "list"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/site-content/",
+  "mw": [
+   "get"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/site-content/",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "update"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/hero-banners/",
+  "mw": [
+   "list"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/hero-banners/",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "multerMiddleware",
+   "create"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/hero-banners/reorder",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "reorder"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/hero-banners/:id",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "multerMiddleware",
+   "update"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/hero-banners/:id",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "delete"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/campaigners/register",
+  "mw": [
+   "register"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/campaigners/admin/list",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "list"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/campaigners/admin/:id/status",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "updateStatus"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/campaigners/:slug",
+  "mw": [
+   "getBySlug"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/temple-devotees/",
+  "mw": [
+   "publicList"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/temple-devotees/admin/list",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "adminList"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/temple-devotees/admin",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "create"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/temple-devotees/admin/:id",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "update"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/media/",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "list"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/media/",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "multerMiddleware",
+   "upload"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/media/:id",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "update"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/media/:id",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "delete"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/seva-stats/sqft-campaign",
+  "mw": [
+   "sqftCampaign"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/seva-stats/overview",
+  "mw": [
+   "overview"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/seva-stats/",
+  "mw": [
+   "get"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/important-dates/",
+  "mw": [
+   "list"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/important-dates/:id",
+  "mw": [
+   "get"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/important-dates/",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "create"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/important-dates/:id",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "update"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/important-dates/:id",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "delete"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/festival-donations/all",
+  "mw": [
+   "publicList"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/festival-donations/:slug",
+  "mw": [
+   "getBySlug"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/festival-donations/",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "list"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/festival-donations/",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "create"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/festival-donations/:id",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "update"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/festival-donations/:id",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "delete"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/festival-showcases/public",
+  "mw": [
+   "publicList"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/festival-showcases/:slug",
+  "mw": [
+   "getBySlug"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/festival-showcases/",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "list"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/festival-showcases/",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "create"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/festival-showcases/:id",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "update"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/festival-showcases/:id",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "delete"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/ekadashi-campaign/",
+  "mw": [
+   "get"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/volunteers/admin/all",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "listAll"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/volunteers/admin",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "create"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/volunteers/admin/registrations/:id",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "updateRegistration"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/volunteers/admin/registrations/:id",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "deleteRegistration"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/volunteers/admin/:id/registrations",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "listRegistrations"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/volunteers/admin/:id",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "update"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/volunteers/admin/:id",
+  "mw": [
+   "authMiddleware",
+   "adminMiddleware",
+   "delete"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/volunteers/",
+  "mw": [
+   "listActive"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/volunteers/:id",
+  "mw": [
+   "get"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/volunteers/:id/register",
+  "mw": [
+   "register"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/webhooks/whatsapp/gupshup/:secret",
+  "mw": [
+   "gupshup"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/webhooks/whatsapp/gupshup",
+  "mw": [
+   "gupshup"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/webhooks/whatsapp/gupshup/:secret",
+  "mw": []
+ },
+ {
+  "method": "GET",
+  "path": "/api/internal/send-pending-reminders",
+  "mw": []
+ },
+ {
+  "method": "GET",
+  "path": "/api/internal/resend-receipts",
+  "mw": [
+   "handleResendReceipts"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/internal/resend-receipts",
+  "mw": [
+   "handleResendReceipts"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/internal/drm/donors",
+  "mw": [
+   "listDonors"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/internal/drm/donors/by-mobile/:mobile",
+  "mw": [
+   "getDonorByMobile"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/internal/drm/donors/by-mobile/:mobile/profile",
+  "mw": [
+   "updateDonorProfile"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/internal/drm/donations/offline",
+  "mw": [
+   "createOfflineDonation"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/internal/drm/donations/:id/prasadam-status",
+  "mw": [
+   "updatePrasadamStatus"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/internal/drm/abandoned",
+  "mw": [
+   "getAbandonedDonations"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/internal/drm/donations/:id/receipt.pdf",
+  "mw": [
+   "getReceiptPdf"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/internal/drm/donations/:id/resend-receipt",
+  "mw": [
+   "resendReceipt"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/health",
+  "mw": []
+ }
+]
