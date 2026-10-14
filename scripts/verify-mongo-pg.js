@@ -57,7 +57,7 @@ const check = (name, a, b) => {
   const sample = await db.collection("donations").aggregate([{ $sample: { size: 200 } }]).toArray();
   let diff = 0;
   for (const d of sample) {
-    const r = (await pg.query("select * from donations where legacy_id=$1", [String(d._id)])).rows[0];
+    const r = (await pg.query("select * from donations where id=$1", [String(d._id)])).rows[0];
     const pairs2 = [[d.donorName, r?.donor_name], [d.donorMobile ?? null, r?.donor_mobile], [d.status, r?.status], [d.receiptNumber ?? null, r?.receipt_number],
       [d.razorpayOrderId ?? null, r?.razorpay_order_id], [d.panNumber ?? null, r?.pan_number], [d.sevaName ?? null, r?.seva_name],
       [d.prasadamAddress?.pincode ?? null, r?.prasadam_pincode], [d.utm?.source ?? "", r?.utm_source],

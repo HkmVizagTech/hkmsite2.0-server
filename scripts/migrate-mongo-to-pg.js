@@ -7,8 +7,9 @@
  *   node scripts/migrate-mongo-to-pg.js [--truncate]
  *
  * - Reads only from Mongo. Writes only to the DEST_PG_URL database.
- * - Idempotent: every row carries legacy_id (the Mongo ObjectId hex) and is inserted
- *   with ON CONFLICT (legacy_id) DO NOTHING, so a second run adds only new documents.
+ * - Ids are preserved: a row's primary key is the Mongo _id (24-hex string), and FK
+ *   columns hold the same strings. Inserted with ON CONFLICT (id) DO NOTHING, so a
+ *   second run adds only documents that are new since the last run.
  * - --truncate wipes the destination tables first (use for clean local re-runs).
  * - Tables are filled in foreign-key order. Dangling references are set NULL and counted.
  * - Deliberately does NOT read process.env.MONGO_URI so it can never be pointed at
@@ -49,20 +50,19 @@ const JN = (path) => (d) => { const v = get(d, path); return v == null ? null : 
 const OID = (d) => String(d._id);
 
 const stats = { orphans: {}, bad: [] };
-const maps = {}; // collection -> Map(legacyId -> pg id)
+const maps = {}; // collection -> Set of migrated ids (to detect dangling references)
 const FK = (mapName, path) => (d) => {
   const v = get(d, path);
   if (v == null) return null;
-  const id = maps[mapName] && maps[mapName].get(String(v));
-  if (id == null) {
+  if (!(maps[mapName] && maps[mapName].has(String(v)))) {
     const k = `${mapName}<-${path}`;
     stats.orphans[k] = (stats.orphans[k] || 0) + 1;
     return null;
   }
-  return id;
+  return String(v);
 };
 
-const base = [["legacy_id", OID], ["created_at", TS("createdAt")], ["updated_at", TS("updatedAt")]];
+const base = [["id", OID], ["created_at", TS("createdAt")], ["updated_at", TS("updatedAt")]];
 
 // ── table specs: [mongoCollection, pgTable, mapName|null, columns[]] ───────
 const SPECS = [
@@ -267,7 +267,7 @@ const SPECS = [
     ...base, ["event_id", FK("volunteerevents", "eventId")], ["responses", J("responses", {})], ["status", S("status", "pending")],
   ]],
   ["paymentdowntimes", "payment_downtimes", null, [
-    ["legacy_id", OID], ["downtime_id", S("downtimeId")], ["event", S("event")], ["method", S("method")],
+    ["id", OID], ["downtime_id", S("downtimeId")], ["event", S("event")], ["method", S("method")],
     ["instrument", JN("instrument")], ["severity", S("severity")], ["status", S("status")],
     ["begin", T("begin")], ["end", T("end")], ["received_at", TS("receivedAt")],
   ]],
@@ -283,15 +283,15 @@ async function insertBatch(pg, table, cols, rows) {
     const params = [];
     const tuples = chunk.map((r) => `(${r.map((v) => { params.push(v); return `$${params.length}`; }).join(",")})`);
     await pg.query(
-      `INSERT INTO ${q(table)} (${cols.map(q).join(",")}) VALUES ${tuples.join(",")} ON CONFLICT (legacy_id) DO NOTHING`,
+      `INSERT INTO ${q(table)} (${cols.map(q).join(",")}) VALUES ${tuples.join(",")} ON CONFLICT (id) DO NOTHING`,
       params
     );
   }
 }
 
 async function loadMap(pg, table) {
-  const r = await pg.query(`SELECT id, legacy_id FROM ${q(table)} WHERE legacy_id IS NOT NULL`);
-  return new Map(r.rows.map((x) => [x.legacy_id, x.id]));
+  const r = await pg.query(`SELECT id FROM ${q(table)}`);
+  return new Set(r.rows.map((x) => x.id));
 }
 
 async function main() {
@@ -328,10 +328,10 @@ async function main() {
     if (mapName) maps[mapName] = await loadMap(pg, table);
     // child tables fed from embedded arrays
     if (coll === "products") {
-      const vcols = ["legacy_id", "product_id", "label", "sku", "price", "mrp", "stock", "weight_grams", "position"];
+      const vcols = ["id", "product_id", "label", "sku", "price", "mrp", "stock", "weight_grams", "position"];
       const vrows = [];
       for (const p of docs) {
-        const pid = maps.products.get(String(p._id));
+        const pid = String(p._id);
         (p.variants || []).forEach((v, i) => vrows.push([
           String(v._id), pid, v.label ?? "", nn(v.sku), N("price", 0)(v), N("mrp")(v), I("stock", 0)(v), I("weightGrams")(v), i,
         ]));
@@ -344,10 +344,10 @@ async function main() {
       const icols = ["order_id", "product_id", "variant_id", "product_name", "slug", "image", "variant_label", "unit_price", "mrp", "quantity", "line_total", "free_shipping"];
       const irows = [];
       for (const o of docs) {
-        const oid = maps.shoporders.get(String(o._id));
+        const oid = String(o._id);
         for (const it of o.items || []) {
-          const pid = it.productId ? maps.products.get(String(it.productId)) ?? null : null;
-          const vid = it.variantId ? maps.variants.get(String(it.variantId)) ?? null : null;
+          const pid = it.productId && maps.products.has(String(it.productId)) ? String(it.productId) : null;
+          const vid = it.variantId && maps.variants.has(String(it.variantId)) ? String(it.variantId) : null;
           irows.push([oid, pid, vid, it.productName ?? "", nn(it.slug), nn(it.image), nn(it.variantLabel),
             N("unitPrice", 0)(it), N("mrp")(it), I("quantity", 1)(it), N("lineTotal", 0)(it), Boolean(it.freeShipping)]);
         }

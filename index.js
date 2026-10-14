@@ -1,7 +1,8 @@
 
 // Must stay the first require in this file — see src/config/timezone.js.
 require("./src/config/timezone");
-require("dotenv").config();
+// ENV_FILE lets local/test runs load a sanitized env file instead of the real .env.
+require("dotenv").config(process.env.ENV_FILE ? { path: process.env.ENV_FILE } : undefined);
 const { app } = require("./app");
 const { connectDb } = require("./src/config/db");
 const { startReconciliationJob } = require("./src/jobs/reconcilePendingDonations");
@@ -41,7 +42,8 @@ const startServer =async()=>{
             console.log(`server connected on port ${PORT}`);
         })
 
-        startReconciliationJob();
+        // Disable with RECONCILE_ENABLED=false (local/test runs must never settle donations).
+        if (process.env.RECONCILE_ENABLED !== "false") startReconciliationJob();
 
         // Every successful donation gets pushed to DCC until it has a receipt
         // number; the WhatsApp receipt follows. Disable with DCC_SWEEP_ENABLED=false.

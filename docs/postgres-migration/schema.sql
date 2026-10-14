@@ -1,9 +1,9 @@
 -- DRAFT Postgres schema for hkmsite2.0 (generated from src/models/*.js).
 -- Conventions:
---   * id            bigint identity PK; legacy_id keeps the Mongo ObjectId hex so
---                   old->new mapping, DRM/DCC cross-references and re-runs of the
---                   migration script stay possible. Drop legacy_id only after
---                   every external system has been checked.
+--   * id            text PK holding a 24-hex Mongo-style ObjectId. Migrated rows keep
+--                   their original Mongo _id; new rows get one from new_object_id() (or
+--                   from the app). So API ids, DRM/DCC cross-references and every FK
+--                   value are identical before and after the migration - no id mapping.
 --   * money         numeric(12,2) (Mongo stored JS doubles)
 --   * timestamps    timestamptz; created_at / updated_at mirror Mongoose timestamps
 --   * enums         text + CHECK (easier to evolve than CREATE TYPE)
@@ -11,6 +11,13 @@
 -- Review before use: nothing here is applied to any database.
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+-- 24-hex id: 4-byte unix time + 8 random bytes, so ids sort roughly by creation time
+-- exactly like Mongo ObjectIds (the app relies on `ORDER BY id` for recency ties).
+CREATE FUNCTION new_object_id() RETURNS text LANGUAGE sql VOLATILE AS $$
+  SELECT lpad(to_hex(extract(epoch FROM clock_timestamp())::bigint), 8, '0')
+      || substr(replace(gen_random_uuid()::text, '-', ''), 1, 16)
+$$;
 
 -- array_to_string is only STABLE, which Postgres refuses in generated columns;
 -- this wrapper is safe because text[] -> text with a constant separator is deterministic.
@@ -31,8 +38,7 @@ CREATE TABLE bootstrap_runs (            -- raw collection used by blogDraftsBoo
 
 -- ───────────── users / staff ─────────────
 CREATE TABLE users (
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  legacy_id text UNIQUE,
+  id text PRIMARY KEY DEFAULT new_object_id(),
   name text NOT NULL,
   email text NOT NULL UNIQUE,
   password text NOT NULL,                       -- bcrypt hash, copy as-is
@@ -51,8 +57,7 @@ CREATE TABLE users (
 
 -- ───────────── donors ─────────────
 CREATE TABLE donors (
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  legacy_id text UNIQUE,
+  id text PRIMARY KEY DEFAULT new_object_id(),
   donor_id text NOT NULL UNIQUE,                -- human id (DONOR-xxxx), from counters
   dcc_donor_number text,
   mobile text NOT NULL UNIQUE,
@@ -61,8 +66,8 @@ CREATE TABLE donors (
   pan_number text,
   saved_street text, saved_city text, saved_state text, saved_pincode text, saved_country text,
   created_via text NOT NULL DEFAULT 'donation' CHECK (created_via IN ('donation','shop')),
-  assigned_preacher_id bigint REFERENCES users(id),
-  first_raised_by_preacher_id bigint REFERENCES users(id),
+  assigned_preacher_id text REFERENCES users(id),
+  first_raised_by_preacher_id text REFERENCES users(id),
   otp_code_hash text, otp_expires_at timestamptz,
   otp_attempts int NOT NULL DEFAULT 0,
   otp_last_requested_at timestamptz,
@@ -74,13 +79,12 @@ CREATE INDEX donors_name_idx ON donors(name);
 CREATE INDEX donors_created_via_idx ON donors(created_via);
 
 CREATE TABLE donor_issues (
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  legacy_id text UNIQUE,
-  donor_id bigint NOT NULL REFERENCES donors(id),
+  id text PRIMARY KEY DEFAULT new_object_id(),
+  donor_id text NOT NULL REFERENCES donors(id),
   subject text NOT NULL, message text NOT NULL,
   status text NOT NULL DEFAULT 'open' CHECK (status IN ('open','in-progress','resolved')),
   admin_response text, responded_at timestamptz,
-  responded_by bigint REFERENCES users(id),
+  responded_by text REFERENCES users(id),
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
@@ -88,8 +92,7 @@ CREATE INDEX donor_issues_status_idx ON donor_issues(status, created_at DESC);
 
 -- ───────────── events / festivals (referenced by donations) ─────────────
 CREATE TABLE events (
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  legacy_id text UNIQUE,
+  id text PRIMARY KEY DEFAULT new_object_id(),
   title text NOT NULL, description text NOT NULL,
   date timestamptz NOT NULL,
   banner_image text, registration_link text,
@@ -97,41 +100,38 @@ CREATE TABLE events (
   registration_form jsonb,
   category text NOT NULL DEFAULT 'General',
   status text NOT NULL DEFAULT 'upcoming' CHECK (status IN ('upcoming','completed','cancelled')),
-  created_by bigint REFERENCES users(id),
+  created_by text REFERENCES users(id),
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE event_registrations (
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  legacy_id text UNIQUE,
-  event_id bigint NOT NULL REFERENCES events(id),
+  id text PRIMARY KEY DEFAULT new_object_id(),
+  event_id text NOT NULL REFERENCES events(id),
   token text NOT NULL UNIQUE,
   data jsonb NOT NULL DEFAULT '{}',
   files text[] NOT NULL DEFAULT '{}',
   paid boolean NOT NULL DEFAULT false,
   attendance_present boolean NOT NULL DEFAULT false,
   attendance_at timestamptz,
-  attendance_scanned_by bigint REFERENCES users(id),
+  attendance_scanned_by text REFERENCES users(id),
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX event_registrations_event_idx ON event_registrations(event_id);
 
 CREATE TABLE festival_donations (
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  legacy_id text UNIQUE,
+  id text PRIMARY KEY DEFAULT new_object_id(),
   title text NOT NULL, slug text NOT NULL UNIQUE, description text,
   images text[] NOT NULL DEFAULT '{}',
   active boolean NOT NULL DEFAULT true,
   donation_options jsonb NOT NULL DEFAULT '[]',   -- [{label, amount, description}]
-  event_id bigint REFERENCES events(id),
+  event_id text REFERENCES events(id),
   meta jsonb,
-  created_by bigint REFERENCES users(id),
+  created_by text REFERENCES users(id),
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE festival_showcases (
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  legacy_id text UNIQUE,
+  id text PRIMARY KEY DEFAULT new_object_id(),
   title text NOT NULL, slug text NOT NULL UNIQUE, subtitle text,
   hero_image text, card_image text, event_date timestamptz, location text, description text,
   status text NOT NULL DEFAULT 'upcoming' CHECK (status IN ('upcoming','completed','annual')),
@@ -144,14 +144,13 @@ CREATE TABLE festival_showcases (
   schedule jsonb NOT NULL DEFAULT '[]',
   details jsonb NOT NULL DEFAULT '[]',
   testimonials jsonb NOT NULL DEFAULT '[]',
-  created_by bigint REFERENCES users(id),
+  created_by text REFERENCES users(id),
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
 );
 
 -- ───────────── campaigners ─────────────
 CREATE TABLE temple_devotees (
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  legacy_id text UNIQUE,
+  id text PRIMARY KEY DEFAULT new_object_id(),
   name text NOT NULL,
   dcc_enrolled_by_id int,
   status text NOT NULL DEFAULT 'active' CHECK (status IN ('active','hidden')),
@@ -159,12 +158,11 @@ CREATE TABLE temple_devotees (
 );
 
 CREATE TABLE campaigners (
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  legacy_id text UNIQUE,
+  id text PRIMARY KEY DEFAULT new_object_id(),
   name text NOT NULL, email text NOT NULL, mobile text NOT NULL,
   slug text NOT NULL UNIQUE,
   campaign_type text NOT NULL DEFAULT 'SQFT' CHECK (campaign_type IN ('SQFT','JANMASHTAMI')),
-  referred_by_devotee_id bigint REFERENCES temple_devotees(id),
+  referred_by_devotee_id text REFERENCES temple_devotees(id),
   goal_sqft int NOT NULL DEFAULT 0 CHECK (goal_sqft BETWEEN 0 AND 100000),
   message text CHECK (char_length(message) <= 300),
   status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','active','hidden')),
@@ -175,8 +173,7 @@ CREATE INDEX campaigners_type_idx ON campaigners(campaign_type);
 
 -- ───────────── plans (Razorpay subscription plans) ─────────────
 CREATE TABLE plans (
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  legacy_id text UNIQUE,
+  id text PRIMARY KEY DEFAULT new_object_id(),
   amount numeric(12,2) NOT NULL,
   account text NOT NULL DEFAULT 'default',
   plan_id text NOT NULL,
@@ -186,8 +183,7 @@ CREATE TABLE plans (
 
 -- ───────────── donations (the critical table) ─────────────
 CREATE TABLE donations (
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  legacy_id text UNIQUE,
+  id text PRIMARY KEY DEFAULT new_object_id(),
   donor_name text NOT NULL, donor_email text, donor_mobile text,
   amount numeric(12,2) NOT NULL,
   date timestamptz NOT NULL DEFAULT now(),
@@ -196,7 +192,7 @@ CREATE TABLE donations (
     CHECK (status IN ('pending','active','completed','failed','cancelled')),
   message text, source_page text, seva_name text, seva_slug text, banner_image text,
   legacy_seva_id int, payment_account text, transaction_id text,
-  festival_id bigint REFERENCES festival_donations(id),
+  festival_id text REFERENCES festival_donations(id),
   festival_slug text, campaigner_slug text,
   dcc_enrolled_by_id int,
   utm_source text NOT NULL DEFAULT '', utm_medium text NOT NULL DEFAULT '',
@@ -220,13 +216,13 @@ CREATE TABLE donations (
   utr_number text,
   manual_payment_mode text CHECK (manual_payment_mode IN ('upi','bank','cash','cheque')),
   manual_entry_note text,
-  manual_entered_by bigint REFERENCES users(id),
+  manual_entered_by text REFERENCES users(id),
   -- upi fallback
   upi_status text CHECK (upi_status IN ('opened','claimed','matched','dismissed')),
   upi_app text, upi_via text, upi_opened_at timestamptz, upi_claimed_at timestamptz,
-  upi_payer_name text, upi_matched_at timestamptz, upi_matched_by bigint REFERENCES users(id),
+  upi_payer_name text, upi_matched_at timestamptz, upi_matched_by text REFERENCES users(id),
   upi_matched_payment_id text, upi_note text,
-  donor_record_id bigint REFERENCES donors(id),
+  donor_record_id text REFERENCES donors(id),
   donor_id text,                                  -- denormalised DONOR-xxxx
   subscription_id text, is_recurring boolean NOT NULL DEFAULT false, last_payment_date timestamptz,
   -- receipt / DCC
@@ -249,7 +245,7 @@ CREATE TABLE donations (
   -- meta capi
   meta_event_id text, meta_fbp text, meta_fbc text, meta_client_ip text, meta_user_agent text,
   meta_purchase_sent_at timestamptz,
-  created_by bigint REFERENCES users(id),
+  created_by text REFERENCES users(id),
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX donations_festival_idx    ON donations(festival_id);
@@ -272,7 +268,7 @@ CREATE INDEX donations_subscription_idx ON donations(subscription_id) WHERE subs
 
 -- ───────────── shop ─────────────
 CREATE TABLE shop_categories (
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, legacy_id text UNIQUE,
+  id text PRIMARY KEY DEFAULT new_object_id(),
   name text NOT NULL, slug text NOT NULL UNIQUE, description text, image text,
   sort_order int NOT NULL DEFAULT 0,
   status text NOT NULL DEFAULT 'active' CHECK (status IN ('active','hidden')),
@@ -280,7 +276,7 @@ CREATE TABLE shop_categories (
 );
 
 CREATE TABLE products (
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, legacy_id text UNIQUE,
+  id text PRIMARY KEY DEFAULT new_object_id(),
   name text NOT NULL, slug text NOT NULL UNIQUE,
   short_description text, description text, product_info text NOT NULL DEFAULT '',
   category text,                                  -- holds a category slug/name today; consider FK later
@@ -292,7 +288,7 @@ CREATE TABLE products (
   status text NOT NULL DEFAULT 'draft' CHECK (status IN ('active','draft')),
   featured boolean NOT NULL DEFAULT false, free_shipping boolean NOT NULL DEFAULT false,
   tags text[] NOT NULL DEFAULT '{}', sort_order int NOT NULL DEFAULT 0,
-  created_by bigint REFERENCES users(id),
+  created_by text REFERENCES users(id),
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
   search tsvector GENERATED ALWAYS AS (
     to_tsvector('simple', coalesce(name,'')||' '||coalesce(short_description,'')||' '||immutable_join(tags,' '))
@@ -303,9 +299,8 @@ CREATE INDEX products_name_idx ON products(name);
 CREATE INDEX products_list_idx ON products(status, category, sort_order);
 
 CREATE TABLE product_variants (                   -- was embedded variants[] (had its own _id)
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  legacy_id text UNIQUE,                          -- variant ObjectId; shop_order_items.variant_id refs this
-  product_id bigint NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT new_object_id(),                          -- variant ObjectId; shop_order_items.variant_id refs this
+  product_id text NOT NULL REFERENCES products(id) ON DELETE CASCADE,
   label text NOT NULL, sku text,
   price numeric(12,2) NOT NULL CHECK (price >= 0), mrp numeric(12,2) CHECK (mrp >= 0),
   stock int NOT NULL DEFAULT 0 CHECK (stock >= 0),
@@ -314,9 +309,9 @@ CREATE TABLE product_variants (                   -- was embedded variants[] (ha
 CREATE INDEX product_variants_product_idx ON product_variants(product_id);
 
 CREATE TABLE shop_orders (
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, legacy_id text UNIQUE,
+  id text PRIMARY KEY DEFAULT new_object_id(),
   order_number text NOT NULL UNIQUE,
-  donor_record_id bigint REFERENCES donors(id),
+  donor_record_id text REFERENCES donors(id),
   customer_name text NOT NULL, customer_mobile text NOT NULL, customer_email text,
   subtotal numeric(12,2) NOT NULL, shipping_charge numeric(12,2) NOT NULL DEFAULT 0, total numeric(12,2) NOT NULL,
   shipping_rule_flat numeric(12,2), shipping_rule_free_above numeric(12,2),
@@ -343,9 +338,9 @@ CREATE INDEX shop_orders_created_idx ON shop_orders(created_at DESC);
 
 CREATE TABLE shop_order_items (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  order_id bigint NOT NULL REFERENCES shop_orders(id) ON DELETE CASCADE,
-  product_id bigint REFERENCES products(id) ON DELETE SET NULL,
-  variant_id bigint REFERENCES product_variants(id) ON DELETE SET NULL,
+  order_id text NOT NULL REFERENCES shop_orders(id) ON DELETE CASCADE,
+  product_id text REFERENCES products(id) ON DELETE SET NULL,
+  variant_id text REFERENCES product_variants(id) ON DELETE SET NULL,
   product_name text NOT NULL, slug text, image text, variant_label text,   -- snapshots, keep
   unit_price numeric(12,2) NOT NULL, mrp numeric(12,2),
   quantity int NOT NULL CHECK (quantity >= 1),
@@ -360,13 +355,13 @@ CREATE TABLE shop_settings (                      -- single row
   free_shipping_above numeric(12,2) NOT NULL DEFAULT 1000,
   announcement text, support_mobile text,
   delivery_estimate text NOT NULL DEFAULT 'Usually dispatched in 3–5 working days',
-  updated_by bigint REFERENCES users(id),
+  updated_by text REFERENCES users(id),
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
 );
 
 -- ───────────── content / CMS ─────────────
 CREATE TABLE blogs (
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, legacy_id text UNIQUE,
+  id text PRIMARY KEY DEFAULT new_object_id(),
   title text NOT NULL, slug text NOT NULL UNIQUE, excerpt text NOT NULL DEFAULT '',
   content text NOT NULL, cover_image text NOT NULL DEFAULT '',
   images text[] NOT NULL DEFAULT '{}',
@@ -378,9 +373,9 @@ CREATE TABLE blogs (
   published_at timestamptz, read_time int NOT NULL DEFAULT 0, views int NOT NULL DEFAULT 0,
   featured boolean NOT NULL DEFAULT false,
   deletion_requested boolean NOT NULL DEFAULT false,
-  deletion_requested_by bigint REFERENCES users(id), deletion_requested_at timestamptz,
+  deletion_requested_by text REFERENCES users(id), deletion_requested_at timestamptz,
   meta_title text NOT NULL DEFAULT '', meta_description text NOT NULL DEFAULT '',
-  created_by bigint REFERENCES users(id),
+  created_by text REFERENCES users(id),
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
   search tsvector GENERATED ALWAYS AS (
     to_tsvector('simple', coalesce(title,'')||' '||coalesce(excerpt,'')||' '||coalesce(content,''))
@@ -395,7 +390,7 @@ CREATE INDEX blogs_delreq_idx ON blogs(deletion_requested);
 -- logic into the service layer (or a trigger) — it will NOT happen automatically.
 
 CREATE TABLE contact_messages (
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, legacy_id text UNIQUE,
+  id text PRIMARY KEY DEFAULT new_object_id(),
   name text NOT NULL, email text NOT NULL, phone text NOT NULL DEFAULT '',
   subject text NOT NULL DEFAULT 'General Enquiry', message text NOT NULL,
   "authorization" boolean NOT NULL DEFAULT false,
@@ -406,7 +401,7 @@ CREATE TABLE contact_messages (
 CREATE INDEX contact_messages_created_idx ON contact_messages(created_at DESC);
 
 CREATE TABLE darshans (
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, legacy_id text UNIQUE,
+  id text PRIMARY KEY DEFAULT new_object_id(),
   vaikuntham_id int NOT NULL UNIQUE, image_url text NOT NULL,
   position int NOT NULL DEFAULT 0, status text NOT NULL DEFAULT 'active' CHECK (status IN ('active')),
   synced_at timestamptz NOT NULL DEFAULT now(),
@@ -415,7 +410,7 @@ CREATE TABLE darshans (
 CREATE INDEX darshans_position_idx ON darshans(position);
 
 CREATE TABLE donation_pages (                     -- singleton CMS doc keyed by `key`
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, legacy_id text UNIQUE,
+  id text PRIMARY KEY DEFAULT new_object_id(),
   key text NOT NULL DEFAULT 'donations' UNIQUE,
   hero_title text, hero_subtitle text, hero_eyebrow text,
   banner_image text, banner_mobile_image text, trustee_banner_image text,
@@ -425,53 +420,53 @@ CREATE TABLE donation_pages (                     -- singleton CMS doc keyed by 
   gallery_images text[] NOT NULL DEFAULT '{}',
   impact_items jsonb NOT NULL DEFAULT '[]',
   bank_details jsonb, contact jsonb,
-  updated_by bigint REFERENCES users(id),
+  updated_by text REFERENCES users(id),
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE site_content (                       -- singleton; nested blocks kept as jsonb
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, legacy_id text UNIQUE,
+  id text PRIMARY KEY DEFAULT new_object_id(),
   key text NOT NULL DEFAULT 'main' UNIQUE,
   hero jsonb NOT NULL DEFAULT '{}', about jsonb NOT NULL DEFAULT '{}',
   contact jsonb NOT NULL DEFAULT '{}', navbar jsonb NOT NULL DEFAULT '{}',
   festival jsonb NOT NULL DEFAULT '{}', construction jsonb NOT NULL DEFAULT '{}',
-  updated_by bigint REFERENCES users(id),
+  updated_by text REFERENCES users(id),
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE galleries (
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, legacy_id text UNIQUE,
+  id text PRIMARY KEY DEFAULT new_object_id(),
   title text NOT NULL, description text, images text[] NOT NULL,
   date timestamptz NOT NULL, category text NOT NULL DEFAULT 'General',
   type text NOT NULL DEFAULT 'darshan' CHECK (type IN ('darshan','festival','seva','community','other')),
   status text NOT NULL DEFAULT 'active' CHECK (status IN ('active','inactive')),
-  created_by bigint REFERENCES users(id),
+  created_by text REFERENCES users(id),
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE hero_banners (
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, legacy_id text UNIQUE,
+  id text PRIMARY KEY DEFAULT new_object_id(),
   title text NOT NULL, desktop_image text NOT NULL, mobile_image text NOT NULL,
   link_url text NOT NULL DEFAULT '', "order" int NOT NULL DEFAULT 0, active boolean NOT NULL DEFAULT true,
-  created_by bigint REFERENCES users(id),
+  created_by text REFERENCES users(id),
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX hero_banners_idx ON hero_banners(active, "order");
 
 CREATE TABLE important_dates (
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, legacy_id text UNIQUE,
+  id text PRIMARY KEY DEFAULT new_object_id(),
   title text NOT NULL, date timestamptz NOT NULL, description text,
   type text NOT NULL DEFAULT 'Other' CHECK (type IN ('Ekadashi','Festival','Other')),
-  created_by bigint REFERENCES users(id),
+  created_by text REFERENCES users(id),
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE media (
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, legacy_id text UNIQUE,
+  id text PRIMARY KEY DEFAULT new_object_id(),
   name text NOT NULL, url text NOT NULL, public_id text NOT NULL,
   format text, width int, height int, bytes bigint,
   folder text NOT NULL DEFAULT 'media-library', tags text,
-  uploaded_by bigint REFERENCES users(id),
+  uploaded_by text REFERENCES users(id),
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX media_created_idx ON media(created_at DESC);
@@ -479,7 +474,7 @@ CREATE INDEX media_name_trgm ON media USING gin(name gin_trgm_ops);
 
 -- ───────────── volunteers ─────────────
 CREATE TABLE volunteer_events (
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, legacy_id text UNIQUE,
+  id text PRIMARY KEY DEFAULT new_object_id(),
   title text NOT NULL, description text NOT NULL,
   date timestamptz NOT NULL, end_date timestamptz,
   location text NOT NULL DEFAULT '', image text NOT NULL DEFAULT '',
@@ -488,14 +483,14 @@ CREATE TABLE volunteer_events (
   requirements text NOT NULL DEFAULT '',
   status text NOT NULL DEFAULT 'active' CHECK (status IN ('active','closed','completed')),
   form_fields jsonb NOT NULL DEFAULT '[]',
-  created_by bigint REFERENCES users(id),
+  created_by text REFERENCES users(id),
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX volunteer_events_idx ON volunteer_events(status, date);
 
 CREATE TABLE volunteer_registrations (
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, legacy_id text UNIQUE,
-  event_id bigint NOT NULL REFERENCES volunteer_events(id),
+  id text PRIMARY KEY DEFAULT new_object_id(),
+  event_id text NOT NULL REFERENCES volunteer_events(id),
   responses jsonb NOT NULL DEFAULT '{}',
   status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected','completed')),
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
@@ -506,8 +501,7 @@ CREATE INDEX volunteer_registrations_event_idx ON volunteer_registrations(event_
 -- Mongo expired these with a TTL index (30 days). Postgres has no TTL: the app must
 -- run `DELETE FROM payment_downtimes WHERE received_at < now() - interval '30 days'` periodically.
 CREATE TABLE payment_downtimes (
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  legacy_id text UNIQUE,
+  id text PRIMARY KEY DEFAULT new_object_id(),
   downtime_id text, event text, method text,
   instrument jsonb,
   severity text, status text,
