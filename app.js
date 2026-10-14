@@ -8,7 +8,7 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import compression from "compression";
 import helmet from "helmet";
-import mongoose from "mongoose";
+import { dbState } from "./src/db/pg.js";
 
 
 import { userRouter } from "./src/routes/user.routes.js";
@@ -233,25 +233,15 @@ app.post("/api/internal/resend-receipts", handleResendReceipts);
 // dependency on declaration order entirely.
 app.use("/api/internal/drm", internalRouter);
 
-app.get('/health', (req, res) => {
-  const states = ['disconnected', 'connected', 'connecting', 'disconnecting'];
-  const dbState = mongoose && mongoose.connection ? mongoose.connection.readyState : 0;
-  const ok = dbState === 1;
-
-  // In-memory cache counters (src/cache/memoryCache.js); informational only,
-  // they never affect the status code.
+app.get("/health", async (req, res) => {
+  const db = await dbState();
   let cache;
   try {
     cache = cacheStatus();
   } catch (err) {
-    cache = { error: err && err.message ? err.message : String(err) };
+    cache = { error: err.message };
   }
-
-  res.status(ok ? 200 : 503).json({
-    server: 'ok',
-    db: { state: states[dbState] || dbState },
-    cache,
-  });
+  res.status(db === "connected" ? 200 : 503).json({ server: "ok", db: { state: db }, cache });
 });
 
 // 404 fallback — any unmatched route gets a clean JSON response instead of

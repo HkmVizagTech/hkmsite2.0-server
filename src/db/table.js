@@ -6,7 +6,7 @@ const qi = (c) => `"${c.replace(/"/g, '""')}"`;
 
 const prefix = (p, keys) => Object.fromEntries(keys.map((k) => [k, p + snake(k)]));
 
-function defineTable({ table, nests = {}, json = [], renames = {}, keepNull = [], timestamps = true }) {
+function defineTable({ table, nests = {}, json = [], renames = {}, keepNull = [], timestamps = true, serialId = false, hidden = [] }) {
   const colOfField = {}; // "utm.source" -> "utm_source"; "status" -> "status"
   const nestOfCol = {};
   for (const [field, map] of Object.entries(nests)) {
@@ -20,6 +20,7 @@ function defineTable({ table, nests = {}, json = [], renames = {}, keepNull = []
   };
   const jsonSet = new Set(json);
   const keepNullSet = new Set(keepNull);
+  const hiddenSet = new Set(hidden);
 
   const fromRow = (row) => {
     if (!row) return null;
@@ -27,6 +28,7 @@ function defineTable({ table, nests = {}, json = [], renames = {}, keepNull = []
     const nested = {};
     for (const [col, val] of Object.entries(row)) {
       if (col === "id") { doc._id = val; continue; }
+      if (hiddenSet.has(col)) continue;
       if (nestOfCol[col]) {
         const [field, key] = nestOfCol[col];
         if (val !== null && val !== undefined) (nested[field] = nested[field] || {})[key] = val;
@@ -173,8 +175,7 @@ function defineTable({ table, nests = {}, json = [], renames = {}, keepNull = []
 
     async insert(doc, { client, onConflictDoNothing = false } = {}) {
       const { cols } = toColumns({ ...doc });
-      const id = doc._id || doc.id || newId();
-      const all = { id, ...cols };
+      const all = serialId ? { ...cols } : { id: doc._id || doc.id || newId(), ...cols };
       const names = Object.keys(all);
       const sql = `INSERT INTO ${qi(table)} (${names.map(qi).join(",")}) VALUES (${names.map((_, i) => `$${i + 1}`).join(",")})` +
         `${onConflictDoNothing ? " ON CONFLICT DO NOTHING" : ""} RETURNING *`;

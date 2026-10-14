@@ -2,7 +2,7 @@
 import "./src/config/timezone.js";
 import "./src/config/env.js";
 import { app } from "./app.js";
-import { connectDb } from "./src/config/db.js";
+import { connectDb } from "./src/db/pg.js";
 import { startReconciliationJob } from "./src/jobs/reconcilePendingDonations.js";
 import { startTrackingSyncJob } from "./src/jobs/trackingSync.js";
 import { startDccSweepJob } from "./src/jobs/dccReceiptSweep.js";
