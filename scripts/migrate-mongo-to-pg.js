@@ -17,6 +17,7 @@
  */
 import { MongoClient } from "mongodb";
 import _pg from "pg";
+import * as repos from "../src/db/tables.js";
 const { Client } = _pg;
 
 const SRC = process.env.SRC_MONGO_URI;
@@ -95,6 +96,47 @@ const base = [
 
 // ── table specs: [mongoCollection, pgTable, mapName|null, columns[]] ───────
 const validVariants = (v) => Array.isArray(v) && v.every((x) => x !== null && typeof x === "object");
+
+const REPO_OF = {
+  users: "users",
+  donors: "donors",
+  donorissues: "donorIssues",
+  donations: "donations",
+  events: "events",
+  registrations: "registrations",
+  festivaldonations: "festivalDonations",
+  festivalshowcases: "festivalShowcases",
+  templedevotees: "templeDevotees",
+  campaigners: "campaigners",
+  plans: "plans",
+  shopcategories: "shopCategories",
+  products: "products",
+  shoporders: "shopOrders",
+  blogs: "blogs",
+  contactmessages: "contactMessages",
+  darshans: "darshans",
+  donationpages: "donationPages",
+  sitecontents: "siteContent",
+  galleries: "galleries",
+  herobanners: "heroBanners",
+  importantdates: "importantDates",
+  media: "media",
+  volunteerevents: "volunteerEvents",
+  volunteerregistrations: "volunteerRegistrations",
+  paymentdowntimes: "paymentDowntimes",
+  shopsettings: "shopSettings",
+};
+
+const explicitNulls = (coll, d, knownRoots) => {
+  const nests = repos[REPO_OF[coll]]?.nests ?? {};
+  const out = [];
+  for (const [k, v] of Object.entries(d)) {
+    if (v === null && knownRoots.has(k)) out.push(k);
+    else if (v && typeof v === "object" && nests[k])
+      for (const [sk, sv] of Object.entries(v)) if (sv === null && nests[k][sk]) out.push(`${k}.${sk}`);
+  }
+  return out;
+};
 
 const CHILD_ARRAYS = { products: ["variants"], shoporders: ["items"] };
 
@@ -782,10 +824,15 @@ async function main() {
           ...cols.map(([col, fn]) =>
             nullable.has(`${table}.${col}`) && fn.path !== undefined && get(d, fn.path) === undefined ? null : nn(fn(d))
           ),
-          Object.keys(unknown).length ? JSON.stringify(unknown) : null,
+          (() => {
+            const nulls = explicitNulls(coll, d, knownRoots);
+            const extra = nulls.length ? { ...unknown, $nulls: nulls } : unknown;
+            return Object.keys(extra).length ? JSON.stringify(extra) : null;
+          })(),
         ]);
       } catch (e) {
         stats.bad.push(`${coll} ${d._id}: ${e.message}`);
+        if (stats.bad.length === 1) console.error("first unmappable document:", stats.bad[0]);
       }
     }
     try {

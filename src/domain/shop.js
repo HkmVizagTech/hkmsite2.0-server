@@ -112,7 +112,7 @@ async function attachVariants(docs, client, { lean = false } = {}) {
 
 const orderItemDoc = (row, lean) => {
   const { _id, orderId, ...rest } = shopOrderItems.fromRow(row, { lean });
-  return rest;
+  return { variantId: null, variantLabel: null, ...rest };
 };
 
 // Attaches items[] (insertion order) to plain order documents.

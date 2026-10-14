@@ -66,6 +66,7 @@ function defineTable({
     const doc = {};
     const nested = {};
     const extras = {};
+    const nullSet = new Set(row.extra?.$nulls ?? []);
     for (const [col, val] of Object.entries(row)) {
       if (col === "id") {
         doc._id = val;
@@ -73,10 +74,13 @@ function defineTable({
       }
       if (hiddenSet.has(col)) continue;
       if (col === "extra") {
-        if (lean && val) for (const [k, v] of Object.entries(val)) if (!(k in doc)) extras[k] = v;
+        if (val) for (const [k, v] of Object.entries(val)) if (k !== "$nulls" && lean && !(k in doc)) extras[k] = v;
         continue;
       }
-      const fallback = !lean && val === null ? columnDefaults.get(table)?.[col] : undefined;
+      const fieldPath = nestOfCol[col]
+        ? nestOfCol[col].join(".")
+        : Object.keys(renames).find((k) => renames[k] === col) || camel(col);
+      const fallback = !lean && val === null && !nullSet.has(fieldPath) ? columnDefaults.get(table)?.[col] : undefined;
       const value = fallback !== undefined ? fallback : val;
       if (nestOfCol[col]) {
         const [field, key] = nestOfCol[col];
@@ -89,22 +93,40 @@ function defineTable({
     }
     for (const [field, obj] of Object.entries(nested)) doc[field] = obj;
     for (const [k, v] of Object.entries(extras)) if (!(k in doc)) doc[k] = v;
+    for (const path of nullSet) {
+      const [root, child] = path.split(".");
+      if (child === undefined) {
+        if (doc[root] === undefined) doc[root] = null;
+      } else if (doc[root] === undefined) doc[root] = { [child]: null };
+      else if (doc[root] && typeof doc[root] === "object" && doc[root][child] === undefined) doc[root][child] = null;
+    }
     return doc;
   };
 
   const toColumns = (patch = {}) => {
     const cols = {},
       incs = {},
-      unsets = [];
+      unsets = [],
+      nulls = [],
+      unsetPaths = [];
     const put = (field, value) => {
       if (value === undefined) return;
+      if (value === null && nests[field]) {
+        for (const col of Object.values(nests[field])) if (knownCol(col)) cols[col] = null;
+        nulls.push(field);
+        return;
+      }
       if (nests[field] && value && typeof value === "object" && !Array.isArray(value) && !(value instanceof Date)) {
         for (const key of Object.keys(nests[field]))
-          if (value[key] !== undefined && knownCol(nests[field][key])) cols[nests[field][key]] = value[key];
+          if (value[key] !== undefined && knownCol(nests[field][key])) {
+            cols[nests[field][key]] = value[key];
+            if (value[key] === null) nulls.push(`${field}.${key}`);
+          }
         return;
       }
       const col = fieldToCol(field);
       if (!knownCol(col)) return;
+      if (value === null) nulls.push(field);
       cols[col] = jsonSet.has(field) && value !== null ? JSON.stringify(value) : value;
     };
     for (const [k, v] of Object.entries(patch)) {
@@ -114,6 +136,7 @@ function defineTable({
         for (const [f, n] of Object.entries(v)) incs[fieldToCol(f)] = n;
       } else if (k === "$unset") {
         for (const f of Array.isArray(v) ? v : Object.keys(v)) {
+          unsetPaths.push(f);
           if (nests[f]) Object.values(nests[f]).forEach((c) => unsets.push(c));
           else unsets.push(fieldToCol(f));
         }
@@ -122,7 +145,7 @@ function defineTable({
       else if (k === "updatedAt") cols.updated_at = v;
       else put(k, v);
     }
-    return { cols, incs, unsets };
+    return { cols, incs, unsets, nulls, unsetPaths };
   };
 
   const buildWhere = (filter = {}, params = [], depth = 0) => {
@@ -245,7 +268,7 @@ function defineTable({
   };
 
   const buildSet = (patch, params, { touch = true } = {}) => {
-    const { cols, incs, unsets } = toColumns(patch);
+    const { cols, incs, unsets, nulls, unsetPaths } = toColumns(patch);
     const sets = [];
     for (const [c, v] of Object.entries(cols)) {
       params.push(v);
@@ -256,6 +279,15 @@ function defineTable({
       sets.push(`${qi(c)} = COALESCE(${qi(c)}, 0) + $${params.length}`);
     }
     for (const c of unsets) sets.push(`${qi(c)} = NULL`);
+    if ((nulls.length || unsetPaths.length) && !("extra" in cols) && knownCol("extra")) {
+      params.push(nulls);
+      const add = params.length;
+      params.push(unsetPaths);
+      const drop = params.length;
+      sets.push(
+        `"extra" = jsonb_set(COALESCE("extra", '{}'::jsonb), '{$nulls}', to_jsonb(ARRAY(SELECT DISTINCT p FROM unnest(ARRAY(SELECT jsonb_array_elements_text(COALESCE("extra"->'$nulls', '[]'::jsonb))) || $${add}::text[]) AS p WHERE NOT (p = ANY($${drop}::text[])))))`
+      );
+    }
     if (touch && timestamps && !("updated_at" in cols)) {
       params.push(new Date());
       sets.push(`"updated_at" = $${params.length}`);
@@ -266,6 +298,7 @@ function defineTable({
   const repo = {
     table,
     fromRow,
+    nests,
     toColumns,
     buildWhere,
     fieldToCol,
@@ -309,7 +342,10 @@ function defineTable({
     },
 
     async insert(doc, { client, onConflictDoNothing = false, lean = false } = {}) {
-      const { cols } = toColumns({ ...doc });
+      const { cols, nulls } = toColumns({ ...doc });
+      for (const f of keepNull) if (doc[f] === undefined && !nulls.includes(f)) nulls.push(f);
+      if (nulls.length && !("extra" in cols) && knownCol("extra"))
+        cols.extra = JSON.stringify({ $nulls: [...new Set(nulls)] });
       const now = new Date();
       const stamps = timestamps ? { created_at: cols.created_at ?? now, updated_at: cols.updated_at ?? now } : {};
       const all = serialId ? { ...cols } : { id: doc._id || doc.id || newId(), ...stamps, ...cols };

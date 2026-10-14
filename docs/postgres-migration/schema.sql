@@ -596,3 +596,8 @@ ALTER TABLE hero_banners ALTER COLUMN "order" TYPE double precision;
 ALTER TABLE temple_devotees ALTER COLUMN dcc_enrolled_by_id TYPE double precision;
 ALTER TABLE darshans ALTER COLUMN vaikuntham_id TYPE double precision, ALTER COLUMN position TYPE double precision;
 ALTER TABLE media ALTER COLUMN width TYPE double precision, ALTER COLUMN height TYPE double precision, ALTER COLUMN bytes TYPE double precision;
+
+-- ───────────── Mongoose-compatible relaxations (donations/plans): doubles, no rounding ─────────────
+ALTER TABLE donations ALTER COLUMN amount TYPE numeric, ALTER COLUMN legacy_seva_id TYPE double precision,
+  ALTER COLUMN dcc_enrolled_by_id TYPE double precision;
+ALTER TABLE plans ALTER COLUMN amount TYPE numeric;

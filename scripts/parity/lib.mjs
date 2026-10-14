@@ -51,7 +51,8 @@ export async function discover(mongoUri) {
 
 const IGNORE = new Set(["__v"]);
 export function normalize(v) {
-  if (v === null || v === undefined) return undefined;
+  if (v === undefined) return undefined;
+  if (v === null) return process.env.LOOSE_NULLS === "1" ? undefined : null;
   if (v instanceof Date) return v.toISOString();
   if (Array.isArray(v)) return v.map((x) => normalize(x) ?? null);
   if (typeof v === "object") {
