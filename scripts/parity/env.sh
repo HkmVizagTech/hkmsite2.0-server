@@ -18,15 +18,22 @@ write_env() {
 }
 start_servers() {
   local base; base=$(cat "$dir/port")
-  (cd "$LOCAL/baseline" && env -i PATH="$PATH" HOME="$HOME" ENV_FILE="$dir/env.mongo" nohup node index.js < /dev/null > "$dir/baseline.log" 2>&1 & echo $! > "$dir/baseline.pid")
-  (cd "$ROOT" && env -i PATH="$PATH" HOME="$HOME" ENV_FILE="$dir/env.pg" nohup node index.js < /dev/null > "$dir/new.log" 2>&1 & echo $! > "$dir/new.pid")
+  (cd "$LOCAL/baseline"; env -i PATH="$PATH" HOME="$HOME" ENV_FILE="$dir/env.mongo" nohup node index.js < /dev/null > "$dir/baseline.log" 2>&1 & echo $! > "$dir/baseline.pid")
+  (cd "$ROOT"; env -i PATH="$PATH" HOME="$HOME" ENV_FILE="$dir/env.pg" nohup node index.js < /dev/null > "$dir/new.log" 2>&1 & echo $! > "$dir/new.pid")
   for i in $(seq 1 30); do
     curl -sf "localhost:$base/health" >/dev/null && curl -sf "localhost:$((base+1))/health" >/dev/null && { echo "up: baseline :$base  new :$((base+1))"; return; }
     sleep 1
   done
   echo "servers did not become healthy; see $dir/*.log"; tail -5 "$dir/new.log"; exit 1
 }
-stop_servers() { for f in baseline new; do [ -f "$dir/$f.pid" ] && kill "$(cat "$dir/$f.pid")" 2>/dev/null || true; rm -f "$dir/$f.pid"; done; sleep 1; }
+stop_servers() {
+  for f in baseline new; do [ -f "$dir/$f.pid" ] && kill "$(cat "$dir/$f.pid")" 2>/dev/null || true; rm -f "$dir/$f.pid"; done
+  if [ -f "$dir/port" ]; then
+    base=$(cat "$dir/port")
+    for p in "$base" "$((base+1))"; do lsof -ti ":$p" 2>/dev/null | xargs kill 2>/dev/null || true; done
+  fi
+  sleep 1
+}
 make_dbs() {
   mongosh --quiet --port 27018 "$MDB" --eval 'db.dropDatabase()' >/dev/null
   mongodump --port 27018 --db test --archive --quiet | mongorestore --port 27018 --archive --nsFrom 'test.*' --nsTo "$MDB.*" --quiet

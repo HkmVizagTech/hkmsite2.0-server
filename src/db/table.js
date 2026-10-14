@@ -134,7 +134,7 @@ function defineTable({ table, nests = {}, json = [], renames = {}, keepNull = []
   };
   const orderBy = (sort) => {
     if (!sort) return "";
-    const items = Object.entries(sort).map(([f, d]) => `${qi(fieldToCol(f))} ${d === -1 || d === "desc" ? "DESC" : "ASC"}`);
+    const items = Object.entries(sort).map(([f, d]) => `${qi(fieldToCol(f))} ${d === -1 || d === "desc" ? "DESC NULLS LAST" : "ASC NULLS FIRST"}`);
     return items.length ? ` ORDER BY ${items.join(", ")}` : "";
   };
   const wherePart = (filter, params) => { const w = buildWhere(filter, params); return w.sql ? ` WHERE ${w.sql}` : ""; };
