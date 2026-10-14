@@ -42,7 +42,12 @@ async function tx(fn) {
   }
 }
 
-const newId = () => Math.floor(Date.now() / 1000).toString(16).padStart(8, "0") + randomBytes(8).toString("hex");
+const processRandom = randomBytes(5).toString("hex");
+let idCounter = randomBytes(3).readUIntBE(0, 3);
+const newId = () => {
+  idCounter = (idCounter + 1) & 0xffffff;
+  return Math.floor(Date.now() / 1000).toString(16).padStart(8, "0") + processRandom + idCounter.toString(16).padStart(6, "0");
+};
 const isId = (v) => typeof v === "string" && /^[0-9a-f]{24}$/i.test(v);
 
 async function connectDb() {
