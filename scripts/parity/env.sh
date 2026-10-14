@@ -18,8 +18,8 @@ write_env() {
 }
 start_servers() {
   local base; base=$(cat "$dir/port")
-  (cd "$LOCAL/baseline" && env -i PATH="$PATH" HOME="$HOME" ENV_FILE="$dir/env.mongo" nohup node index.js > "$dir/baseline.log" 2>&1 & echo $! > "$dir/baseline.pid")
-  (cd "$ROOT" && env -i PATH="$PATH" HOME="$HOME" ENV_FILE="$dir/env.pg" nohup node index.js > "$dir/new.log" 2>&1 & echo $! > "$dir/new.pid")
+  (cd "$LOCAL/baseline" && env -i PATH="$PATH" HOME="$HOME" ENV_FILE="$dir/env.mongo" nohup node index.js < /dev/null > "$dir/baseline.log" 2>&1 & echo $! > "$dir/baseline.pid")
+  (cd "$ROOT" && env -i PATH="$PATH" HOME="$HOME" ENV_FILE="$dir/env.pg" nohup node index.js < /dev/null > "$dir/new.log" 2>&1 & echo $! > "$dir/new.pid")
   for i in $(seq 1 30); do
     curl -sf "localhost:$base/health" >/dev/null && curl -sf "localhost:$((base+1))/health" >/dev/null && { echo "up: baseline :$base  new :$((base+1))"; return; }
     sleep 1
