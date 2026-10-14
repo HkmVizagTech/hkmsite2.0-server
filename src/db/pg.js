@@ -17,6 +17,7 @@ const getPool = () => {
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 10000,
       ssl: process.env.PGSSL === "true" ? { rejectUnauthorized: false } : undefined,
+      options: "-c timezone=UTC",
     });
     pool.on("error", (err) => console.error("[pg] idle client error:", err.message));
   }

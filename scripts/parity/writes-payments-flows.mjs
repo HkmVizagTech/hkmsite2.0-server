@@ -6,6 +6,7 @@
 // Each scenario runs on the baseline then the new server; HTTP transcripts, donation rows and the exact outbound
 // requests to the fakes are compared.
 import crypto from "node:crypto";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { MongoClient, ObjectId } from "mongodb";
@@ -19,6 +20,8 @@ import {
   signWebhook,
   compareLogs,
   fieldDiff,
+  statePath,
+  logPath,
 } from "./mocks/ctl.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -91,20 +94,23 @@ const quiesce = async () => {
 
 const TS_KEYS =
   /^(updatedAt|receiptGeneratedAt|dccSyncedAt|dccLastAttemptAt|whatsappReceiptSentAt|whatsappThankYouSentAt|lastPaymentDate|lastReconcileCheckAt|closedAsNotPaidAt|whatsappDeliveredAt|metaPurchaseSentAt|dccRecoveredAt|date|createdAt|at|since|autoSince|from|to|receivedAt|begin|end)$/;
+// Fields the pipeline sets to null in Mongo; Postgres hydration omits them (needs keepNull in src/db/tables.js, reported).
+const KNOWN_NULLS = new Set(["dccSyncError", "whatsappDeliveredAt", "whatsappReceiptError", "whatsappSendStatus"]);
 const ctx = (keep) => {
   const ids = new Map();
   const idStr = (s) =>
     s.replace(/(?<![0-9a-f])[0-9a-f]{24}(?![0-9a-f])/g, (m) =>
       ids.has(m) ? ids.get(m) : (ids.set(m, `<id${ids.size + 1}>`), ids.get(m))
     );
-  const walk = (v, key = "") => {
-    if (Array.isArray(v)) return v.map((x) => walk(x, key));
+  // Raw database rows cannot tell an explicit null from a missing field in Postgres; HTTP bodies are compared strictly.
+  const walk = (v, key = "", dropNull = false) => {
+    if (Array.isArray(v)) return v.map((x) => walk(x, key, dropNull));
     if (v && typeof v === "object")
       return Object.fromEntries(
         Object.keys(v)
           .sort()
-          .filter((k) => k !== "__v" && v[k] !== null)
-          .map((k) => [k, walk(v[k], k)])
+          .filter((k) => k !== "__v" && !((dropNull || KNOWN_NULLS.has(k)) && v[k] === null))
+          .map((k) => [k, walk(v[k], k, dropNull || k === "row" || k === "rows")])
       );
     if (typeof v === "string") {
       if (TS_KEYS.test(key) && !keep.includes(key) && /^\d{4}-\d\d-\d\dT/.test(v)) return "<ts>";
@@ -127,9 +133,74 @@ const pgDowntime = (x) => ({
   begin: x.begin_at ?? x.begin,
   end: x.end_at ?? x.end,
 });
+
+// Runs a job module in-process in a child (baseline: CJS + mongoose; new: ESM + pg) against the same mock files as the server.
+const BASELINE = path.resolve(ROOT, "../.localdb/baseline");
+const MOCK_ENV = {
+  DCC_API_KEY: "mock-dcc-key",
+  DCC_API_URL: "https://dcc.mock.test/api/socialmedia/addDonation",
+  WAPI_TOKEN: "mock-wapi-token",
+  GUPSHUP_API_KEY: "mock-gupshup-key",
+  GUPSHUP_APP_NAME: "MockApp",
+  META_PIXEL_ID: "100000000000001",
+  META_CAPI_ACCESS_TOKEN: "mock-meta-token",
+  R2_ACCOUNT_ID: "mockaccount",
+  R2_ACCESS_KEY_ID: "mock-r2-key",
+  R2_SECRET_ACCESS_KEY: "mock-r2-secret",
+  R2_BUCKET_NAME: "mock-bucket",
+  R2_PUBLIC_URL: "https://pub-mock.r2.dev",
+  DRM_API_URL: "https://drm.mock.test",
+  DRM_INTERNAL_SECRET: "mock-drm-secret",
+  DELHIVERY_TRACKING_API_KEY: "mock-delhivery-key",
+  DTDC_TRACKING_API_KEY: "mock-dtdc-key",
+  BLUEDART_API_KEY: "mock-bluedart-key",
+  BLUEDART_LOGIN_ID: "MOCKLOGIN",
+  RAZORPAY_KEY_ID: "rzp_test_local",
+  RAZORPAY_KEY_SECRET: "local-razorpay-secret",
+  RAZORPAY_DONATIONS_KEY_ID: "rzp_test_local",
+  RAZORPAY_DONATIONS_KEY_SECRET: "local-razorpay-secret",
+  RAZORPAY_SHOP_KEY_ID: "rzp_test_local",
+  RAZORPAY_SHOP_KEY_SECRET: "local-razorpay-secret",
+  RECEIPT_WHATSAPP_PROVIDER: "gupshup",
+  FRONTEND_URL: "https://www.harekrishnavizag.org",
+};
+const runJob = (S, mod, fn, args = "{}") => {
+  const env = {
+    PATH: process.env.PATH,
+    HOME: process.env.HOME,
+    ...MOCK_ENV,
+    MOCK_STATE: statePath(envName, S.tag),
+    MOCK_LOG: logPath(envName, S.tag),
+    NODE_OPTIONS: `--import=${ROOT}/scripts/parity/mocks/preload.mjs`,
+  };
+  let r;
+  if (S.tag === "baseline") {
+    env.MONGO_URI = process.env.SRC_MONGO_URI;
+    const code = `const m=require("mongoose");(async()=>{await m.connect(process.env.MONGO_URI);const r=await require("./src/${mod}").${fn}(${args});console.log("RESULT "+JSON.stringify(r===undefined?null:r));await new Promise(r=>setTimeout(r,500));process.exit(0)})().catch(e=>{console.log("RESULT ERROR "+e.message);process.exit(0)})`;
+    r = spawnSync("node", ["-e", code], { cwd: BASELINE, env, encoding: "utf8", timeout: 120000 });
+  } else {
+    env.DATABASE_URL = process.env.DATABASE_URL;
+    const code = `import {connectDb,closeDb} from "./src/db/pg.js";await connectDb();try{const r=await (await import("./src/${mod}")).${fn}(${args});console.log("RESULT "+JSON.stringify(r===undefined?null:r))}catch(e){console.log("RESULT ERROR "+e.message)}await new Promise(r=>setTimeout(r,500));await closeDb();process.exit(0)`;
+    r = spawnSync("node", ["--input-type=module", "-e", code], { cwd: ROOT, env, encoding: "utf8", timeout: 120000 });
+  }
+  const line =
+    (r.stdout || "").split("\n").find((l) => l.startsWith("RESULT ")) ||
+    `RESULT NOOUTPUT ${(r.stderr || "").slice(-300)}`;
+  return line.slice(7);
+};
+const ago = (min) => new Date(Date.now() - min * 60 * 1000);
+const setCreated = async (S, id, when, extra = {}) => {
+  if (S.tag === "baseline")
+    await mDon.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { createdAt: when, updatedAt: when, ...extra } },
+      { timestamps: false }
+    );
+  else await pq("update donations set created_at=$2, updated_at=$2 where id=$1", [id, when]);
+};
 const results = [];
 async function scenario(name, fn, { keep = [], ignoreOutbound = false } = {}) {
-  if (only && !name.includes(only)) return;
+  if (only && !only.split(",").some((o) => name.includes(o))) return;
   const transcripts = {};
   for (const S of SERVERS) {
     clearLog(envName, S.tag);
@@ -174,12 +245,38 @@ async function scenario(name, fn, { keep = [], ignoreOutbound = false } = {}) {
   const logs = { baseline: mask(readLog(envName, "baseline")), new: mask(readLog(envName, "new")) };
   const cmp = compareLogs(logs.baseline, logs.new);
   const unm = [...logs.baseline, ...logs.new].filter((e) => e.unmocked);
-  const ok = d.length === 0 && (ignoreOutbound || cmp.equal) && unm.length === 0;
+  const hadError = [...transcripts.baseline, ...transcripts.new].some((x) => x.error);
+  const ok = !hadError && d.length === 0 && (ignoreOutbound || cmp.equal) && unm.length === 0;
   report(ok, `${name} (http/rows ${a.length} steps, outbound ${logs.baseline.length}/${logs.new.length})`);
-  if (d.length) console.log("    transcript diff:\n      " + d.slice(0, 10).map((x) => x.slice(0, 260)).join("\n      "));
-  if (!cmp.equal && !ignoreOutbound) console.log("    " + cmp.report.split("\n").slice(0, 14).map((x) => x.slice(0, 260)).join("\n    "));
+  if (d.length)
+    console.log(
+      "    transcript diff:\n      " +
+        d
+          .slice(0, 10)
+          .map((x) => x.slice(0, 260))
+          .join("\n      ")
+    );
+  if (!cmp.equal && !ignoreOutbound)
+    console.log(
+      "    " +
+        cmp.report
+          .split("\n")
+          .slice(0, 14)
+          .map((x) => x.slice(0, 260))
+          .join("\n    ")
+    );
   if (unm.length) console.log("    unmocked:", [...new Set(unm.map((e) => e.host + e.path))].join(", "));
-  if (process.env.VERBOSE) console.log("    " + transcripts.baseline.filter((x) => x.status).map((x) => `${x.label}:${x.status}`).join(" | "));
+  if (process.env.VERBOSE)
+    console.log(
+      "    " +
+        transcripts.baseline
+          .filter((x) => x.status)
+          .map((x) => `${x.label}:${x.status}`)
+          .join(" | ")
+    );
+  if (process.env.VERBOSE)
+    for (const x of transcripts.baseline.concat(transcripts.new))
+      if (x.result || x.error) console.log("    ", x.label, x.result || x.error);
   results.push({ name, ok });
 }
 
@@ -574,8 +671,16 @@ await scenario("DCC down then sweep + resend-receipts + admin reconcile", async 
   await S.snap("after push one", id);
   await adm("resend whatsapp", `/donations/${id}/resend-whatsapp`, "POST");
   await adm("resend receipt", `/donations/${id}/resend-receipt`, "POST");
-  await adm("resend recent whatsapp", "/donations/resend-recent-whatsapp", "POST", { hours: 0, limit: 5, dryRun: false });
-  const o2 = await S.step("order2", { method: "POST", path: "/payments/order", body: orderBody({ sourcePage: "donations" }) });
+  await adm("resend recent whatsapp", "/donations/resend-recent-whatsapp", "POST", {
+    hours: 0,
+    limit: 5,
+    dryRun: false,
+  });
+  const o2 = await S.step("order2", {
+    method: "POST",
+    path: "/payments/order",
+    body: orderBody({ sourcePage: "donations" }),
+  });
   payOrder(envName, S.tag, o2.data.orderId, { id: "pay_d2" });
   setState(envName, S.tag, { dcc: { failNext: 1, status: 500, body: { Message: "DCC scripted outage" } } });
   await S.step("webhook2", paidWebhook(S, "default", o2.data.orderId, "pay_d2"));
@@ -583,7 +688,9 @@ await scenario("DCC down then sweep + resend-receipts + admin reconcile", async 
   await adm("dcc push all", "/donations/dcc-push-all", "POST");
   await sleep(3000);
   await S.snap("after push all", o2.data.donationId);
-  await adm("set receipt number", `/donations/${o2.data.donationId}/receipt-number`, "PUT", { receiptNumber: "HKMI|MANUAL|1" });
+  await adm("set receipt number", `/donations/${o2.data.donationId}/receipt-number`, "PUT", {
+    receiptNumber: "HKMI|MANUAL|1",
+  });
   await adm("reconcile-pending admin", "/donations-admin/reconcile-pending", "POST", { fix: true });
   await S.snap("final", o.data.donationId);
 });
@@ -760,6 +867,8 @@ await scenario(
     const prod =
       (await mdb.collection("products").findOne({ status: { $in: ["published", "active"] } })) ||
       (await mdb.collection("products").findOne({}));
+    if (S.tag === "baseline") await mdb.collection("products").updateOne({ _id: prod._id }, { $set: { stock: 50 } });
+    else await pq("update products set stock = 50 where id = $1", [String(prod._id)]);
     const items = [
       {
         productId: String(prod._id),
@@ -878,6 +987,140 @@ await scenario(
   },
   { ignoreOutbound: false }
 );
+
+await scenario(
+  "job: reconcile (orders + stale subscriptions) and DCC sweep",
+  async (S) => {
+    if (S.tag === "baseline")
+      await mDon.updateMany({ status: { $in: ["pending", "failed"] } }, { $set: { lastReconcileCheckAt: new Date() } });
+    else await pq("update donations set last_reconcile_check_at = now() where status in ('pending','failed')");
+    const mk = async (l, body = {}) =>
+      (
+        await S.step(`order ${l}`, {
+          method: "POST",
+          path: "/payments/order",
+          body: orderBody({ sourcePage: "seva-page", ...body }),
+        })
+      ).data || {};
+    const a = await mk("a");
+    const b = await mk("b");
+    const c = await mk("c");
+    const d = await mk("d", { sourcePage: "donations" });
+    const sub1 =
+      (await S.step("sub1", { method: "POST", path: "/payments/subscription", body: orderBody({ amount: 5005 }) }))
+        .data || {};
+    const sub2 =
+      (await S.step("sub2", { method: "POST", path: "/payments/subscription", body: orderBody({ amount: 5006 }) }))
+        .data || {};
+    payOrder(envName, S.tag, a.orderId, { id: "pay_ja" });
+    payOrder(envName, S.tag, b.orderId, { id: "pay_jb", status: "failed" });
+    payOrder(envName, S.tag, d.orderId, { id: "pay_jd", status: "authorized", amount: 50100 });
+    setState(envName, S.tag, {
+      razorpay: {
+        invoices: {
+          [sub1.subscriptionId]: [
+            { id: "inv_j1", status: "paid", payment_id: "pay_js1", amount: 500500, date: 1790000000 },
+          ],
+          [sub2.subscriptionId]: [],
+        },
+      },
+    });
+    for (const x of [a, b, c, d]) await setCreated(S, x.donationId, ago(90));
+    for (const x of [sub1, sub2]) await setCreated(S, x.donationId, ago(60 * 30));
+    S.t.push({
+      label: "job reconcile",
+      result: runJob(S, "jobs/reconcilePendingDonations.js", "runReconciliation").slice(0, 100),
+    });
+    await sleep(2500);
+    for (const [l, x] of [
+      ["a", a],
+      ["b", b],
+      ["c", c],
+      ["d", d],
+      ["sub1", sub1],
+      ["sub2", sub2],
+    ])
+      await S.snap(l, x.donationId);
+    // DCC sweep: a completed donation with no receipt, last attempted long ago
+    setState(envName, S.tag, { dcc: { failNext: 1, status: 500, body: { Message: "scripted" } } });
+    const e = await mk("e", { sourcePage: "donations" });
+    payOrder(envName, S.tag, e.orderId, { id: "pay_je" });
+    await S.step("webhook e", paidWebhook(S, "default", e.orderId, "pay_je"));
+    await sleep(2500);
+    const when = ago(60);
+    if (S.tag === "baseline")
+      await mDon.updateOne(
+        { _id: new ObjectId(e.donationId) },
+        { $set: { dccLastAttemptAt: when, updatedAt: when } },
+        { timestamps: false }
+      );
+    else await pq("update donations set dcc_last_attempt_at=$2, updated_at=$2 where id=$1", [e.donationId, when]);
+    S.t.push({ label: "job sweep", result: runJob(S, "jobs/dccReceiptSweep.js", "runDccSweep").slice(0, 100) });
+    await sleep(2500);
+    await S.snap("e", e.donationId);
+  },
+  { keep: [] }
+);
+
+await scenario("job: trackingSync", async (S) => {
+  const nums = [
+    ["delhivery", "DLV1000001"],
+    ["delhivery", "DLV1000002"],
+    ["dtdc", "D1000003"],
+    ["", "1234567890123"],
+  ];
+  const orders = await (S.tag === "baseline"
+    ? mdb.collection("shoporders").find({}).sort({ _id: 1 }).limit(2).toArray()
+    : pq("select id from shop_orders order by id limit 2").then((r) => r.rows));
+  const ids = orders.map((o) => String(o._id ?? o.id));
+  setState(envName, S.tag, { couriers: { byTracking: { DLV1000001: "Delivered", DLV1000002: "Shipment Lost" } } });
+  for (const [i, id] of ids.entries()) {
+    const [courier, num] = nums[i];
+    if (S.tag === "baseline")
+      await mdb.collection("shoporders").updateOne(
+        { _id: new ObjectId(id) },
+        {
+          $set: {
+            fulfilmentStatus: "shipped",
+            "tracking.courier": courier,
+            "tracking.trackingNumber": num,
+            shippedAt: new Date(),
+            statusHistory: [],
+          },
+        }
+      );
+    else
+      await pq(
+        "update shop_orders set fulfilment_status='shipped', tracking_courier=$2, tracking_number=$3, shipped_at=now(), status_history='[]' where id=$1",
+        [id, courier, num]
+      );
+  }
+  S.t.push({ label: "job tracking 1", result: runJob(S, "jobs/trackingSync.js", "runTrackingSync") });
+  S.t.push({ label: "job tracking 2", result: runJob(S, "jobs/trackingSync.js", "runTrackingSync") });
+  for (const [i, id] of ids.entries()) {
+    const doc =
+      S.tag === "baseline"
+        ? JSON.parse(JSON.stringify(await mdb.collection("shoporders").findOne({ _id: new ObjectId(id) })))
+        : (
+            await pq(
+              "select fulfilment_status, tracking_courier, tracking_number, tracking_url, needs_attention, status_history from shop_orders where id=$1",
+              [id]
+            )
+          ).rows[0];
+    const flat =
+      S.tag === "baseline"
+        ? {
+            fulfilment_status: doc.fulfilmentStatus,
+            tracking_courier: doc.tracking?.courier,
+            tracking_number: doc.tracking?.trackingNumber,
+            tracking_url: doc.tracking?.url,
+            needs_attention: doc.needsAttention,
+            status_history: (doc.statusHistory || []).map(({ status, note }) => ({ status, note })),
+          }
+        : { ...doc, status_history: (doc.status_history || []).map(({ status, note }) => ({ status, note })) };
+    S.t.push({ label: `order ${i}`, row: flat });
+  }
+});
 
 console.log(failures ? `\n${failures} scenario(s) differ` : "\nall scenarios identical");
 await mongo.close();

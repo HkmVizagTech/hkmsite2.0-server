@@ -768,6 +768,8 @@ const donationController = {
       const input = {};
       for (const key of UPDATABLE_FIELDS) if (body[key] !== undefined) input[key] = body[key];
       const patch = castDonationForUpdate(input);
+      // donor_name is NOT NULL in Postgres; Mongo stored the null.
+      if (patch.donorName === null) delete patch.donorName;
       const donation = await donations.updateById(castId(id), patch);
       if (!donation) return res.status(404).json({ message: "Donation not found" });
       res.status(200).json({ message: "Donation updated", donation });

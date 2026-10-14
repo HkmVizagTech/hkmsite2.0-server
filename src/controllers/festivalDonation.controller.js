@@ -69,9 +69,7 @@ const festivalDonationController = {
     try {
       const rawSlug = req.params.slug || "";
       const slug = String(rawSlug).trim();
-      const [festival] = await populate(
-        [await store.findOne({ slug })].filter(Boolean)
-      );
+      const [festival] = await populate([await store.findOne({ slug })].filter(Boolean));
       if (!festival) {
         return res.status(404).json({ message: "Festival donation page not found" });
       }

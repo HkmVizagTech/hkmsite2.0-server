@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { media } from "../db/tables.js";
 import { uploadToR2, deleteFromR2 } from "../utils/r2.js";
 import { mediaSchema } from "../domain/schemas.js";
-import { makeStore, castQueryId } from "../domain/store.js";
+import { makeStore, castQueryId, stripNulls } from "../domain/store.js";
 import { compilePcre, regexMatches } from "../domain/pcre.js";
 
 const store = makeStore(media, mediaSchema);
@@ -54,14 +54,14 @@ const mediaController = {
       let total;
       if (q) {
         const re = compilePcre(q);
-        const all = (await media.find({}, { sort, lean: true })).filter(
-          (m) => regexMatches(m.name, re) || regexMatches(m.tags, re)
-        );
+        const all = (await media.find({}, { sort, lean: true }))
+          .map(stripNulls)
+          .filter((m) => regexMatches(m.name, re) || regexMatches(m.tags, re));
         total = all.length;
         items = all.slice((page - 1) * limit, (page - 1) * limit + limit);
       } else {
         [items, total] = await Promise.all([
-          media.find({}, { sort, skip: (page - 1) * limit, limit, lean: true }),
+          media.find({}, { sort, skip: (page - 1) * limit, limit, lean: true }).then((docs) => docs.map(stripNulls)),
           media.count({}),
         ]);
       }

@@ -74,7 +74,7 @@ async function listRegistrations(req, res) {
     if (re) {
       const all = (await registrations.find(filter, { sort })).filter((r) => regexMatches(r.data?.name, re));
       total = all.length;
-      items = store.shapeAll(all.slice(win.skip, win.limit == null ? undefined : win.skip + win.limit));
+      items = await store.decorate(all.slice(win.skip, win.limit == null ? undefined : win.skip + win.limit));
     } else {
       total = await registrations.count(filter);
       items = await store.find(filter, { sort, skip: win.skip || undefined, limit: win.limit ?? undefined });

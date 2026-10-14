@@ -1,7 +1,7 @@
 import { templeDevotees } from "../db/tables.js";
 import { many } from "../db/pg.js";
 import { templeDevoteeSchema } from "../domain/schemas.js";
-import { makeStore, castQueryId } from "../domain/store.js";
+import { makeStore, castQueryId, stripNulls } from "../domain/store.js";
 
 const store = makeStore(templeDevotees, templeDevoteeSchema);
 
@@ -25,7 +25,10 @@ const templeDevoteeController = {
   adminList: async (req, res) => {
     try {
       const rows = await byName("");
-      res.status(200).json({ success: true, devotees: rows.map((r) => shape(templeDevotees.fromRow(r, { lean: true }))) });
+      res.status(200).json({
+        success: true,
+        devotees: rows.map((r) => shape(stripNulls(templeDevotees.fromRow(r, { lean: true })))),
+      });
     } catch (err) {
       console.error("templeDevotee.adminList error:", err);
       res.status(500).json({ success: false, message: "Server error" });

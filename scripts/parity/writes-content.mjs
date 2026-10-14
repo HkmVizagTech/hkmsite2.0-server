@@ -140,6 +140,8 @@ async function scenario(base) {
   };
 
   // ---------- users (needed for blogs_admin / preacher tokens)
+  await T("user logout", { method: "POST", path: "/users/logout" });
+  await T("ekadashi campaign", { path: "/ekadashi-campaign" });
   await T("user register missing", { method: "POST", path: "/users/register", token: admin, json: { name: "x" } });
   await T("user register short pw", {
     method: "POST",
@@ -1278,8 +1280,8 @@ const ZERO = "000000000000000000000000";
     json: { title: "Fix S", slug: "fix-s", createdBy: ZERO, _id: ZERO, createdAt: "2000-01-01" },
   });
   check(
-    "showcase POST ignores _id/createdBy",
-    sc.status === 201 && sc.data.page._id !== ZERO && sc.data.page.createdBy === adminId,
+    "showcase POST: createdBy from the token, _id/createdAt honoured as before",
+    sc.status === 201 && sc.data.page._id === ZERO && sc.data.page.createdBy === adminId,
     JSON.stringify(sc.data).slice(0, 200)
   );
   const su = await http(B, {

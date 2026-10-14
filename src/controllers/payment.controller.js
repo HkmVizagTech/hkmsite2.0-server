@@ -464,19 +464,25 @@ const paymentController = {
 
   verifyPayment: async (req, res) => {
     try {
-      const { razorpay_order_id, razorpay_payment_id, razorpay_signature, razorpay_subscription_id, donationId } =
-        req.body;
+      let { razorpay_order_id, razorpay_payment_id, razorpay_signature, razorpay_subscription_id } = req.body;
+      const { donationId } = req.body;
       if (!razorpay_payment_id || !razorpay_signature) {
         return res.status(400).json({ message: "Payment verification details missing" });
       }
       const fields = [razorpay_order_id, razorpay_payment_id, razorpay_signature, razorpay_subscription_id, donationId];
-      if (fields.some((v) => v !== undefined && v !== null && typeof v !== "string")) {
+      // Objects/arrays would have been run as Mongo operator queries; scalars were cast to strings by Mongoose.
+      if (fields.some((v) => v !== null && typeof v === "object")) {
         return res.status(400).json({ message: "Payment verification details missing" });
       }
       const isSubscription = !!razorpay_subscription_id;
       if (!isSubscription && !razorpay_order_id) {
         return res.status(400).json({ message: "Payment verification details missing" });
       }
+      const asText = (v) => (typeof v === "number" || typeof v === "boolean" ? String(v) : v);
+      razorpay_order_id = asText(razorpay_order_id);
+      razorpay_payment_id = asText(razorpay_payment_id);
+      razorpay_signature = asText(razorpay_signature);
+      razorpay_subscription_id = asText(razorpay_subscription_id);
 
       const query = donationId
         ? { _id: castPaymentDonationId(donationId) }
@@ -485,15 +491,6 @@ const paymentController = {
           : { razorpayOrderId: razorpay_order_id };
       const donation = await donations.findOne(query, { sort: { createdAt: 1, _id: 1 } });
       if (!donation) return res.status(404).json({ message: "Donation not found" });
-
-      // The signature only proves the signed order/subscription was paid; the donation being
-      // completed must be the one that order/subscription belongs to.
-      const belongsToPayment = isSubscription
-        ? donation.subscriptionId === razorpay_subscription_id
-        : donation.razorpayOrderId === razorpay_order_id;
-      if (!belongsToPayment) {
-        return res.status(400).json({ message: "Payment does not match this donation" });
-      }
 
       const account = resolveAccount(donation.paymentAccount);
       if (!account.key_secret) return res.status(500).json({ message: "Razorpay keys not configured on server" });
@@ -506,6 +503,15 @@ const paymentController = {
       const expected = crypto.createHmac("sha256", account.key_secret).update(signedBody).digest("hex");
       if (!safeEqual(expected, razorpay_signature)) {
         return res.status(400).json({ message: "Invalid payment signature" });
+      }
+
+      // The signature only proves the signed order/subscription was paid; the donation being
+      // completed must be the one that order/subscription belongs to.
+      const belongsToPayment = isSubscription
+        ? donation.subscriptionId === razorpay_subscription_id
+        : donation.razorpayOrderId === razorpay_order_id;
+      if (!belongsToPayment) {
+        return res.status(400).json({ message: "Payment does not match this donation" });
       }
 
       const updated = await markDonationCompleted({

@@ -5,6 +5,7 @@ import path from "node:path";
 import { blogs } from "../db/tables.js";
 import { query } from "../db/pg.js";
 import { BLOG_CATEGORIES, computeReadTime } from "../domain/blog.js";
+import { blogSchema } from "../domain/schemas.js";
 import { uploadToR2 } from "../utils/r2.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -29,7 +30,7 @@ async function ensureBlogDrafts() {
   for (const e of entries) {
     try {
       if (!e.slug || !e.title || !e.file) throw new Error("entry missing slug/title/file");
-      if (await blogs.exists({ slug: e.slug })) {
+      if (await blogs.exists({ slug: String(e.slug).toLowerCase().trim() })) {
         skipped++;
         continue;
       }
@@ -44,13 +45,11 @@ async function ensureBlogDrafts() {
         }
       }
 
-      await blogs.insert({
+      const doc = blogSchema.create({
         title: e.title,
         slug: e.slug,
         excerpt: e.excerpt || "",
         content,
-        readTime: computeReadTime(content),
-        publishedAt: new Date(),
         coverImage,
         category: BLOG_CATEGORIES.includes(e.category) ? e.category : "Spiritual Knowledge",
         tags: Array.isArray(e.tags) ? e.tags : [],
@@ -60,6 +59,9 @@ async function ensureBlogDrafts() {
         metaTitle: e.metaTitle || "",
         metaDescription: e.metaDescription || e.excerpt || "",
       });
+      doc.readTime = computeReadTime(doc.content);
+      doc.publishedAt = new Date();
+      await blogs.insert(doc);
       created++;
     } catch (err) {
       failed++;

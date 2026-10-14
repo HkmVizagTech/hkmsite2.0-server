@@ -287,7 +287,11 @@ export const userSchema = defineModel("user", {
   name: { type: String, required: true },
   email: { type: String, required: true },
   password: { type: String, required: true },
-  role: { type: String, enum: ["user", "donations_admin", "blogs_admin", "shop_admin", "preacher", "admin"], default: "user" },
+  role: {
+    type: String,
+    enum: ["user", "donations_admin", "blogs_admin", "shop_admin", "preacher", "admin"],
+    default: "user",
+  },
   allowedModules: { type: [String], default: [] },
   status: { type: String, enum: ["active", "inactive"], default: "active" },
   mustChangePassword: { type: Boolean, default: false },

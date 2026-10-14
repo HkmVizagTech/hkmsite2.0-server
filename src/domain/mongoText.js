@@ -32,7 +32,8 @@ const inRanges = (ranges, cp) => {
 
 const lowerChar = (ch, cp) => {
   const out = ch.toLowerCase();
-  if (out.length > 1 || out.codePointAt(0) !== cp) return [...out].filter((c) => !inRanges(STRIPPED, c.codePointAt(0))).join("");
+  if (out.length > 1 || out.codePointAt(0) !== cp)
+    return [...out].filter((c) => !inRanges(STRIPPED, c.codePointAt(0))).join("");
   return out;
 };
 const baseChar = (ch, cp) => (inRanges(FOLD_NFD, cp) ? ch.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase() : ch);
@@ -184,7 +185,8 @@ export function stem(input) {
   // mark consonant y
   let chars = [...w];
   if (chars[0] === "y") chars[0] = "Y";
-  for (let i = 1; i < chars.length; i++) if (chars[i] === "y" && VOWELS.has(chars[i - 1]) && chars[i - 1] !== "y") chars[i] = "Y";
+  for (let i = 1; i < chars.length; i++)
+    if (chars[i] === "y" && VOWELS.has(chars[i - 1]) && chars[i - 1] !== "y") chars[i] = "Y";
   w = chars.join("");
   let [r1, r2] = regions(w);
   const inR1 = (suffixLen) => w.length - suffixLen >= r1;

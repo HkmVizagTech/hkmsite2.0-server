@@ -97,7 +97,9 @@ const volunteerController = {
     try {
       const event = await volunteerEvents.deleteById(castQueryId(req.params.id, "volunteerEvent"));
       if (!event) return res.status(404).json({ message: "Volunteer event not found" });
-      await volunteerRegistrations.deleteMany({ eventId: castQueryId(req.params.id, "volunteerRegistration", "eventId") });
+      await volunteerRegistrations.deleteMany({
+        eventId: castQueryId(req.params.id, "volunteerRegistration", "eventId"),
+      });
       res.status(200).json({ message: "Volunteer event deleted" });
     } catch (err) {
       console.error("Volunteer delete error:", err);
@@ -186,9 +188,7 @@ const volunteerController = {
 
   deleteRegistration: async (req, res) => {
     try {
-      const registration = await volunteerRegistrations.deleteById(
-        castQueryId(req.params.id, "volunteerRegistration")
-      );
+      const registration = await volunteerRegistrations.deleteById(castQueryId(req.params.id, "volunteerRegistration"));
       if (!registration) return res.status(404).json({ message: "Registration not found" });
       await volunteerEvents.updateById(castQueryId(registration.eventId, "volunteerEvent"), {
         $inc: { filledSlots: -1 },

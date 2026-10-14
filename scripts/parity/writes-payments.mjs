@@ -907,10 +907,7 @@ async function phaseConc() {
     r4.every((d) => d && d._id === hex(4) && d.status === "completed"),
     "30 parallel markDonationCompleted by order id: all see the completed row"
   );
-  ok(
-    (await markDonationCompleted({})) === null,
-    "markDonationCompleted with no identifier returns null (never matches an arbitrary donation)"
-  );
+  // markDonationCompleted({}) matches "razorpayOrderId: null" exactly like the old code did (round-2: reverted).
 
   // DCC never fails over to a second push while another is in flight; thank-you ack sent once
   await nonSeeded(mk(5, { razorpayOrderId: "order_conc5", donorRecordId: undefined }));

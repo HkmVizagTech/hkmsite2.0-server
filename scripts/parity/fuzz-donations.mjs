@@ -140,7 +140,8 @@ const QUERY_VALUES = [
   "999999999999",
   "x".repeat(300),
 ];
-const BODY_FIELDS = [
+const FIELD_FILTER = opt("fields")?.split(",");
+const ALL_BODY_FIELDS = [
   "name",
   "title",
   "email",
@@ -175,6 +176,7 @@ const BODY_FIELDS = [
   "eventId",
   "url",
 ];
+const BODY_FIELDS = FIELD_FILTER ?? ALL_BODY_FIELDS;
 const BODY_VALUES = [
   null,
   "",

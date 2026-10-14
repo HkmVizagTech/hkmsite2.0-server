@@ -93,7 +93,11 @@ const castDateRaw = (value) => {
   let date;
   if (typeof value === "boolean") throw new Error("assert");
   if (typeof value === "number") date = new Date(value);
-  else if (typeof value === "string" && !Number.isNaN(Number(value)) && (Number(value) >= 275761 || Number(value) < -271820))
+  else if (
+    typeof value === "string" &&
+    !Number.isNaN(Number(value)) &&
+    (Number(value) >= 275761 || Number(value) < -271820)
+  )
     date = new Date(Number(value));
   else if (typeof value.valueOf === "function") date = new Date(value.valueOf());
   else date = new Date(value);
@@ -151,7 +155,11 @@ const compileSchema = (def, { _id = true, name = "" } = {}) => {
   };
   const define = (path, value) => {
     // plain nested object without a `type`
-    if (isObj(value) && !value.__sub && !("type" in value && (typeOf(value.type) || Array.isArray(value.type) || value.type?.__sub))) {
+    if (
+      isObj(value) &&
+      !value.__sub &&
+      !("type" in value && (typeOf(value.type) || Array.isArray(value.type) || value.type?.__sub))
+    ) {
       schema.nested.add(path);
       walk(value, path + ".");
       return;
@@ -401,14 +409,22 @@ export function defineModel(name, def, { timestamps = true } = {}) {
     const modified = [];
     const castFailed = new Set();
     const src = isObj(input) ? input : {};
-    const nullNested = [...schema.nested].filter((n) => Object.prototype.hasOwnProperty.call(src, n) && src[n] === null);
+    const nullNested = [...schema.nested].filter(
+      (n) => Object.prototype.hasOwnProperty.call(src, n) && src[n] === null
+    );
     for (const n of nullNested) setPath(doc, n, null);
-    const suppressed = [...schema.nested].filter((n) => Object.prototype.hasOwnProperty.call(src, n) && !isObj(src[n]));
+    const suppressed = [...schema.nested].filter(
+      (n) => Object.prototype.hasOwnProperty.call(src, n) && src[n] !== undefined && !isObj(src[n])
+    );
     const literalDotted = (path) => Object.prototype.hasOwnProperty.call(src, path) && path.includes(".");
     const assignOrder = [...schema.paths].sort(([a], [b]) => Number(literalDotted(a)) - Number(literalDotted(b)));
     for (const [path, p] of assignOrder) {
       let v = getInput(src, path);
-      if (v === undefined) continue;
+      if (v === undefined) {
+        // `{ path: undefined }` marks the path as set (validated in set order), unlike a missing key.
+        if (Object.prototype.hasOwnProperty.call(src, path)) modified.push(path);
+        continue;
+      }
       try {
         v = p.kind === "Array" || p.kind === "DocArray" ? castArray(p, v, p.path, errors) : castScalar(p, v);
       } catch (err) {
@@ -431,7 +447,13 @@ export function defineModel(name, def, { timestamps = true } = {}) {
         defaults.push(path);
       }
     }
-    const order = [...new Set([...requiredPaths.map((p) => p.path).filter((x) => !castFailed.has(x) && !modified.includes(x)), ...modified, ...defaults])];
+    const order = [
+      ...new Set([
+        ...requiredPaths.map((p) => p.path).filter((x) => !castFailed.has(x) && !modified.includes(x)),
+        ...modified,
+        ...defaults,
+      ]),
+    ];
     const elemPaths = [];
     for (const path of order) {
       if (castFailed.has(path)) continue;
@@ -520,7 +542,12 @@ export function defineModel(name, def, { timestamps = true } = {}) {
       }
       let v;
       try {
-        v = raw === null ? null : p.kind === "Array" || p.kind === "DocArray" ? castArray(p, raw, p.path, errors) : castScalar(p, raw);
+        v =
+          raw === null
+            ? null
+            : p.kind === "Array" || p.kind === "DocArray"
+              ? castArray(p, raw, p.path, errors)
+              : castScalar(p, raw);
       } catch (err) {
         errors.set(err.path ?? path, err.message);
         castFailed.add(path);
@@ -575,7 +602,17 @@ export function defineModel(name, def, { timestamps = true } = {}) {
   };
 
   const hasPath = (key) => schema.paths.has(key) || schema.nested.has(key);
-  return { name, schema, create, castUpdate, applySave, shape, hasPath, timestamps, castScalarPath: (path, v) => castForUpdate(schema.paths.get(path), v) };
+  return {
+    name,
+    schema,
+    create,
+    castUpdate,
+    applySave,
+    shape,
+    hasPath,
+    timestamps,
+    castScalarPath: (path, v) => castForUpdate(schema.paths.get(path), v),
+  };
 }
 
 const structuredCloneDoc = (v) => {
@@ -610,7 +647,8 @@ export const pipelineBodyError = (body) => {
   if (!Array.isArray(body)) return null;
   for (const el of body) {
     if (el === null || el === undefined) return new Error("Cannot convert undefined or null to object");
-    if (typeof el !== "object" || Array.isArray(el)) return new Error("Each element of the 'pipeline' array must be an object");
+    if (typeof el !== "object" || Array.isArray(el))
+      return new Error("Each element of the 'pipeline' array must be an object");
     const keys = Object.keys(el);
     if (keys.length !== 1) return new Error("A pipeline stage specification object must contain exactly one field.");
     if (!PIPELINE_STAGES.includes(keys[0])) return new Error(`Invalid update pipeline operator: "${keys[0]}"`);

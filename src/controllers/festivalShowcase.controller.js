@@ -45,10 +45,7 @@ const populateCreator = async (docs) => {
 const festivalShowcaseController = {
   publicList: async (req, res) => {
     try {
-      const showcases = await store.find(
-        { active: true },
-        { sort: { ...SORT_FEATURED, eventDate: -1, _id: 1 } }
-      );
+      const showcases = await store.find({ active: true }, { sort: { ...SORT_FEATURED, eventDate: -1, _id: 1 } });
       res.json(
         showcases.map((doc) => {
           const { createdBy, active, ...rest } = doc;

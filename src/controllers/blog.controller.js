@@ -3,7 +3,11 @@ import { blogs } from "../db/tables.js";
 import { query, many } from "../db/pg.js";
 import { uploadToR2 } from "../utils/r2.js";
 import { BLOG_CATEGORIES, sanitizeBlogHtml, computeReadTime } from "../domain/blog.js";
-import { validateDoc, toBool } from "../domain/validate.js";
+import { blogSchema } from "../domain/schemas.js";
+import { makeStore, castQueryId, queryEq, stripNulls } from "../domain/store.js";
+import { textSearchIds } from "../domain/blogSearch.js";
+
+const store = makeStore(blogs, blogSchema);
 
 const slugify = (s) =>
   String(s || "")
@@ -91,6 +95,7 @@ const LIST_COLUMNS = [
 ].join(", ");
 
 const NEWEST_FIRST = `published_at DESC NULLS LAST, created_at DESC, id`;
+const LANDING_RECENT = `published_at DESC NULLS LAST, id`;
 const POPULAR = `views DESC, published_at DESC NULLS LAST, id`;
 
 const listBlogs = async (filter, { order = NEWEST_FIRST, limit, skip = 0 } = {}) => {
@@ -105,7 +110,7 @@ const listBlogs = async (filter, { order = NEWEST_FIRST, limit, skip = 0 } = {})
     params.push(skip);
     sql += ` OFFSET $${params.length}`;
   }
-  return (await many(sql, params)).map(blogs.fromRow);
+  return (await many(sql, params)).map((r) => stripNulls(blogs.fromRow(r, { lean: true })));
 };
 
 const publishedCategoryCounts = async () => {
@@ -114,12 +119,6 @@ const publishedCategoryCounts = async () => {
   );
   const countMap = Object.fromEntries(rows.map((r) => [r.category, r.count]));
   return BLOG_CATEGORIES.map((name) => ({ name, slug: slugify(name), count: countMap[name] || 0 }));
-};
-
-const textSearchFilter = (q) => {
-  const terms = (String(q).match(/[\p{L}\p{N}]+/gu) || []).slice(0, 20);
-  if (!terms.length) return { $raw: ["FALSE", []] };
-  return { $raw: ["search @@ to_tsquery('simple', ?)", [terms.map((t) => `${t.toLowerCase()}:*`).join(" | ")]] };
 };
 
 const uploadBlogFiles = async (req, { coverImage, authorAvatar }) => {
@@ -138,18 +137,26 @@ const uploadBlogFiles = async (req, { coverImage, authorAvatar }) => {
   return { coverImage, authorAvatar, extras };
 };
 
+const trimTag = (t) => (typeof t === "string" ? t.trim() : t);
+
 const blogController = {
   list: async (req, res) => {
     try {
       const { status, category, tag, q, featured, page = 1, limit = 12 } = req.query;
       const filter = {};
-      if (status && status !== "all") filter.status = status;
+      if (status && status !== "all") filter.status = queryEq(status, "blog", "status");
       else if (!status) filter.status = "published";
-      if (category) filter.category = category;
+      if (category) filter.category = queryEq(category, "blog", "category");
       const and = [];
-      if (tag) and.push({ $raw: ["? = ANY(tags)", [String(tag)]] });
+      if (tag) {
+        and.push(
+          Array.isArray(tag)
+            ? { $raw: ["tags = ?::text[]", [tag.map((t) => trimTag(t))]] }
+            : { $raw: ["? = ANY(tags)", [trimTag(tag)]] }
+        );
+      }
       if (featured === "true") filter.featured = true;
-      if (q) and.push(textSearchFilter(q));
+      if (q) and.push({ $raw: ["id = ANY(?)", [await textSearchIds(q)]] });
       if (and.length) filter.$and = and;
 
       const pageNum = Math.max(1, parseInt(page, 10) || 1);
@@ -168,26 +175,26 @@ const blogController = {
   landing: async (req, res) => {
     try {
       const base = { status: "published" };
-      const recents = await listBlogs(base, { limit: 5 });
-      const devotional = await listBlogs(base, { limit: 5 });
+      const recents = await listBlogs(base, { order: LANDING_RECENT, limit: 5 });
+      const devotional = await listBlogs(base, { order: LANDING_RECENT, limit: 5 });
 
       const categories = await publishedCategoryCounts();
       const populatedCategories = categories.filter((c) => c.count > 0).slice(0, 6);
       const byCategory = await Promise.all(
         populatedCategories.map(async (cat) => ({
           ...cat,
-          items: await listBlogs({ ...base, category: cat.name }, { limit: 6 }),
+          items: await listBlogs({ ...base, category: cat.name }, { order: LANDING_RECENT, limit: 6 }),
         }))
       );
 
-      let popular = await listBlogs({ ...base, featured: true }, { limit: 6 });
+      let popular = await listBlogs({ ...base, featured: true }, { order: LANDING_RECENT, limit: 6 });
       if (popular.length < 6) {
         const fill = await listBlogs(base, { order: POPULAR, limit: 6 - popular.length });
         const have = new Set(popular.map((p) => String(p._id)));
         popular = [...popular, ...fill.filter((f) => !have.has(String(f._id)))];
       }
 
-      const recent = await listBlogs(base, { limit: 7 });
+      const recent = await listBlogs(base, { order: LANDING_RECENT, limit: 7 });
 
       res.status(200).json({ recents, devotional, categories, byCategory, popular, recent });
     } catch (err) {
@@ -208,7 +215,10 @@ const blogController = {
     try {
       const { idOrSlug } = req.params;
       const isObjectId = /^[a-f\d]{24}$/i.test(idOrSlug);
-      const blog = await blogs.findOne(isObjectId ? { _id: idOrSlug } : { slug: idOrSlug });
+      // Mongoose ran the schema's lowercase/trim setters on query values too.
+      const blog = await store.findOne(
+        isObjectId ? { _id: idOrSlug.toLowerCase() } : { slug: idOrSlug.toLowerCase().trim() }
+      );
       if (!blog) return res.status(404).json({ message: "Blog not found" });
       if (blog.status !== "published" && req.query.preview !== "1") {
         return res.status(404).json({ message: "Blog not found" });
@@ -223,12 +233,12 @@ const blogController = {
 
   related: async (req, res) => {
     try {
-      const { id } = req.params;
-      const current = await blogs.findById(id, { fields: ["category"] });
+      const id = castQueryId(req.params.id, "blog");
+      const current = await blogs.findById(id, { fields: ["category"], lean: true });
       if (!current) return res.status(404).json({ message: "Blog not found" });
       const items = await listBlogs(
         { _id: { $ne: id }, status: "published", category: current.category },
-        { limit: 5 }
+        { order: LANDING_RECENT, limit: 5 }
       );
       res.status(200).json({ items });
     } catch (err) {
@@ -239,41 +249,37 @@ const blogController = {
   create: async (req, res) => {
     try {
       const { title, excerpt, content, category, status, slug, metaTitle, metaDescription, featured } = req.body;
-      validateDoc("blog", { title, content }, { required: ["title", "content"] });
-      validateDoc(
-        "blog",
-        { category, status },
-        { enums: { category: BLOG_CATEGORIES, status: ["draft", "published"] } }
-      );
 
-      const { coverImage, authorAvatar, extras } = await uploadBlogFiles(req, {
-        coverImage: req.body.coverImage || "",
-        authorAvatar: req.body.authorAvatar || "",
-      });
+      let coverImage = req.body.coverImage || "";
+      let authorAvatar = req.body.authorAvatar || "";
+      let extraImages = [];
+      ({ coverImage, authorAvatar, extras: extraImages } = await uploadBlogFiles(req, { coverImage, authorAvatar }));
 
-      const uniqueSlug = await ensureUniqueSlug(slugify(slug || title));
+      const baseSlug = slugify(slug || title);
+      const uniqueSlug = await ensureUniqueSlug(baseSlug);
+
       const author = buildAuthor({ ...req.body, authorAvatar }, req);
-      const cleanContent = sanitizeBlogHtml(content);
-      const finalStatus = status || "draft";
 
-      const blog = await blogs.insert({
-        title: String(title).trim(),
-        slug: uniqueSlug.toLowerCase().trim(),
+      const doc = blogSchema.create({
+        title,
+        slug: uniqueSlug,
         excerpt: excerpt || "",
-        content: cleanContent,
+        content: typeof content === "string" ? sanitizeBlogHtml(content) : content,
         coverImage,
-        images: extras,
+        images: extraImages,
         category: category || "Spiritual Knowledge",
         tags: parseTags(req.body.tags),
         author,
-        status: finalStatus,
-        featured: toBool(featured),
+        status: status || "draft",
+        featured: featured === "true" || featured === true,
         metaTitle: metaTitle || "",
         metaDescription: metaDescription || excerpt || "",
-        readTime: computeReadTime(cleanContent),
-        publishedAt: finalStatus === "published" ? new Date() : undefined,
         createdBy: req.user ? req.user.userId : undefined,
       });
+      doc.readTime = computeReadTime(doc.content);
+      if (doc.status === "published" && !doc.publishedAt) doc.publishedAt = new Date();
+
+      const blog = store.shape(await blogs.insert(doc));
       res.status(201).json({ message: "Blog created", blog });
     } catch (err) {
       console.error("Blog create error:", err);
@@ -284,51 +290,56 @@ const blogController = {
   update: async (req, res) => {
     try {
       const { id } = req.params;
-      const existing = await blogs.findById(id);
+      const existing = await store.findById(castQueryId(id, "blog"));
       if (!existing) return res.status(404).json({ message: "Blog not found" });
 
-      const { coverImage, authorAvatar, extras } = await uploadBlogFiles(req, {
-        coverImage: req.body.coverImage !== undefined ? req.body.coverImage : existing.coverImage || "",
-        authorAvatar: req.body.authorAvatar !== undefined ? req.body.authorAvatar : existing.author?.avatar || "",
-      });
+      let coverImage = req.body.coverImage !== undefined ? req.body.coverImage : existing.coverImage;
+      let authorAvatar =
+        req.body.authorAvatar !== undefined ? req.body.authorAvatar : (existing.author && existing.author.avatar) || "";
+      const uploaded = await uploadBlogFiles(req, { coverImage, authorAvatar });
+      ({ coverImage, authorAvatar } = uploaded);
+      const newExtras = uploaded.extras;
 
       const author = buildAuthor({ ...req.body, authorAvatar }, req);
-      const nextStatus = req.body.status ?? existing.status;
-      const nextCategory = req.body.category ?? existing.category;
-      validateDoc(
-        "blog",
-        { category: nextCategory, status: nextStatus },
-        { enums: { category: BLOG_CATEGORIES, status: ["draft", "published"] } }
-      );
 
+      const body = req.body;
       const patch = {
-        title: String(req.body.title ?? existing.title).trim(),
-        excerpt: req.body.excerpt ?? existing.excerpt,
-        category: nextCategory,
+        title: body.title ?? existing.title,
+        excerpt: body.excerpt ?? existing.excerpt,
+        content:
+          body.content != null
+            ? typeof body.content === "string"
+              ? sanitizeBlogHtml(body.content)
+              : body.content
+            : existing.content,
+        category: body.category ?? existing.category,
         author,
-        status: nextStatus,
-        metaTitle: req.body.metaTitle ?? existing.metaTitle,
-        metaDescription: req.body.metaDescription ?? existing.metaDescription,
+        status: body.status ?? existing.status,
+        metaTitle: body.metaTitle ?? existing.metaTitle,
+        metaDescription: body.metaDescription ?? existing.metaDescription,
         coverImage,
-        images: extras.length ? [...(existing.images || []), ...extras] : existing.images || [],
+        images: newExtras.length ? [...(existing.images || []), ...newExtras] : existing.images,
       };
-
-      if (req.body.content !== undefined) {
-        const cleanContent = sanitizeBlogHtml(req.body.content);
-        validateDoc("blog", { content: cleanContent }, { required: ["content"] });
-        patch.content = cleanContent;
-        if (cleanContent !== existing.content) patch.readTime = computeReadTime(cleanContent);
-      }
-      if (nextStatus !== existing.status && nextStatus === "published" && !existing.publishedAt) {
-        patch.publishedAt = new Date();
-      }
-      if (req.body.tags !== undefined) patch.tags = parseTags(req.body.tags);
-      if (req.body.featured !== undefined) patch.featured = toBool(req.body.featured);
-      if (req.body.slug !== undefined && req.body.slug !== existing.slug) {
-        patch.slug = (await ensureUniqueSlug(slugify(req.body.slug), id)).toLowerCase().trim();
+      if (body.tags !== undefined) patch.tags = parseTags(body.tags);
+      if (body.featured !== undefined) {
+        patch.featured = body.featured === "true" || body.featured === true;
       }
 
-      const blog = await blogs.updateById(id, patch);
+      if (body.slug !== undefined && body.slug !== existing.slug) {
+        const base = slugify(body.slug);
+        patch.slug = await ensureUniqueSlug(base, existing._id);
+      }
+
+      const { doc, modified } = blogSchema.applySave(existing, patch);
+      let blog = existing;
+      if (Object.keys(modified).length) {
+        if ("content" in modified) modified.readTime = computeReadTime(doc.content);
+        if ("status" in modified && doc.status === "published" && !existing.publishedAt) {
+          modified.publishedAt = new Date();
+        }
+        blog = await store.saveChanges(existing._id, modified);
+      }
+
       res.status(200).json({ message: "Blog updated", blog });
     } catch (err) {
       console.error("Blog update error:", err);
@@ -339,10 +350,10 @@ const blogController = {
   // A blogs_admin's delete files a pending request instead of deleting.
   delete: async (req, res) => {
     try {
-      const { id } = req.params;
+      const id = castQueryId(req.params.id, "blog");
 
       if (req.user.role === "blogs_admin") {
-        const blog = await blogs.updateById(id, {
+        const blog = await store.updateById(id, {
           deletionRequested: true,
           deletionRequestedBy: req.user.userId,
           deletionRequestedAt: new Date(),
@@ -365,7 +376,7 @@ const blogController = {
   deletionRequests: async (req, res) => {
     try {
       const { rows } = await query(
-        `SELECT b.id, b.title, b.slug, b.category, b.cover_image, b.deletion_requested_at,
+        `SELECT b.id, b.title, b.slug, b.category, b.cover_image, b.deletion_requested_at, b.deletion_requested_by,
                 u.id AS u_id, u.name AS u_name, u.email AS u_email
            FROM blogs b LEFT JOIN users u ON u.id = b.deletion_requested_by
           WHERE b.deletion_requested = true
@@ -381,6 +392,7 @@ const blogController = {
           deletion_requested_at: r.deletion_requested_at,
         });
         if (r.u_id) doc.deletionRequestedBy = { _id: r.u_id, name: r.u_name, email: r.u_email };
+        else if (r.deletion_requested_by) doc.deletionRequestedBy = null;
         return doc;
       });
       res.status(200).json({ blogs: items });
@@ -391,7 +403,7 @@ const blogController = {
 
   approveDeletion: async (req, res) => {
     try {
-      const { id } = req.params;
+      const id = castQueryId(req.params.id, "blog");
       const blog = await blogs.findOne({ _id: id, deletionRequested: true }, { fields: ["slug"] });
       if (!blog) return res.status(404).json({ message: "No pending deletion request for this post" });
       await blogs.deleteById(id);
@@ -403,8 +415,7 @@ const blogController = {
 
   rejectDeletion: async (req, res) => {
     try {
-      const { id } = req.params;
-      const blog = await blogs.updateById(id, {
+      const blog = await store.updateById(castQueryId(req.params.id, "blog"), {
         deletionRequested: false,
         deletionRequestedBy: null,
         deletionRequestedAt: null,

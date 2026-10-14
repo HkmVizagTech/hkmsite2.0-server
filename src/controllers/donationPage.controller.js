@@ -1,4 +1,5 @@
 import { donationPages } from "../db/tables.js";
+import { query } from "../db/pg.js";
 import { donationPageSchema } from "../domain/schemas.js";
 
 const defaultDonationPage = {
@@ -88,11 +89,21 @@ const mergeWithDefaults = (page) => ({
       : defaultDonationPage.galleryImages,
 });
 
+// Mongo kept an explicit `field: null` apart from a missing field (it then overrides the default shown
+// to visitors); the NULL column cannot, so the nulled fields are remembered in `extra`.
+const NULLS = "$nulls";
+const readPage = async () => {
+  const page = await donationPages.findOne({ key: "donations" }, { lean: true });
+  if (!page) return page;
+  for (const k of page[NULLS] || []) page[k] = null;
+  delete page[NULLS];
+  return page;
+};
+
 const donationPageController = {
   get: async (req, res) => {
     try {
-      const page = await donationPages.findOne({ key: "donations" }, { lean: true });
-      return res.json({ page: mergeWithDefaults(page) });
+      return res.json({ page: mergeWithDefaults(await readPage()) });
     } catch (err) {
       console.error("donationPageController.get error:", err);
       return res.status(500).json({ message: "Server error" });
@@ -129,15 +140,30 @@ const donationPageController = {
       if (req.user && req.user.userId) payload.updatedBy = req.user.userId;
 
       const cast = donationPageSchema.castUpdate(payload);
-      const existing = await donationPages.findOne({ key: "donations" }, { fields: ["key"] });
-      if (existing) await donationPages.updateById(existing._id, cast);
+      const existing = await donationPages.findOne({ key: "donations" }, { lean: true });
+      let id = existing?._id;
+      if (existing) await donationPages.updateById(id, cast);
       else {
         const defaults = donationPageSchema.create({});
-        await donationPages.insert({ ...defaults, ...cast });
+        id = (await donationPages.insert({ ...defaults, ...cast }))._id;
       }
-      const page = await donationPages.findOne({ key: "donations" }, { lean: true });
+      const before = existing?.[NULLS] || [];
+      const nulls = [
+        ...new Set([
+          ...before.filter((k) => cast[k] === undefined),
+          ...Object.keys(cast).filter((k) => cast[k] === null),
+        ]),
+      ];
+      if (nulls.length || before.length) {
+        await query(
+          nulls.length
+            ? `UPDATE donation_pages SET extra = jsonb_set(COALESCE(extra, '{}'::jsonb), '{${NULLS}}', $2::jsonb) WHERE id = $1`
+            : `UPDATE donation_pages SET extra = NULLIF(extra - '${NULLS}', '{}'::jsonb) WHERE id = $1`,
+          nulls.length ? [id, JSON.stringify(nulls)] : [id]
+        );
+      }
 
-      return res.json({ message: "Donation page updated", page: mergeWithDefaults(page) });
+      return res.json({ message: "Donation page updated", page: mergeWithDefaults(await readPage()) });
     } catch (err) {
       console.error("donationPageController.update error:", err);
       return res.status(500).json({ message: "Server error" });

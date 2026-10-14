@@ -573,3 +573,26 @@ ALTER TABLE shop_order_items
   ALTER COLUMN unit_price TYPE numeric, ALTER COLUMN mrp TYPE numeric, ALTER COLUMN line_total TYPE numeric;
 ALTER TABLE shop_settings
   ALTER COLUMN flat_shipping_charge TYPE numeric, ALTER COLUMN free_shipping_above TYPE numeric;
+
+-- ───────────── Mongoose-compatible relaxations (content): store every value Mongoose accepted ─────────────
+ALTER TABLE events DROP CONSTRAINT IF EXISTS events_status_check;
+ALTER TABLE festival_showcases DROP CONSTRAINT IF EXISTS festival_showcases_status_check;
+ALTER TABLE galleries DROP CONSTRAINT IF EXISTS galleries_status_check;
+ALTER TABLE galleries DROP CONSTRAINT IF EXISTS galleries_type_check;
+ALTER TABLE important_dates DROP CONSTRAINT IF EXISTS important_dates_type_check;
+ALTER TABLE volunteer_events DROP CONSTRAINT IF EXISTS volunteer_events_category_check;
+ALTER TABLE volunteer_events DROP CONSTRAINT IF EXISTS volunteer_events_status_check;
+ALTER TABLE volunteer_registrations DROP CONSTRAINT IF EXISTS volunteer_registrations_status_check;
+ALTER TABLE donor_issues DROP CONSTRAINT IF EXISTS donor_issues_status_check;
+ALTER TABLE events ALTER COLUMN title DROP NOT NULL, ALTER COLUMN description DROP NOT NULL, ALTER COLUMN date DROP NOT NULL;
+ALTER TABLE galleries ALTER COLUMN title DROP NOT NULL, ALTER COLUMN images DROP NOT NULL, ALTER COLUMN date DROP NOT NULL;
+ALTER TABLE important_dates ALTER COLUMN title DROP NOT NULL, ALTER COLUMN date DROP NOT NULL;
+ALTER TABLE volunteer_events ALTER COLUMN title DROP NOT NULL, ALTER COLUMN description DROP NOT NULL, ALTER COLUMN date DROP NOT NULL;
+ALTER TABLE festival_showcases ALTER COLUMN title DROP NOT NULL, ALTER COLUMN slug DROP NOT NULL;
+ALTER TABLE festival_donations ALTER COLUMN title DROP NOT NULL, ALTER COLUMN slug DROP NOT NULL;
+ALTER TABLE volunteer_events ALTER COLUMN slots TYPE double precision, ALTER COLUMN filled_slots TYPE double precision;
+ALTER TABLE festival_showcases ALTER COLUMN featured_order TYPE double precision;
+ALTER TABLE hero_banners ALTER COLUMN "order" TYPE double precision;
+ALTER TABLE temple_devotees ALTER COLUMN dcc_enrolled_by_id TYPE double precision;
+ALTER TABLE darshans ALTER COLUMN vaikuntham_id TYPE double precision, ALTER COLUMN position TYPE double precision;
+ALTER TABLE media ALTER COLUMN width TYPE double precision, ALTER COLUMN height TYPE double precision, ALTER COLUMN bytes TYPE double precision;

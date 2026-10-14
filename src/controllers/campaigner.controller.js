@@ -2,7 +2,7 @@ import { campaigners, donations, templeDevotees } from "../db/tables.js";
 import { many, one } from "../db/pg.js";
 import { cacheWrap, cacheKeys } from "../cache/memoryCache.js";
 import { campaignerSchema } from "../domain/schemas.js";
-import { makeStore, castQueryId } from "../domain/store.js";
+import { makeStore, castQueryId, stripNulls } from "../domain/store.js";
 import { IST } from "../config/timezone.js";
 
 const store = makeStore(campaigners, campaignerSchema);
@@ -200,7 +200,7 @@ const campaignerController = {
         ),
       ]);
       const list = rows.map(({ dev_id, dev_name, ...row }) => ({
-        ...campaigners.fromRow(row, { lean: true }),
+        ...stripNulls(campaigners.fromRow(row, { lean: true })),
         devoteeName: dev_name,
         devoteeFound: Boolean(dev_id),
       }));
@@ -215,7 +215,8 @@ const campaignerController = {
           mobile: c.mobile,
           slug: c.slug,
           campaignType: c.campaignType || "SQFT",
-          referredByDevotee: c.referredByDevotee && c.devoteeFound ? { _id: c.referredByDevotee, name: c.devoteeName } : null,
+          referredByDevotee:
+            c.referredByDevotee && c.devoteeFound ? { _id: c.referredByDevotee, name: c.devoteeName } : null,
           goalSqft: c.goalSqft || 0,
           message: c.message || "",
           status: c.status,
