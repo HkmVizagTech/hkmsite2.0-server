@@ -6,9 +6,6 @@ import { donorAuthMiddleware } from "../middlewares/auth.middleware.js";
 
 const shopRouter = express.Router();
 
-// Same reasoning as the donation order limiter: checkout hits Razorpay's
-// order API, and one person hammering "Pay" must not burn through the
-// account-wide rate limit that every other devotee shares.
 const checkoutRateLimit = rateLimit({
   windowMs: 60 * 1000,
   max: 20,
@@ -31,11 +28,6 @@ shopRouter.post("/cart/quote", shopOrderController.quoteCart);
 // ---- Checkout (customer session) ----
 shopRouter.post("/orders", donorAuthMiddleware, checkoutRateLimit, shopOrderController.createOrder);
 
-// Deliberately NOT behind donorAuthMiddleware. The Razorpay signature is
-// itself cryptographic proof that this exact payment succeeded, and a
-// session that expires while the devotee is inside the UPI app must not be
-// what decides whether their paid order gets confirmed. The controller
-// still enforces ownership when a session IS present.
 shopRouter.post("/orders/verify", shopOrderController.verifyPayment);
 
 // ---- Order history (customer session) ----

@@ -1,10 +1,7 @@
 // GET /donations/payment-failures?days=7 — admin: why website payments fail.
-// Built from the reasons Razorpay gives for each failed attempt
-// (donation.paymentError, via services/paymentFailure.service.js) and the
-// bank / UPI-app downtime alerts Razorpay sends.
 
-import { donationModel } from "../models/donation.model.js";
-import { paymentDowntimeModel } from "../services/paymentFailure.service.js";
+import { donations, paymentDowntimes } from "../db/tables.js";
+import { aggregate } from "../domain/donationQuery.js";
 
 const paymentFailuresController = {
   summary: async (req, res) => {
@@ -13,67 +10,66 @@ const paymentFailuresController = {
       const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
       // Website checkouts in the window (a Razorpay order was created).
-      const statusCounts = await donationModel.aggregate([
-        { $match: { createdAt: { $gte: since }, razorpayOrderId: { $exists: true, $ne: null } } },
-        { $group: { _id: "$status", n: { $sum: 1 } } },
-      ]);
-      const totals = Object.fromEntries(statusCounts.map((s) => [s._id, s.n]));
+      const checkouts = { createdAt: { $gte: since }, razorpayOrderId: { $ne: null } };
+      const statusCounts = await aggregate(checkouts, "status AS k, COUNT(*) AS n", { groupBy: "k", orderBy: "k" });
+      const totals = Object.fromEntries(statusCounts.map((s) => [s.k, s.n]));
       const started = statusCounts.reduce((a, s) => a + s.n, 0);
-      // Checkouts closed as failed because nothing was ever paid (the donor
-      // left) — counted apart from payments that were declined.
-      const notPaid = await donationModel.countDocuments({
-        createdAt: { $gte: since },
-        razorpayOrderId: { $exists: true, $ne: null },
-        status: "failed",
-        closedAsNotPaidAt: { $exists: true },
-      });
+      // Closed as failed because nothing was ever paid (the donor left) vs declined payments.
+      const notPaid = await donations.count({ ...checkouts, status: "failed", closedAsNotPaidAt: { $ne: null } });
 
       const withError = { "paymentError.at": { $gte: since } };
 
-      const reasons = await donationModel.aggregate([
-        { $match: withError },
+      const reasons = await aggregate(
+        withError,
+        `pe_description AS description, pe_reason AS reason, pe_source AS source,
+         COUNT(*) AS donations,
+         SUM(COALESCE(failed_attempts, 1)) AS attempts,
+         SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS paid_later`,
         {
-          $group: {
-            _id: { description: "$paymentError.description", reason: "$paymentError.reason", source: "$paymentError.source" },
-            donations: { $sum: 1 },
-            attempts: { $sum: { $ifNull: ["$failedAttempts", 1] } },
-            paidLater: { $sum: { $cond: [{ $eq: ["$status", "completed"] }, 1, 0] } },
-          },
-        },
-        { $sort: { donations: -1 } },
-        { $limit: 15 },
-      ]);
+          groupBy: "pe_description, pe_reason, pe_source",
+          orderBy: `donations DESC, description COLLATE "C", reason COLLATE "C", source COLLATE "C"`,
+          limit: 15,
+        }
+      );
 
-      const byMethod = await donationModel.aggregate([
-        { $match: withError },
+      const byMethod = await aggregate(
+        withError,
+        "pe_method AS method, COALESCE(pe_bank, pe_wallet, pe_upi_flow, pe_card_network) AS via, COUNT(*) AS donations",
         {
-          $group: {
-            _id: {
-              method: "$paymentError.method",
-              via: { $ifNull: ["$paymentError.bank", { $ifNull: ["$paymentError.wallet", { $ifNull: ["$paymentError.upiFlow", "$paymentError.cardNetwork"] }] }] },
-            },
-            donations: { $sum: 1 },
-          },
-        },
-        { $sort: { donations: -1 } },
-        { $limit: 15 },
-      ]);
+          groupBy: "pe_method, COALESCE(pe_bank, pe_wallet, pe_upi_flow, pe_card_network)",
+          orderBy: `donations DESC, method COLLATE "C", via COLLATE "C"`,
+          limit: 15,
+        }
+      );
 
-      const recent = await donationModel
-        .find(withError)
-        .sort({ "paymentError.at": -1 })
-        .limit(60)
-        .select("donorName donorMobile amount sevaName sourcePage status createdAt failedAttempts paymentError razorpayOrderId upiFallback.status")
-        .lean();
+      const recent = await donations.find(withError, {
+        sort: { "paymentError.at": -1, _id: 1 },
+        limit: 60,
+        fields: [
+          "donorName",
+          "donorMobile",
+          "amount",
+          "sevaName",
+          "sourcePage",
+          "status",
+          "createdAt",
+          "failedAttempts",
+          "paymentError",
+          "razorpayOrderId",
+          "upiFallback.status",
+        ],
+      });
 
-      const downtimes = await paymentDowntimeModel
-        .find({ receivedAt: { $gte: since }, event: "started" })
-        .sort({ receivedAt: -1 })
-        .limit(200)
-        .lean();
+      const downtimes = await paymentDowntimes.find(
+        { receivedAt: { $gte: since }, event: "started" },
+        { sort: { receivedAt: -1, _id: 1 }, limit: 200 }
+      );
       const downtimeGroups = {};
       for (const d of downtimes) {
-        const what = Object.values(d.instrument || {}).filter(Boolean).join("/") || "all";
+        const what =
+          Object.values(d.instrument || {})
+            .filter(Boolean)
+            .join("/") || "all";
         const k = `${d.method || "?"} · ${what}`;
         downtimeGroups[k] = (downtimeGroups[k] || 0) + 1;
       }
@@ -88,8 +84,15 @@ const paymentFailuresController = {
           notPaid, // left without paying (closed after 30 min)
           pending: totals.pending || 0, // still within the 30 minutes
         },
-        reasons: reasons.map((r) => ({ ...r._id, donations: r.donations, attempts: r.attempts, paidLater: r.paidLater })),
-        byMethod: byMethod.map((m) => ({ method: m._id.method || "unknown", via: m._id.via || "—", donations: m.donations })),
+        reasons: reasons.map((r) => ({
+          description: r.description ?? undefined,
+          reason: r.reason ?? undefined,
+          source: r.source ?? undefined,
+          donations: r.donations,
+          attempts: r.attempts,
+          paidLater: r.paid_later,
+        })),
+        byMethod: byMethod.map((m) => ({ method: m.method || "unknown", via: m.via || "—", donations: m.donations })),
         recent,
         downtime: {
           alerts: downtimes.length,
@@ -97,7 +100,13 @@ const paymentFailuresController = {
             .sort((a, b) => b[1] - a[1])
             .slice(0, 12)
             .map(([what, n]) => ({ what, n })),
-          latest: downtimes.slice(0, 15).map((d) => ({ method: d.method, instrument: d.instrument, severity: d.severity, begin: d.begin, receivedAt: d.receivedAt })),
+          latest: downtimes.slice(0, 15).map((d) => ({
+            method: d.method,
+            instrument: d.instrument,
+            severity: d.severity,
+            begin: d.begin,
+            receivedAt: d.receivedAt,
+          })),
         },
       });
     } catch (err) {

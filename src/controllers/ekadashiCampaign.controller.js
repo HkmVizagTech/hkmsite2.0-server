@@ -1,8 +1,3 @@
-/**
- * Default Ekadashi campaign content — festival-agnostic so the /ekadashi page
- * always renders valid content even before an admin has opened the editor.
- */
-
 const DEFAULT_CAMPAIGN = {
   campaignName: "Ekadashi",
   pageTitle: "Ekadashi Seva",
@@ -38,12 +33,7 @@ const DEFAULT_CAMPAIGN = {
       icon: "🍛",
       sevaName: "Anna Daan Seva",
       category: "ANNADAAN",
-      tiers: [
-        { amount: 501 },
-        { amount: 1251, default: true },
-        { amount: 2501, popular: true },
-        { amount: 3751 },
-      ],
+      tiers: [{ amount: 501 }, { amount: 1251, default: true }, { amount: 2501, popular: true }, { amount: 3751 }],
       unit: { price: 25, singular: "meal", plural: "meals" },
     },
     {
@@ -94,12 +84,7 @@ const DEFAULT_CAMPAIGN = {
       icon: "📚",
       sevaName: "Gita Daan Seva",
       category: "BD",
-      tiers: [
-        { amount: 250 },
-        { amount: 1250 },
-        { amount: 2500 },
-        { amount: 12500 },
-      ],
+      tiers: [{ amount: 250 }, { amount: 1250 }, { amount: 2500 }, { amount: 12500 }],
       unit: { price: 250, singular: "Gita", plural: "Gitas" },
     },
     {
@@ -124,8 +109,7 @@ const DEFAULT_CAMPAIGN = {
     },
     {
       title: "Gau Seva",
-      description:
-        "Serve the sacred cows with fodder, care, and shelter — an act Lord Krishna Himself cherishes.",
+      description: "Serve the sacred cows with fodder, care, and shelter — an act Lord Krishna Himself cherishes.",
       image:
         "https://pub-32ade8e1209149f980ffe2aa4ddc6c99.r2.dev/media-library/1783676646237-1783676645536-ChatGPTImageJul102026031357PM.png",
       href: "/gau-seva",
@@ -133,8 +117,7 @@ const DEFAULT_CAMPAIGN = {
     },
     {
       title: "Vastra & Alankara Seva",
-      description:
-        "Offer beautiful garments and ornaments to Sri Sri Radha Madan Mohan for the festival.",
+      description: "Offer beautiful garments and ornaments to Sri Sri Radha Madan Mohan for the festival.",
       image:
         "https://pub-32ade8e1209149f980ffe2aa4ddc6c99.r2.dev/media-library/1783677419371-1783677418690-DietyPhotos.jpeg",
       href: "/alankara-vastra-seva",
@@ -230,13 +213,6 @@ const DEFAULT_CAMPAIGN = {
     ifsc: "IDFB0080412",
   },
 };
-
-// The /ekadashi page is a single permanent, festival-agnostic page. Admin
-// editing was removed by request (2026-09) — every Ekadashi of the year
-// reuses this one fixed campaign, so nothing is read from or merged with a
-// database copy. A legacy "Shayani Ekadashi" record may still exist in the
-// DB, but this endpoint intentionally ignores it; the page always renders
-// the fixed generic Ekadashi content and banners below.
 
 const ekadashiCampaignController = {
   /** Public: returns the fixed campaign content for the /ekadashi page. */

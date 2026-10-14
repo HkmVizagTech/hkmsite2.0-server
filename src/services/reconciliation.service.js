@@ -1,56 +1,50 @@
 import { recordPaymentFailure } from "./paymentFailure.service.js";
-import { donationModel } from "../models/donation.model.js";
+import {
+  donations,
+  claimUpdate,
+  selectDonations,
+  wholePaymentError,
+  DONATIONS_PAGE_SQL_REGEX,
+} from "../domain/donationDb.js";
 import { createRazorpayInstance } from "../controllers/payment.controller.js";
 import { completeDonation } from "./paymentCompletion.service.js";
 import { AUTO_SINCE } from "./dccSweep.service.js";
 
-// Donations from before the site pushed to DCC (2 Jul 2026) that turn out to
-// be paid are completed and pushed to DCC (DCC answers with the receipt it
-// already has, if any) but the donor gets no WhatsApp so long after paying.
 const whatsAppFor = (d) => new Date(d.createdAt) >= AUTO_SINCE;
 
-// The standalone /donations page (and anything under /donations/...) has
-// its own dedicated admin — same pattern as donation.controller.js's
-// EXCLUDE_DONATIONS_PAGE. Matches "donations" exactly or "donations/<any>".
-const DONATIONS_DOMAIN_PATTERN = /^donations(\/|$)/;
+const DONATIONS_DOMAIN_PATTERN = new RegExp(DONATIONS_PAGE_SQL_REGEX);
 const EXCLUDE_DONATIONS_PAGE = { sourcePage: { $not: DONATIONS_DOMAIN_PATTERN } };
 
-// No donation stays "pending": once a checkout is this old and nothing was
-// paid, it is closed as failed. 30 minutes leaves room for slow UPI
-// approvals and bank OTPs. A donor who pays afterwards (reminder link, UPI
-// match, manual complete, a late Razorpay webhook) still gets it completed —
-// every completion path accepts a failed donation.
+// Mongo sorts null/missing first ascending; Postgres sorts them last unless told otherwise.
+const LEAST_RECENTLY_CHECKED_FIRST = "last_reconcile_check_at ASC NULLS FIRST, created_at DESC, id";
+
 const CLOSE_UNPAID_AFTER_MINUTES = Number(process.env.CLOSE_UNPAID_AFTER_MINUTES || 30);
 // A monthly seva sign-up with no paid first charge after this long.
-const CLOSE_UNAUTHORISED_SUBSCRIPTION_AFTER_HOURS = Number(process.env.CLOSE_UNAUTHORISED_SUBSCRIPTION_AFTER_HOURS || 24);
+const CLOSE_UNAUTHORISED_SUBSCRIPTION_AFTER_HOURS = Number(
+  process.env.CLOSE_UNAUTHORISED_SUBSCRIPTION_AFTER_HOURS || 24
+);
 
 /** pending -> failed, marked as "never paid" (not a declined payment). */
 async function closeAsNotPaid(donationId) {
-  await donationModel.updateOne(
-    { _id: donationId, status: "pending" },
+  await claimUpdate(
+    { _id: String(donationId), status: "pending" },
     { status: "failed", closedAsNotPaidAt: new Date() }
   );
 }
 
-/**
- * Pending donations with no Razorpay order to check: monthly seva sign-ups
- * (they have a subscription instead) and records that never got an order.
- */
 async function closeStalePendingWithoutOrder({ limit = 200, fix = false } = {}) {
   const summary = { checked: 0, completed: 0, closedNotPaid: 0, subscriptionsLeft: 0, errors: 0 };
   const cutoff = new Date(Date.now() - CLOSE_UNPAID_AFTER_MINUTES * 60 * 1000);
   const subCutoff = new Date(Date.now() - CLOSE_UNAUTHORISED_SUBSCRIPTION_AFTER_HOURS * 60 * 60 * 1000);
-  const stale = await donationModel
-    .find({ status: "pending", razorpayOrderId: { $in: [null, ""] }, createdAt: { $lte: cutoff } })
-    .sort({ lastReconcileCheckAt: 1, createdAt: -1 })
-    .limit(limit)
-    .select("_id subscriptionId paymentAccount manualEntry utrNumber createdAt")
-    .lean();
+  const stale = await selectDonations(
+    { status: "pending", razorpayOrderId: { $in: [null, ""] }, createdAt: { $lte: cutoff } },
+    { orderBy: LEAST_RECENTLY_CHECKED_FIRST, limit }
+  );
 
   for (const d of stale) {
     summary.checked++;
     try {
-      if (fix) await donationModel.updateOne({ _id: d._id }, { lastReconcileCheckAt: new Date() });
+      if (fix) await donations.updateById(d._id, { lastReconcileCheckAt: new Date() });
       if (d.manualEntry && d.utrNumber) {
         // Entered by hand with the UTR as proof of payment, but its
         // completion never ran (the server stopped mid-way): finish it.
@@ -68,14 +62,11 @@ async function closeStalePendingWithoutOrder({ limit = 200, fix = false } = {}) 
           summary.errors++;
           continue;
         }
-        // A paid invoice means the first monthly charge went through and its
-        // webhook was missed: complete with that payment. Otherwise the
-        // sign-up was never paid; if a charge comes later, the
-        // subscription.charged webhook still completes this record.
         const invoices = await created.instance.invoices.all({ subscription_id: d.subscriptionId });
         const paid = ((invoices && invoices.items) || []).find((inv) => inv.status === "paid" && inv.payment_id);
         if (paid) {
-          if (fix) await completeDonation({ donationId: d._id, paymentId: paid.payment_id, sendWhatsApp: whatsAppFor(d) });
+          if (fix)
+            await completeDonation({ donationId: d._id, paymentId: paid.payment_id, sendWhatsApp: whatsAppFor(d) });
           summary.completed++;
           continue;
         }
@@ -90,28 +81,14 @@ async function closeStalePendingWithoutOrder({ limit = 200, fix = false } = {}) 
   return summary;
 }
 
-/**
- * Checks donations (that have a Razorpay order) against Razorpay's real
- * payment records and, when fix=true, resolves them:
- *   - captured on Razorpay but not completed here -> completes it (DCC +
- *     WhatsApp via the normal pipeline) — this is the webhook-miss safety
- *     net: if a webhook delivery ever fails (server restart mid-delivery,
- *     Razorpay retry window exhausted, etc.), this catches it regardless.
- *     Covers records currently sitting as "pending" AND "failed" — a
- *     failed record can be wrong too, if the failure was recorded before
- *     a later successful retry captured on Razorpay's side.
- *   - all attempts failed on Razorpay -> marks/confirms it failed here.
- *   - no payment attempts at all -> left as-is (genuinely abandoned checkout).
- *
- * `statuses` controls which starting statuses are checked — defaults to
- * just "pending" (existing behavior, used by the scheduled job). Pass
- * ["pending", "failed"] for a thorough sweep that also re-verifies
- * records already marked failed, in case any were wrong.
- *
- * Used by both GET /donations/audit-pending (manual, on-demand) and the
- * scheduled job in jobs/reconcilePendingDonations.js (automatic, periodic).
- */
-async function reconcilePendingDonations({ limit = 100, skip = 0, fix = false, scope = "all", statuses = ["pending"], olderThanMinutes = 0 } = {}) {
+async function reconcilePendingDonations({
+  limit = 100,
+  skip = 0,
+  fix = false,
+  scope = "all",
+  statuses = ["pending"],
+  olderThanMinutes = 0,
+} = {}) {
   const baseFilter = {
     status: { $in: statuses },
     razorpayOrderId: { $exists: true, $ne: null },
@@ -123,15 +100,7 @@ async function reconcilePendingDonations({ limit = 100, skip = 0, fix = false, s
     Object.assign(baseFilter, EXCLUDE_DONATIONS_PAGE);
   }
 
-  // Least recently checked first (never-checked before all), newest first
-  // among those. Oldest-first used to re-check the same oldest records on
-  // every run whenever they stayed pending, so newer ones were never reached.
-  const pending = await donationModel
-    .find(baseFilter)
-    .sort({ lastReconcileCheckAt: 1, createdAt: -1 })
-    .skip(skip)
-    .limit(limit)
-    .lean();
+  const pending = await selectDonations(baseFilter, { orderBy: LEAST_RECENTLY_CHECKED_FIRST, skip, limit });
 
   const results = [];
   const summary = {
@@ -173,14 +142,11 @@ async function reconcilePendingDonations({ limit = 100, skip = 0, fix = false, s
       }
 
       const payments = await created.instance.orders.fetchPayments(donation.razorpayOrderId);
-      if (fix) await donationModel.updateOne({ _id: donation._id }, { lastReconcileCheckAt: new Date() });
+      if (fix) await donations.updateById(donation._id, { lastReconcileCheckAt: new Date() });
       const items = payments.items || [];
       const captured = items.find((p) => p.status === "captured");
       const authorized = items.some((p) => p.status === "authorized");
       const failedPayments = items.filter((p) => p.status === "failed");
-      // A checkout older than CLOSE_UNPAID_AFTER_MINUTES with nothing paid is
-      // over: the donor left. It is closed as failed ("not paid") so no
-      // donation sits in pending; paying later still completes it.
       const closable = Date.now() - new Date(donation.createdAt).getTime() >= CLOSE_UNPAID_AFTER_MINUTES * 60 * 1000;
 
       if (captured) {
@@ -188,7 +154,7 @@ async function reconcilePendingDonations({ limit = 100, skip = 0, fix = false, s
         entry.razorpayPaymentId = captured.id;
         if (fix) {
           if (donation.receiptNumber) {
-            await donationModel.findByIdAndUpdate(donation._id, {
+            await donations.updateById(donation._id, {
               status: "completed",
               razorpayPaymentId: captured.id,
               transactionId: captured.id,
@@ -198,7 +164,11 @@ async function reconcilePendingDonations({ limit = 100, skip = 0, fix = false, s
               : "COMPLETED (status only — receipt already existed)";
             summary.capturedWithReceipt++;
           } else {
-            await completeDonation({ orderId: donation.razorpayOrderId, paymentId: captured.id, sendWhatsApp: whatsAppFor(donation) });
+            await completeDonation({
+              orderId: donation.razorpayOrderId,
+              paymentId: captured.id,
+              sendWhatsApp: whatsAppFor(donation),
+            });
             entry.action = wasAlreadyFailed
               ? "CORRECTED (was marked failed, actually captured — full pipeline, DCC + WhatsApp triggered)"
               : "COMPLETED (full pipeline — DCC + WhatsApp triggered)";
@@ -209,9 +179,6 @@ async function reconcilePendingDonations({ limit = 100, skip = 0, fix = false, s
           donation.receiptNumber ? summary.capturedWithReceipt++ : summary.capturedAndCompleted++;
         }
       } else if (authorized) {
-        // The donor's money is authorised but was never captured (Razorpay
-        // refunds it after a few days if nobody does). The donor meant to
-        // pay, so capture it and complete the donation.
         const auth = items.find((p) => p.status === "authorized");
         entry.razorpayStatus = items.map((p) => p.status).join(", ");
         entry.razorpayPaymentId = auth.id;
@@ -221,24 +188,28 @@ async function reconcilePendingDonations({ limit = 100, skip = 0, fix = false, s
         } else {
           try {
             await created.instance.payments.capture(auth.id, auth.amount, auth.currency || "INR");
-            await completeDonation({ orderId: donation.razorpayOrderId, paymentId: auth.id, sendWhatsApp: whatsAppFor(donation) });
+            await completeDonation({
+              orderId: donation.razorpayOrderId,
+              paymentId: auth.id,
+              sendWhatsApp: whatsAppFor(donation),
+            });
             entry.action = "CAPTURED_AND_COMPLETED (was authorized, not captured)";
             summary.capturedAndCompleted++;
           } catch (capErr) {
             const code = capErr && (capErr.statusCode || (capErr.error && capErr.error.code));
             if (code === 400 || code === "BAD_REQUEST_ERROR") {
               // Razorpay refuses: already refunded / expired. Nothing was paid.
-              await donationModel.updateOne(
-                { _id: donation._id, status: "pending" },
+              await claimUpdate(
+                { _id: String(donation._id), status: "pending" },
                 {
                   status: "failed",
                   razorpayPaymentId: auth.id,
-                  paymentError: {
+                  paymentError: wholePaymentError({
                     paymentId: auth.id,
                     description: `Could not capture the authorised payment: ${(capErr.error && capErr.error.description) || capErr.message || "refused by Razorpay"}`,
                     method: auth.method || undefined,
                     at: new Date(),
-                  },
+                  }),
                 }
               );
               entry.action = "MARKED_FAILED (authorized payment could not be captured)";
@@ -277,10 +248,13 @@ async function reconcilePendingDonations({ limit = 100, skip = 0, fix = false, s
           entry.action = "CONFIRMED_FAILED (already correct)";
           summary.confirmedFailed++;
         } else if (fix) {
-          await donationModel.findByIdAndUpdate(donation._id, {
-            status: "failed",
-            razorpayPaymentId: failedPayments[0].id,
-          });
+          await claimUpdate(
+            { _id: String(donation._id), status: { $ne: "completed" } },
+            {
+              status: "failed",
+              razorpayPaymentId: failedPayments[0].id,
+            }
+          );
           // keep Razorpay's reason (the most recent failed attempt)
           const latest = failedPayments.slice().sort((a, b) => (b.created_at || 0) - (a.created_at || 0))[0];
           await recordPaymentFailure(donation._id, latest).catch(() => {});

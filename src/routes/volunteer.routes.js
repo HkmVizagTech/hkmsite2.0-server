@@ -6,8 +6,18 @@ const volunteerRouter = express.Router();
 
 volunteerRouter.get("/admin/all", authMiddleware, adminMiddleware, volunteerController.listAll);
 volunteerRouter.post("/admin", authMiddleware, adminMiddleware, volunteerController.create);
-volunteerRouter.put("/admin/registrations/:id", authMiddleware, adminMiddleware, volunteerController.updateRegistration);
-volunteerRouter.delete("/admin/registrations/:id", authMiddleware, adminMiddleware, volunteerController.deleteRegistration);
+volunteerRouter.put(
+  "/admin/registrations/:id",
+  authMiddleware,
+  adminMiddleware,
+  volunteerController.updateRegistration
+);
+volunteerRouter.delete(
+  "/admin/registrations/:id",
+  authMiddleware,
+  adminMiddleware,
+  volunteerController.deleteRegistration
+);
 volunteerRouter.get("/admin/:id/registrations", authMiddleware, adminMiddleware, volunteerController.listRegistrations);
 volunteerRouter.put("/admin/:id", authMiddleware, adminMiddleware, volunteerController.update);
 volunteerRouter.delete("/admin/:id", authMiddleware, adminMiddleware, volunteerController.delete);

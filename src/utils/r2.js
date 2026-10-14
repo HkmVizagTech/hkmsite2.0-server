@@ -1,30 +1,14 @@
-// src/utils/r2.js
-//
-// Drop-in replacement for utils/cloudinary.js — same call signature
-// (uploadToR2(filePath, folder)) and same response shape as Cloudinary's
-// uploader.upload() ({ secure_url, public_id, format, width, height, bytes })
-// so existing controllers (heroBanner, blog, event, registration, media)
-// need only swap their require() line, nothing else.
-//
-// Unlike the campaigner platform's utils/R2.js (which hard-resizes every
-// upload to 500px wide for small profile photos), this preserves original
-// dimensions — hero banners and blog hero images need full resolution —
-// and only applies lossless-ish compression to shrink file size.
-
 import fs from "node:fs";
 import path from "node:path";
 import { PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { r2Client, bucketName } from "../config/R2.config.js";
 
-// sharp is optional — it compresses images before upload.
-// On Alpine Linux (Railway's Dockerfile base) sharp needs native vips libs;
-// if they're missing the module fails to load. We catch that here and fall
-// back to uploading the original buffer uncompressed. Vercel's next/image
-// optimizer handles client-side resize/compression anyway.
-const sharp = await import("sharp").then((m) => m.default).catch((e) => {
-  console.warn("r2.js: sharp not available, uploads will skip compression:", e.message);
-  return null;
-});
+const sharp = await import("sharp")
+  .then((m) => m.default)
+  .catch((e) => {
+    console.warn("r2.js: sharp not available, uploads will skip compression:", e.message);
+    return null;
+  });
 
 const MIME_BY_EXT = {
   ".jpg": "image/jpeg",
@@ -40,7 +24,9 @@ const uploadToR2 = async (filePath, folder = "media") => {
   const mimetype = MIME_BY_EXT[ext] || "application/octet-stream";
 
   let buffer = fs.readFileSync(filePath);
-  let width, height, outFormat = ext.replace(".", "");
+  let width,
+    height,
+    outFormat = ext.replace(".", "");
 
   if (sharp) {
     try {

@@ -1,9 +1,5 @@
-import mongoose from "mongoose";
-import { donorModel } from "../models/donor.model.js";
-import { donationModel } from "../models/donation.model.js";
-import { userModel } from "../models/user.model.js";
-import { donorIssueModel } from "../models/donorIssue.model.js";
-import { IST } from "../config/timezone.js";
+import { donors, donations, users, donorIssues } from "../db/tables.js";
+import { aggregate, castId, istMonth } from "../domain/donationQuery.js";
 import { createRazorpayInstance } from "./payment.controller.js";
 import { generateReceiptBuffer } from "../services/receipt.service.js";
 
@@ -11,16 +7,6 @@ const PAN_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // Our own donation records only tell us what's already been CHARGED, not
-// whether the subscription is still running — once a subscription's first
-// charge succeeds, that donation record (and every later monthly clone —
-// see handleSubscriptionCharged in paymentCompletion.service.js) sits at
-// status "completed" forever, because each one is a record of a single past
-// payment, not a live reflection of the subscription itself. Whether Razorpay
-// will actually charge again next month only exists on Razorpay's side, so
-// the donor-facing status is always fetched live rather than inferred here.
-// Maps Razorpay's subscription.status values (created, authenticated,
-// active, pending, halted, cancelled, completed, expired) onto the smaller
-// set the dashboard actually displays.
 function mapRazorpaySubscriptionStatus(razorpayStatus) {
   switch (razorpayStatus) {
     case "active":
@@ -45,12 +31,12 @@ const donorController = {
   // address, "donor since" date, and assigned preacher's name if any.
   me: async (req, res) => {
     try {
-      const donor = await donorModel.findById(req.donor.donorId).lean();
+      const donor = await donors.findById(req.donor.donorId);
       if (!donor) return res.status(404).json({ success: false, message: "Donor not found." });
 
       let preacherName = null;
       if (donor.assignedPreacherId) {
-        const preacher = await userModel.findById(donor.assignedPreacherId).select("name").lean();
+        const preacher = await users.findById(donor.assignedPreacherId, { fields: ["name"] });
         preacherName = preacher ? preacher.name : null;
       }
 
@@ -58,9 +44,6 @@ const donorController = {
         success: true,
         donor: {
           // DCC's own DonorNumber (e.g. "D49822") is the real, authoritative
-          // ID once it exists - our self-generated donorId is only a
-          // fallback for a donor whose first donation hasn't synced to DCC
-          // yet (a pending payment, or a manual entry not yet synced).
           donorId: donor.dccDonorNumber || donor.donorId,
           name: donor.name,
           mobile: donor.mobile,
@@ -78,13 +61,9 @@ const donorController = {
   },
 
   // PATCH /donor/me — self-service profile edit. Every field is optional so
-  // the donor can update just their name, or just add a PAN, without
-  // resending everything. Only touches the Donor identity record — never
-  // rewrites panNumber/prasadamAddress on past donations, which stay exactly
-  // as they were submitted at the time of that donation.
   updateProfile: async (req, res) => {
     try {
-      const donor = await donorModel.findById(req.donor.donorId);
+      const donor = await donors.findById(req.donor.donorId);
       if (!donor) return res.status(404).json({ success: false, message: "Donor not found." });
 
       const updates = {};
@@ -142,14 +121,14 @@ const donorController = {
         }
       });
 
-      const mongoUpdate = {};
-      if (Object.keys(updates).length) mongoUpdate.$set = updates;
-      if (Object.keys(unset).length) mongoUpdate.$unset = unset;
-      if (!Object.keys(mongoUpdate).length) {
+      const patch = {};
+      if (Object.keys(updates).length) patch.$set = updates;
+      if (Object.keys(unset).length) patch.$unset = unset;
+      if (!Object.keys(patch).length) {
         return res.status(400).json({ success: false, message: "Nothing to update." });
       }
 
-      await donorModel.findByIdAndUpdate(donor._id, mongoUpdate);
+      await donors.updateById(donor._id, patch);
       res.status(200).json({ success: true, message: "Profile updated." });
     } catch (err) {
       console.error("donor.updateProfile error:", err);
@@ -160,12 +139,23 @@ const donorController = {
   // GET /donor/my-donations — this donor's full donation history.
   myDonations: async (req, res) => {
     try {
-      const donations = await donationModel
-        .find({ donorRecordId: req.donor.donorId })
-        .sort({ createdAt: -1 })
-        .select("amount sevaName type status receiptNumber createdAt isRecurring subscriptionId")
-        .lean();
-      res.status(200).json({ success: true, donations });
+      const rows = await donations.find(
+        { donorRecordId: req.donor.donorId },
+        {
+          sort: { createdAt: -1, _id: 1 },
+          fields: [
+            "amount",
+            "sevaName",
+            "type",
+            "status",
+            "receiptNumber",
+            "createdAt",
+            "isRecurring",
+            "subscriptionId",
+          ],
+        }
+      );
+      res.status(200).json({ success: true, donations: rows });
     } catch (err) {
       console.error("donor.myDonations error:", err);
       res.status(500).json({ success: false, message: "Server error" });
@@ -173,18 +163,15 @@ const donorController = {
   },
 
   // GET /donor/stats — lifetime giving summary for the dashboard hero:
-  // total given (completed donations only — pending/failed never counted),
-  // how many distinct sevas they've supported, and "donor since" (their
-  // Donor record's creation date, which is their very first donation).
   stats: async (req, res) => {
     try {
-      const donor = await donorModel.findById(req.donor.donorId).select("createdAt").lean();
+      const donor = await donors.findById(req.donor.donorId, { fields: ["createdAt"] });
       if (!donor) return res.status(404).json({ success: false, message: "Donor not found." });
 
-      const completed = await donationModel
-        .find({ donorRecordId: req.donor.donorId, status: "completed" })
-        .select("amount sevaName type")
-        .lean();
+      const completed = await donations.find(
+        { donorRecordId: req.donor.donorId, status: "completed" },
+        { fields: ["amount", "sevaName", "type"] }
+      );
 
       const lifetimeTotal = completed.reduce((sum, d) => sum + (Number(d.amount) || 0), 0);
       const sevaLabels = new Set(completed.map((d) => (d.sevaName || d.type || "General").trim()).filter(Boolean));
@@ -205,20 +192,18 @@ const donorController = {
   },
 
   // GET /donor/subscriptions — recurring donations (monthly autopay),
-  // collapsed from the underlying per-charge donation records into one
-  // entry per Razorpay subscription so the donor sees "my monthly Seva —
-  // active, 4 charges so far" rather than a flat list of individual
-  // charges mixed in with one-time donations.
   subscriptions: async (req, res) => {
     try {
-      const donations = await donationModel
-        .find({ donorRecordId: req.donor.donorId, isRecurring: true, subscriptionId: { $exists: true, $ne: null } })
-        .sort({ createdAt: 1 })
-        .select("subscriptionId amount sevaName type status createdAt paymentAccount")
-        .lean();
+      const recurring = await donations.find(
+        { donorRecordId: req.donor.donorId, isRecurring: true, subscriptionId: { $ne: null } },
+        {
+          sort: { createdAt: 1, _id: 1 },
+          fields: ["subscriptionId", "amount", "sevaName", "type", "status", "createdAt", "paymentAccount"],
+        }
+      );
 
       const bySubscription = new Map();
-      for (const d of donations) {
+      for (const d of recurring) {
         const key = d.subscriptionId;
         if (!bySubscription.has(key)) {
           bySubscription.set(key, {
@@ -242,10 +227,6 @@ const donorController = {
       }
 
       // Fetch the real current state from Razorpay for each subscription —
-      // see mapRazorpaySubscriptionStatus above for why the local records
-      // alone can't answer "is this still active?". Falls back to the local
-      // (potentially stale) status if Razorpay is unreachable, so the page
-      // still renders something rather than erroring out.
 
       await Promise.all(
         Array.from(bySubscription.values()).map(async (entry) => {
@@ -272,37 +253,24 @@ const donorController = {
   },
 
   // POST /donor/subscriptions/:subscriptionId/cancel — donor-initiated
-  // cancellation of their own recurring donation. Ownership is checked
-  // first (a donation with this subscriptionId must belong to this donor)
-  // so a donor can never cancel someone else's subscription just by
-  // guessing/copying a subscription ID. Cancels on Razorpay's side
-  // immediately (no more auto-charges), then updates our own records —
-  // the subscription.cancelled webhook will also fire and is idempotent
-  // against this, so there's no harm if both run.
   cancelSubscription: async (req, res) => {
     try {
       const { subscriptionId } = req.params;
       // Ownership check only — NOT used to decide cancellability. Any
-      // donation record with this subscriptionId proves it belongs to this
-      // donor; which one we happen to find doesn't matter here because its
-      // `status` reflects one past charge, not the subscription's current
-      // state (see mapRazorpaySubscriptionStatus above). Using that status
-      // to gate cancellation would incorrectly block cancelling a perfectly
-      // active subscription right after a successful monthly charge, since
-      // that record would legitimately read "completed".
-      const owned = await donationModel
-        .findOne({ subscriptionId, donorRecordId: req.donor.donorId })
-        .select("subscriptionId paymentAccount")
-        .lean();
+      const owned = await donations.findOne(
+        { subscriptionId, donorRecordId: req.donor.donorId },
+        { sort: { _id: 1 }, fields: ["subscriptionId", "paymentAccount"] }
+      );
 
       if (!owned) {
         return res.status(404).json({ success: false, message: "Subscription not found." });
       }
 
-
       const created = createRazorpayInstance(owned.paymentAccount);
       if (!created) {
-        return res.status(500).json({ success: false, message: "Payment provider not configured. Please contact us to cancel." });
+        return res
+          .status(500)
+          .json({ success: false, message: "Payment provider not configured. Please contact us to cancel." });
       }
 
       // Check Razorpay's real current status first so we can give an
@@ -314,34 +282,31 @@ const donorController = {
           return res.status(200).json({ success: true, message: "This subscription is already cancelled." });
         }
         if (liveStatus === "completed") {
-          return res.status(400).json({ success: false, message: "This subscription has already run its full course." });
+          return res
+            .status(400)
+            .json({ success: false, message: "This subscription has already run its full course." });
         }
       } catch (fetchErr) {
         console.error("cancelSubscription fetch error:", fetchErr && fetchErr.message ? fetchErr.message : fetchErr);
-        return res.status(502).json({ success: false, message: "Could not reach the payment provider. Please try again shortly." });
+        return res
+          .status(502)
+          .json({ success: false, message: "Could not reach the payment provider. Please try again shortly." });
       }
 
       try {
-        // Second arg is cancelAtCycleEnd (boolean) per the Razorpay SDK —
-        // false means cancel immediately rather than letting the current
-        // billing cycle finish out first.
         await created.instance.subscriptions.cancel(subscriptionId, false);
       } catch (rzpErr) {
-        // Razorpay returns 400 if the subscription is already cancelled/
-        // completed/expired on their side — treat that as success rather
-        // than surfacing a confusing error for a donor's already-stopped plan.
         const already = rzpErr && rzpErr.error && /already|cancel/i.test(rzpErr.error.description || "");
         if (!already) {
           console.error("cancelSubscription Razorpay error:", rzpErr && rzpErr.message ? rzpErr.message : rzpErr);
-          return res.status(502).json({ success: false, message: "Could not reach the payment provider. Please try again shortly." });
+          return res
+            .status(502)
+            .json({ success: false, message: "Could not reach the payment provider. Please try again shortly." });
         }
       }
 
       // Best-effort local bookkeeping — flips any record that's still
-      // pending/active locally to cancelled. Records already "completed"
-      // (past charges) are correctly left untouched; the subscription.
-      // cancelled webhook covers the rest and is idempotent against this.
-      await donationModel.updateMany(
+      await donations.updateMany(
         { subscriptionId, donorRecordId: req.donor.donorId, status: { $nin: ["completed", "cancelled"] } },
         { status: "cancelled" }
       );
@@ -354,38 +319,27 @@ const donorController = {
   },
 
   // GET /donor/my-summary — aggregated stats for the dashboard's graphs:
-  // a monthly giving trend and a breakdown by seva. Computed server-side
-  // since it's cheap here and keeps the client from re-deriving the same
-  // thing from the raw donation list.
   mySummary: async (req, res) => {
     try {
-      const donorRecordId = new mongoose.Types.ObjectId(req.donor.donorId);
-      const match = { donorRecordId, status: "completed" };
+      const match = { donorRecordId: castId(req.donor.donorId), status: "completed" };
 
       const [monthly, bySeva, totals] = await Promise.all([
-        donationModel.aggregate([
-          { $match: match },
-          // timezone is required: $dateToString runs inside MongoDB, which
-          // never sees this process's TZ and would bucket by UTC month.
-          { $group: { _id: { $dateToString: { format: "%Y-%m", date: "$createdAt", timezone: IST } }, amount: { $sum: "$amount" }, count: { $sum: 1 } } },
-          { $sort: { _id: 1 } },
-        ]),
-        donationModel.aggregate([
-          { $match: match },
-          { $group: { _id: { $ifNull: ["$sevaName", "General"] }, amount: { $sum: "$amount" }, count: { $sum: 1 } } },
-          { $sort: { amount: -1 } },
-        ]),
-        donationModel.aggregate([
-          { $match: match },
-          { $group: { _id: null, totalAmount: { $sum: "$amount" }, totalCount: { $sum: 1 } } },
-        ]),
+        aggregate(match, `${istMonth("created_at")} AS k, SUM(amount) AS amount, COUNT(*) AS count`, {
+          groupBy: "k",
+          orderBy: "k",
+        }),
+        aggregate(match, "COALESCE(seva_name, 'General') AS k, SUM(amount) AS amount, COUNT(*) AS count", {
+          groupBy: "k",
+          orderBy: `amount DESC, k COLLATE "C"`,
+        }),
+        aggregate(match, "COALESCE(SUM(amount), 0) AS total_amount, COUNT(*) AS total_count"),
       ]);
 
       res.status(200).json({
         success: true,
-        monthly: monthly.map((m) => ({ month: m._id, amount: m.amount, count: m.count })),
-        bySeva: bySeva.map((s) => ({ sevaName: s._id, amount: s.amount, count: s.count })),
-        totals: { totalAmount: totals[0]?.totalAmount || 0, totalCount: totals[0]?.totalCount || 0 },
+        monthly: monthly.map((m) => ({ month: m.k, amount: m.amount, count: m.count })),
+        bySeva: bySeva.map((s) => ({ sevaName: s.k, amount: s.amount, count: s.count })),
+        totals: { totalAmount: Number(totals[0].total_amount) || 0, totalCount: Number(totals[0].total_count) || 0 },
       });
     } catch (err) {
       console.error("donor.mySummary error:", err);
@@ -394,21 +348,23 @@ const donorController = {
   },
 
   // GET /donor/receipt/:donationId — download own receipt PDF. Ownership
-  // is checked (donorRecordId must match the logged-in donor) before
-  // generating anything, so a donor can never fetch someone else's
-  // receipt just by guessing/incrementing an ID.
   downloadReceipt: async (req, res) => {
     try {
-      const donation = await donationModel.findOne({ _id: req.params.donationId, donorRecordId: req.donor.donorId });
+      const donation = await donations.findOne({
+        _id: castId(req.params.donationId),
+        donorRecordId: req.donor.donorId,
+      });
       if (!donation) return res.status(404).json({ success: false, message: "Receipt not found." });
       if (donation.status !== "completed" || !donation.receiptNumber) {
         return res.status(400).json({ success: false, message: "This donation doesn't have a receipt yet." });
       }
 
-
       const pdfBytes = await generateReceiptBuffer(donation._id);
       res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Content-Disposition", `attachment; filename="receipt-${donation.receiptNumber.replace(/\|/g, "-")}.pdf"`);
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="receipt-${donation.receiptNumber.replace(/\|/g, "-")}.pdf"`
+      );
       res.send(Buffer.from(pdfBytes));
     } catch (err) {
       console.error("donor.downloadReceipt error:", err);
@@ -423,7 +379,7 @@ const donorController = {
       if (!subject?.trim() || !message?.trim()) {
         return res.status(400).json({ success: false, message: "Please fill in both subject and message." });
       }
-      const issue = await donorIssueModel.create({
+      const issue = await donorIssues.insert({
         donorRecordId: req.donor.donorId,
         subject: subject.trim(),
         message: message.trim(),
@@ -438,10 +394,7 @@ const donorController = {
   // GET /donor/issues — this donor's own raised issues, with status.
   myIssues: async (req, res) => {
     try {
-      const issues = await donorIssueModel
-        .find({ donorRecordId: req.donor.donorId })
-        .sort({ createdAt: -1 })
-        .lean();
+      const issues = await donorIssues.find({ donorRecordId: req.donor.donorId }, { sort: { createdAt: -1, _id: 1 } });
       res.status(200).json({ success: true, issues });
     } catch (err) {
       console.error("donor.myIssues error:", err);

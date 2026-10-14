@@ -9,7 +9,12 @@ const donationRouter = express.Router();
 donationRouter.post("/", authMiddleware, adminMiddleware, donationController.create);
 
 donationRouter.get("/", authMiddleware, adminMiddleware, donationController.list);
-donationRouter.post("/manual", authMiddleware, preacherModuleMiddleware("raise-receipt"), donationController.createManual);
+donationRouter.post(
+  "/manual",
+  authMiddleware,
+  preacherModuleMiddleware("raise-receipt"),
+  donationController.createManual
+);
 donationRouter.get("/stats", authMiddleware, adminMiddleware, donationController.stats);
 donationRouter.get("/audit-pending", authMiddleware, adminMiddleware, donationController.auditPending);
 donationRouter.get("/utm-stats", authMiddleware, adminMiddleware, donationController.getUtmStats);
@@ -20,15 +25,22 @@ donationRouter.get("/needs-manual-receipt", authMiddleware, adminMiddleware, don
 // DCC receipts panel (Admin → Donations → DCC receipts). Above /:id.
 donationRouter.get("/dcc-status", authMiddleware, adminMiddleware, donationController.dccStatus);
 donationRouter.post("/dcc-push-all", authMiddleware, adminMiddleware, donationController.dccPushAll);
-donationRouter.post("/backfill-dcc-donor-numbers", authMiddleware, adminMiddleware, donationController.backfillDccDonorNumbers);
+donationRouter.post(
+  "/backfill-dcc-donor-numbers",
+  authMiddleware,
+  adminMiddleware,
+  donationController.backfillDccDonorNumbers
+);
 donationRouter.get("/needs-whatsapp", authMiddleware, adminMiddleware, donationController.needsWhatsApp);
 donationRouter.post("/backfill-donors", authMiddleware, adminMiddleware, donationController.backfillDonors);
 // Bulk resend for a window of receipts that never went out (provider outage).
 // Declared before the "/:id/..." routes so it can never be read as an id.
-donationRouter.post("/resend-recent-whatsapp", authMiddleware, adminMiddleware, donationController.resendRecentWhatsApp);
-// Maha Prasadam courier tracking (admin → Donations → Prasadam tab).
-// Declared before the "/:id/..." routes so "prasadam-requests" and
-// "prasadam-export" can never be parsed as an :id.
+donationRouter.post(
+  "/resend-recent-whatsapp",
+  authMiddleware,
+  adminMiddleware,
+  donationController.resendRecentWhatsApp
+);
 donationRouter.get("/prasadam-requests", authMiddleware, adminMiddleware, donationController.listPrasadamRequests);
 donationRouter.get("/prasadam-export", authMiddleware, adminMiddleware, donationController.exportPrasadamCsv);
 donationRouter.put("/:id/prasadam-status", authMiddleware, adminMiddleware, donationController.updatePrasadamStatus);

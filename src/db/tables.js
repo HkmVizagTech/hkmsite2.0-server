@@ -24,8 +24,32 @@ export const donations = defineTable({
   nests: {
     utm: prefix("utm_", ["source", "medium", "campaign", "content", "term"]),
     prasadamAddress: prefix("prasadam_", ["doorNo", "house", "street", "area", "country", "state", "city", "pincode"]),
-    paymentError: prefix("pe_", ["paymentId", "code", "description", "source", "step", "reason", "method", "bank", "wallet", "upiFlow", "cardNetwork", "at"]),
-    upiFallback: prefix("upi_", ["status", "app", "via", "openedAt", "claimedAt", "payerName", "matchedAt", "matchedBy", "matchedPaymentId", "note"]),
+    paymentError: prefix("pe_", [
+      "paymentId",
+      "code",
+      "description",
+      "source",
+      "step",
+      "reason",
+      "method",
+      "bank",
+      "wallet",
+      "upiFlow",
+      "cardNetwork",
+      "at",
+    ]),
+    upiFallback: prefix("upi_", [
+      "status",
+      "app",
+      "via",
+      "openedAt",
+      "claimedAt",
+      "payerName",
+      "matchedAt",
+      "matchedBy",
+      "matchedPaymentId",
+      "note",
+    ]),
   },
   json: ["dccPayload", "dccResponse"],
   keepNull: ["dccEnrolledById", "lastReconcileCheckAt"],
@@ -40,9 +64,15 @@ export const registrations = defineTable({
 });
 
 export const festivalDonations = defineTable({ table: "festival_donations", json: ["donationOptions", "meta"] });
-export const festivalShowcases = defineTable({ table: "festival_showcases", json: ["schedule", "details", "testimonials"] });
+export const festivalShowcases = defineTable({
+  table: "festival_showcases",
+  json: ["schedule", "details", "testimonials"],
+});
 export const templeDevotees = defineTable({ table: "temple_devotees" });
-export const campaigners = defineTable({ table: "campaigners", renames: { referredByDevotee: "referred_by_devotee_id" } });
+export const campaigners = defineTable({
+  table: "campaigners",
+  renames: { referredByDevotee: "referred_by_devotee_id" },
+});
 export const plans = defineTable({ table: "plans" });
 
 export const shopCategories = defineTable({ table: "shop_categories" });
@@ -67,8 +97,14 @@ export const blogs = defineTable({
 });
 export const contactMessages = defineTable({ table: "contact_messages" });
 export const darshans = defineTable({ table: "darshans" });
-export const donationPages = defineTable({ table: "donation_pages", json: ["donationOptions", "impactItems", "bankDetails", "contact"] });
-export const siteContent = defineTable({ table: "site_content", json: ["hero", "about", "contact", "navbar", "festival", "construction"] });
+export const donationPages = defineTable({
+  table: "donation_pages",
+  json: ["donationOptions", "impactItems", "bankDetails", "contact"],
+});
+export const siteContent = defineTable({
+  table: "site_content",
+  json: ["hero", "about", "contact", "navbar", "festival", "construction"],
+});
 export const galleries = defineTable({ table: "galleries" });
 export const heroBanners = defineTable({ table: "hero_banners" });
 export const importantDates = defineTable({ table: "important_dates" });

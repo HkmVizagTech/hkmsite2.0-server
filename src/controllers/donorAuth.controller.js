@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
 import { getJwtSecret } from "../utils/utils.js";
-import { donorModel } from "../models/donor.model.js";
+import { donors } from "../db/tables.js";
 import { sendDonorOtp, isWhatsAppConfigured } from "../services/whatsapp.service.js";
 import { findOrCreateShopCustomer } from "../services/donor.service.js";
 
@@ -9,63 +9,36 @@ const OTP_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const OTP_RESEND_COOLDOWN_MS = 60 * 1000; // 1 minute between requests
 const MAX_OTP_ATTEMPTS = 5;
 
-const cleanMobile = (raw) => String(raw || "").replace(/\D/g, "").slice(-10);
+const cleanMobile = (raw) =>
+  String(raw || "")
+    .replace(/\D/g, "")
+    .slice(-10);
 
-// SHA-256, not bcrypt, deliberately. bcrypt's whole design point is being
-// SLOW (~50-150ms per hash) so that someone who steals a password database
-// can't brute-force it offline at billions of guesses/second — worth that
-// cost for a credential that's valid indefinitely. An OTP is a different
-// threat model entirely: it expires in 10 minutes and this endpoint
-// already hard-caps attempts at 5 server-side (MAX_OTP_ATTEMPTS below),
-// so bcrypt's slowness added real, measurable latency (confirmed live:
-// verify-otp was taking ~0.6s, almost entirely bcrypt.compare) without
-// providing any additional protection an attacker's 5 real-time guesses
-// could exploit anyway. Still never stored in plaintext — just hashed
-// with something that doesn't in this case.
+// SHA-256 rather than bcrypt: the OTP lives 10 minutes with at most 5 attempts, so a slow hash adds latency but no protection.
 const hashOtp = (otp) => crypto.createHash("sha256").update(String(otp)).digest("hex");
 
-// Generates, sends and stores a fresh OTP for an existing donor/customer
-// record. Shared by the donor portal and the shop so there is exactly one
-// implementation of "issue an OTP" — the two entry points differ only in
-// whether they're willing to CREATE a record for an unknown number, never in
-// how the code itself is generated, delivered or stored.
+// Generates, sends and stores a fresh OTP; shared by the donor portal and the shop.
 async function issueOtpForDonor(donor, res) {
   if (donor.otpLastRequestedAt && Date.now() - donor.otpLastRequestedAt.getTime() < OTP_RESEND_COOLDOWN_MS) {
     const waitSeconds = Math.ceil((OTP_RESEND_COOLDOWN_MS - (Date.now() - donor.otpLastRequestedAt.getTime())) / 1000);
-    return res.status(429).json({ success: false, message: `Please wait ${waitSeconds}s before requesting another code.` });
+    return res
+      .status(429)
+      .json({ success: false, message: `Please wait ${waitSeconds}s before requesting another code.` });
   }
 
   if (!isWhatsAppConfigured()) {
-    return res.status(503).json({ success: false, message: "WhatsApp login isn't available right now. Please try again shortly." });
+    return res
+      .status(503)
+      .json({ success: false, message: "WhatsApp login isn't available right now. Please try again shortly." });
   }
 
-  const otpCode = String(Math.floor(100000 + Math.random() * 900000)); // 6 digits
+  const otpCode = String(crypto.randomInt(100000, 1000000)); // 6 digits
   const otpCodeHash = hashOtp(otpCode);
 
-  // ── Send FIRST, then store, then answer. ───────────────────────────────
-  //
-  // This ordering is deliberate and must stay this way. It was briefly
-  // inverted (store + answer immediately, send in the background) to hide the
-  // ~2.3s the WhatsApp send costs, and that was a mistake on two counts:
-  //
-  //   1. The response stopped meaning anything. "OTP sent" was returned
-  //      before a single byte had left, so when the send then failed the
-  //      donor sat waiting for a code that was never going to arrive.
-  //   2. A background send does not survive a deploy. The container
-  //      restarting between the response and the send drops it silently —
-  //      nothing reaches WhatsApp, and nothing shows in the provider's
-  //      outbox either, because the request was never made.
-  //
-  // Waiting is the honest thing to do: the donor is told the code is sent
-  // only once the provider has actually accepted it, and any failure comes
-  // back on THIS response where the UI can show it. The couple of seconds is
-  // worth that. The timeout inside whatsapp.service keeps the wait bounded.
+  // Send first, store only after the provider accepted it, then answer (a failed send must not leave a usable OTP).
   await sendDonorOtp(donor.mobile, otpCode);
 
-  // Only persist the OTP after a confirmed send — a failed/rejected send
-  // (see whatsapp.service.js's assertDelivered) throws before reaching here,
-  // so no OTP is stored for a code the person never actually received.
-  await donorModel.findByIdAndUpdate(donor._id, {
+  await donors.updateById(donor._id, {
     otpCodeHash,
     otpExpiresAt: new Date(Date.now() + OTP_TTL_MS),
     otpAttempts: 0,
@@ -75,10 +48,7 @@ async function issueOtpForDonor(donor, res) {
   return res.status(200).json({ success: true, message: "OTP sent via WhatsApp." });
 }
 
-// A failed send is nearly always one of two things, and they need different
-// words: the WhatsApp provider being unreachable (an outage on their side —
-// nothing the donor can fix by retyping) versus Meta rejecting this specific
-// message. Saying "please try again" for an outage sends people in circles.
+// Distinguishes a WhatsApp provider outage from a rejected message so the donor gets the right advice.
 const otpFailureMessage = (err) => {
   const raw = String((err && err.message) || err || "").toLowerCase();
   const providerDown =
@@ -101,11 +71,6 @@ const otpFailureMessage = (err) => {
 
 const donorAuthController = {
   // POST /donor-auth/send-otp { mobile }
-  // Only sends an OTP for a mobile number that already has a Donor
-  // record (i.e. has donated before) — a random unrecognized number
-  // gets a clear, honest message instead of an OTP, both because
-  // there's nothing to show them yet and to avoid this becoming a free
-  // way to spam arbitrary numbers with WhatsApp messages.
   sendOtp: async (req, res) => {
     try {
       const mobile = cleanMobile(req.body.mobile);
@@ -113,11 +78,12 @@ const donorAuthController = {
         return res.status(400).json({ success: false, message: "Please enter a valid 10-digit mobile number." });
       }
 
-      const donor = await donorModel.findOne({ mobile });
+      const donor = await donors.findOne({ mobile });
       if (!donor) {
         return res.status(404).json({
           success: false,
-          message: "We don't have any donation records for this number. If you've donated before, please check the number or contact us.",
+          message:
+            "We don't have any donation records for this number. If you've donated before, please check the number or contact us.",
         });
       }
 
@@ -129,22 +95,12 @@ const donorAuthController = {
   },
 
   // POST /donor-auth/shop/send-otp { mobile, name }
-  // The shop's entry point. Unlike sendOtp above, this one ACCEPTS a number
-  // with no existing record and creates a customer identity on the spot —
-  // a first-time book buyer has never donated, and refusing them would mean
-  // nobody new could ever check out.
-  //
-  // That deliberately gives up the "only known numbers" protection the donor
-  // portal relies on, so the guard rails here are the route's rate limits
-  // (see donorAuth.routes.js) plus the same per-number 60s cooldown, applied
-  // by issueOtpForDonor to new and existing records alike.
   sendShopOtp: async (req, res) => {
     try {
       const mobile = cleanMobile(req.body.mobile);
       if (mobile.length !== 10) {
         return res.status(400).json({ success: false, message: "Please enter a valid 10-digit mobile number." });
       }
-
 
       const donor = await findOrCreateShopCustomer({
         mobile,
@@ -167,7 +123,7 @@ const donorAuthController = {
         return res.status(400).json({ success: false, message: "Mobile number and OTP are required." });
       }
 
-      const donor = await donorModel.findOne({ mobile });
+      const donor = await donors.findOne({ mobile });
       if (!donor || !donor.otpCodeHash || !donor.otpExpiresAt) {
         return res.status(400).json({ success: false, message: "Please request a new OTP." });
       }
@@ -177,20 +133,23 @@ const donorAuthController = {
       }
 
       if (donor.otpAttempts >= MAX_OTP_ATTEMPTS) {
-        return res.status(429).json({ success: false, message: "Too many incorrect attempts. Please request a new OTP." });
+        return res
+          .status(429)
+          .json({ success: false, message: "Too many incorrect attempts. Please request a new OTP." });
       }
 
       const providedHash = hashOtp(otp);
-      const matches = providedHash.length === donor.otpCodeHash.length
-        && crypto.timingSafeEqual(Buffer.from(providedHash), Buffer.from(donor.otpCodeHash));
+      const matches =
+        providedHash.length === donor.otpCodeHash.length &&
+        crypto.timingSafeEqual(Buffer.from(providedHash), Buffer.from(donor.otpCodeHash));
       if (!matches) {
-        await donorModel.findByIdAndUpdate(donor._id, { $inc: { otpAttempts: 1 } });
+        await donors.updateById(donor._id, { $inc: { otpAttempts: 1 } });
         return res.status(400).json({ success: false, message: "Incorrect OTP. Please try again." });
       }
 
       // Success — clear the OTP so it can't be reused, issue a session.
-      await donorModel.findByIdAndUpdate(donor._id, {
-        $unset: { otpCodeHash: "", otpExpiresAt: "", otpLastRequestedAt: "" },
+      await donors.updateById(donor._id, {
+        $unset: ["otpCodeHash", "otpExpiresAt", "otpLastRequestedAt"],
         otpAttempts: 0,
       });
 

@@ -1,43 +1,3 @@
-// src/services/gupshup.service.js
-//
-// Gupshup WhatsApp sender for the pending-transaction reminder.
-//
-// WHY THIS EXISTS
-// Flaxxa's API cannot supply a value for a template's dynamic URL button
-// ({{1}} at the end of the button link) — verified exhaustively against the
-// live API; every send of such a template comes back with a null wamid and
-// Meta's "(#131008) Required parameter is missing". Gupshup does support it,
-// so the pending reminder can be sent from the Gupshup number instead and
-// keep its per-seva "Transaction Link" button.
-//
-// GUPSHUP API CONTRACT (self-serve / non-partner)
-//   POST https://api.gupshup.io/wa/api/v1/template/msg
-//   Header: apikey: <GUPSHUP_API_KEY>          (NOT a bearer token)
-//   Content-Type: application/x-www-form-urlencoded
-//   Fields:
-//     channel      = "whatsapp"
-//     source       = sender number, bare digits, no "+"
-//     destination  = recipient, bare digits, no "+"
-//     src.name     = the Gupshup app name
-//     template     = {"id":"<template uuid>","params":[...]}   (JSON string)
-//     message      = {"type":"image","image":{"link":"..."}}   (JSON string, media header only)
-//
-//   * `params` is POSITIONAL: params[0] fills {{1}}, params[1] fills {{2}}, …
-//   * A dynamic URL button's value is appended to the END of that same array,
-//     after the last body variable. Gupshup's own CTA example does exactly
-//     this: params: ["John", "docs/bot-platform/guide/whatsapp-api-documentation"].
-//   * The media header is NOT part of `params` — it goes in the separate
-//     `message` field. Putting it in params inflates the count and Gupshup
-//     rejects the send.
-//   * Unlike Flaxxa, the header image IS fetched from a link — but Meta only
-//     accepts image/jpeg and image/png, and the seva banners in R2 are .webp,
-//     so resolveJpegHeaderUrl() below converts and re-hosts them once.
-//
-// Success looks like {"status":"submitted","messageId":"..."} — anything else
-// (or a missing messageId) is treated as a failure and throws, deliberately:
-// the Flaxxa integration silently marked donations as reminded for messages
-// that Meta had rejected, and that must not happen again here.
-
 import crypto from "node:crypto";
 import { buildPendingFields } from "./pendingMessage.util.js";
 import { normalizePhone } from "./whatsapp.service.js";
@@ -50,24 +10,8 @@ const GUPSHUP_TEMPLATE_URL = "https://api.gupshup.io/wa/api/v1/template/msg";
 // The Gupshup sender is a different WhatsApp number from the Flaxxa one.
 const SOURCE_NUMBER = process.env.GUPSHUP_SOURCE_NUMBER || "917075176108";
 
-// Approved-on-Gupshup pending-transaction template.
-//   name           pending_transaction_hkm
-//   type           MEDIA (image header) / UTILITY / language En
-//   Gupshup UUID   f12a709c-bc1f-429b-84d5-1262bc01a73c   <- what this API wants
-//   Facebook id    3598241980329839                       <- Meta's own id, not used here
-//   body           {{1}} name, {{2}} amount, {{3}} seva (with its campaign in
-//                  brackets on festival pages), {{4}} allocation sentence
-//   button         Visit Website "Transaction Link" -> https://www.harekrishnavizag.org/{{1}}
-//
-// The button's {{1}} is numbered independently of the body's variables; in the
-// wire format it is simply the 5th and last entry of the params array.
-const PENDING_TEMPLATE_ID = () =>
-  process.env.GUPSHUP_PENDING_TEMPLATE_ID || "f12a709c-bc1f-429b-84d5-1262bc01a73c";
+const PENDING_TEMPLATE_ID = () => process.env.GUPSHUP_PENDING_TEMPLATE_ID || "f12a709c-bc1f-429b-84d5-1262bc01a73c";
 
-// Header image used when a seva banner cannot be converted to JPEG (R2
-// unreachable or unconfigured). This is the PNG uploaded as the template's own
-// approved sample, already hosted by Gupshup — Meta accepts it, so a reminder
-// still goes out with a generic banner instead of failing outright.
 const FALLBACK_HEADER_IMAGE =
   process.env.GUPSHUP_FALLBACK_HEADER_IMAGE ||
   "https://fss.gupshup.io/0/public/0/0/gupshup/917075176108/a295be41-efdc-4a25-8e3b-94188f18781e/1787982596334_ChatGPT%20Image%20Aug%2018%2C%202026%2C%2005_47_34%20PM.png";
@@ -79,32 +23,10 @@ const SEND_BUTTON_PARAM = () => String(process.env.GUPSHUP_PENDING_BUTTON_PARAM 
 const isGupshupConfigured = () =>
   Boolean(process.env.GUPSHUP_API_KEY && process.env.GUPSHUP_APP_NAME && PENDING_TEMPLATE_ID());
 
-// Approved-on-Gupshup donation-receipt template — the replacement for the
-// Flaxxa `common_donation_success_reciept` send, which started failing once
-// the Flaxxa number hit its spam/quality limit.
-//
-//   name           common_donation_success_reciept_hkmv
-//   Gupshup UUID   1c953ac3-3856-4b9d-b4ab-f52f98ba2564   <- what this API wants
-//   Facebook id    1072589332027795                       <- Meta's own id, not used here
-//   type           DOCUMENT header / UTILITY / language En / POSITIONAL params
-//   body           {{1}} donor name, {{2}} amount (bare number — the template
-//                  already prints "₹" and "/-"), {{3}} seva / purpose
-//   buttons        none
-//
-// Verified against GET https://api.gupshup.io/wa/app/<appId>/template:
-// status APPROVED, templateType DOCUMENT, no footer, no buttons.
-const RECEIPT_TEMPLATE_ID = () =>
-  process.env.GUPSHUP_RECEIPT_TEMPLATE_ID || "1c953ac3-3856-4b9d-b4ab-f52f98ba2564";
+const RECEIPT_TEMPLATE_ID = () => process.env.GUPSHUP_RECEIPT_TEMPLATE_ID || "1c953ac3-3856-4b9d-b4ab-f52f98ba2564";
 
 const isGupshupReceiptConfigured = () =>
   Boolean(process.env.GUPSHUP_API_KEY && process.env.GUPSHUP_APP_NAME && RECEIPT_TEMPLATE_ID());
-
-// ---------------------------------------------------------------------------
-// Header image: Meta accepts only image/jpeg and image/png from the link, and
-// the seva banners are .webp. Convert once, re-host on R2 under a key derived
-// from the source URL, and reuse it forever after. A HEAD request to the
-// public URL avoids re-uploading on every process restart.
-// ---------------------------------------------------------------------------
 
 const JPEG_URL_CACHE = new Map();
 
@@ -140,14 +62,11 @@ async function resolveJpegHeaderUrl(sourceUrl) {
     if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${sourceUrl}`);
     const input = Buffer.from(await res.arrayBuffer());
 
-
     const jpeg = await sharp(input)
       .rotate()
       .resize({ width: 1600, withoutEnlargement: true })
       .jpeg({ quality: 80, mozjpeg: true })
       .toBuffer();
-
-
 
     await r2Client.send(
       new PutObjectCommand({
@@ -163,10 +82,6 @@ async function resolveJpegHeaderUrl(sourceUrl) {
     JPEG_URL_CACHE.set(sourceUrl, finalUrl);
     return finalUrl;
   } catch (err) {
-    // Don't take the whole reminder down over a banner, and don't hand Gupshup
-    // a .webp either — it rejects those outright, so the donor would get
-    // nothing at all. Fall back to the template's own approved sample image
-    // (a PNG that Gupshup already hosts): a generic banner beats no message.
     console.warn(
       "[Gupshup] Could not convert header image to JPEG, falling back to the default banner:",
       err && err.message ? err.message : err
@@ -177,19 +92,6 @@ async function resolveJpegHeaderUrl(sourceUrl) {
 
 // ---------------------------------------------------------------------------
 
-/**
- * Low-level Gupshup template send.
- *
- * @param {object} input
- * @param {string} input.phone - recipient, any format
- * @param {string} input.templateId - approved template UUID from the Gupshup console
- * @param {string[]} input.params - positional variables ({{1}}…) plus, last,
- *   the dynamic URL button's value if the template has one
- * @param {string} [input.headerImageUrl] - public jpeg/png URL for an IMAGE header
- * @param {object} [input.media] - pre-built `message` payload for any other
- *   header type, e.g. { type: "document", document: { link, filename } }.
- *   Takes precedence over headerImageUrl when both are given.
- */
 async function sendGupshupTemplate({ phone, templateId, params, headerImageUrl, media }) {
   const apiKey = process.env.GUPSHUP_API_KEY;
   const appName = process.env.GUPSHUP_APP_NAME;
@@ -244,13 +146,6 @@ async function sendGupshupTemplate({ phone, templateId, params, headerImageUrl, 
   return { messageId: data.messageId || "", raw: data };
 }
 
-/**
- * Sends the pending-transaction reminder through Gupshup, with the per-seva
- * link filled into the template's dynamic URL button.
- *
- * Signature matches sendPendingWhatsapp() in whatsapp.service.js so the two
- * providers are interchangeable from the reminder job's point of view.
- */
 async function sendPendingWhatsappViaGupshup(phone, donorName, amount, sevaName, options = {}) {
   const { linkSuffix, linkQuery, sourcePage, sevaImage, campaignLabel } = options;
 
@@ -278,27 +173,6 @@ async function sendPendingWhatsappViaGupshup(phone, donorName, amount, sevaName,
   });
 }
 
-// ---------------------------------------------------------------------------
-// Donation receipt (PDF) via Gupshup
-//
-// KEY DIFFERENCE FROM FLAXXA: Flaxxa took the receipt as binary multipart
-// (header_attachment). Gupshup's template API takes only a LINK — the PDF must
-// be publicly fetchable by Meta at send time. So the generated receipt is
-// uploaded to the same R2 bucket the site already uses for media, and that
-// public URL is handed to Gupshup.
-//
-// The object key is derived from the donation id plus a salt, so it is
-// deterministic (a resend overwrites rather than piling up copies) but not
-// guessable by incrementing an id — receipts carry the donor's address/PAN.
-// Set RECEIPT_URL_SALT in Railway to something private; if it is unset the
-// key falls back to a plain hash of the id, which still isn't enumerable.
-//
-// Meta caches the document on its own CDN once fetched, so the R2 object is
-// only strictly needed for a few seconds. It is kept because the admin
-// "download receipt" path benefits from it; add an R2 lifecycle rule on the
-// `receipts/` prefix if you'd rather they expire.
-// ---------------------------------------------------------------------------
-
 async function uploadReceiptPdf(pdfBytes, donationId) {
   const publicBase = (process.env.R2_PUBLIC_URL || "").replace(/\/+$/, "");
   if (!publicBase) {
@@ -311,8 +185,6 @@ async function uploadReceiptPdf(pdfBytes, donationId) {
   const salt = process.env.RECEIPT_URL_SALT || "hkmv-receipt";
   const hash = crypto.createHash("sha256").update(`${salt}:${donationId}`).digest("hex").slice(0, 24);
   const key = `receipts/${hash}.pdf`;
-
-
 
   await r2Client.send(
     new PutObjectCommand({
@@ -329,20 +201,6 @@ async function uploadReceiptPdf(pdfBytes, donationId) {
   return `${publicBase}/${key}`;
 }
 
-/**
- * Sends the donation receipt (approved template + PDF document header)
- * through Gupshup.
- *
- * @param {object} input
- * @param {string} input.phone      - donor mobile, any format
- * @param {string} input.donorName  - {{1}}
- * @param {string} input.amountText - {{2}}, bare number e.g. "2,500"
- *                                    (the template supplies "₹" and "/-")
- * @param {string} input.sevaName   - {{3}}
- * @param {Uint8Array|Buffer} input.pdfBytes - the generated receipt
- * @param {string} input.filename   - filename the donor sees in WhatsApp
- * @param {string} input.donationId - used to derive the R2 object key
- */
 async function sendReceiptWhatsappViaGupshup({
   phone,
   donorName,

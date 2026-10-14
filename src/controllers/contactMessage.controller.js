@@ -1,14 +1,13 @@
-import { contactMessageModel } from "../models/contactMessage.model.js";
+import { contactMessages } from "../db/tables.js";
 
 const contactMessageController = {
-  // PUBLIC - submit the contact form
   create: async (req, res) => {
     try {
       const { name, email, phone, subject, message, authorization } = req.body;
       if (!name || !email || !message) {
         return res.status(400).json({ message: "Name, email, and message are required" });
       }
-      const doc = await contactMessageModel.create({
+      const doc = await contactMessages.insert({
         name: String(name).trim(),
         email: String(email).trim().toLowerCase(),
         phone: phone ? String(phone).trim() : "",
@@ -23,7 +22,6 @@ const contactMessageController = {
     }
   },
 
-  // ADMIN - list, newest first, optional status filter
   list: async (req, res) => {
     try {
       const { status, page = 1, limit = 30 } = req.query;
@@ -32,14 +30,9 @@ const contactMessageController = {
       const pageNum = Math.max(1, parseInt(page, 10) || 1);
       const lim = Math.min(100, Math.max(1, parseInt(limit, 10) || 30));
       const [messages, total, newCount] = await Promise.all([
-        contactMessageModel
-          .find(filter)
-          .sort({ createdAt: -1 })
-          .skip((pageNum - 1) * lim)
-          .limit(lim)
-          .lean(),
-        contactMessageModel.countDocuments(filter),
-        contactMessageModel.countDocuments({ status: "new" }),
+        contactMessages.find(filter, { sort: { createdAt: -1, _id: -1 }, skip: (pageNum - 1) * lim, limit: lim }),
+        contactMessages.count(filter),
+        contactMessages.count({ status: "new" }),
       ]);
       res.status(200).json({ messages, total, newCount, page: pageNum, totalPages: Math.ceil(total / lim) });
     } catch (err) {
@@ -47,7 +40,6 @@ const contactMessageController = {
     }
   },
 
-  // ADMIN - update status (mark read / responded)
   updateStatus: async (req, res) => {
     try {
       const { id } = req.params;
@@ -55,7 +47,7 @@ const contactMessageController = {
       if (!["new", "read", "responded"].includes(status)) {
         return res.status(400).json({ message: "Invalid status" });
       }
-      const doc = await contactMessageModel.findByIdAndUpdate(id, { status }, { new: true });
+      const doc = await contactMessages.updateById(id, { status });
       if (!doc) return res.status(404).json({ message: "Message not found" });
       res.status(200).json({ message: "Updated", data: doc });
     } catch (err) {
@@ -63,10 +55,9 @@ const contactMessageController = {
     }
   },
 
-  // ADMIN - delete
   delete: async (req, res) => {
     try {
-      const doc = await contactMessageModel.findByIdAndDelete(req.params.id);
+      const doc = await contactMessages.deleteById(req.params.id);
       if (!doc) return res.status(404).json({ message: "Message not found" });
       res.status(200).json({ message: "Deleted" });
     } catch (err) {

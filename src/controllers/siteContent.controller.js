@@ -1,33 +1,15 @@
-import { siteContentModel } from "../models/siteContent.model.js";
+import { siteContent } from "../db/tables.js";
+import { query } from "../db/pg.js";
+import { DEFAULT_CONSTRUCTION_VIDEO_ID, siteContentDefaults } from "../domain/siteContent.js";
+import { toBool } from "../domain/validate.js";
 
-// Matches the schema default in siteContent.model.js — used when an admin
-// clears the field, so the section always has a video rather than an empty
-// frame. (Mongoose defaults apply when a document is created, not when a
-// subdocument is later replaced, so this has to be explicit here.)
-const DEFAULT_CONSTRUCTION_VIDEO_ID = "mPAt0gb__Hw";
-
-// The gallery is a single horizontal scroller; past a couple of dozen photos
-// nobody scrolls that far and the payload starts to matter. The admin can
-// remove old ones as new months are added.
 const MAX_CONSTRUCTION_PHOTOS = 24;
 
-/**
- * Pulls the 11-character video id out of any YouTube link an admin is likely
- * to paste. Shorts are what this is really for — the temple's monthly update
- * is filmed vertically and shared from the YouTube app, which gives a
- * /shorts/ link — but the same field accepts a normal watch URL, a youtu.be
- * share link, an embed URL, or the bare id, so nobody has to think about it.
- *
- * Returns null when nothing recognisable is in there, which the caller turns
- * into a clear error rather than silently saving a link that renders nothing.
- */
+// Accepts shorts, watch, youtu.be, embed, live and v/ links, or a bare 11-char id.
 const parseYouTubeId = (raw) => {
   const input = String(raw || "").trim();
   if (!input) return null;
-
-  // A bare id pasted on its own.
   if (/^[A-Za-z0-9_-]{11}$/.test(input)) return input;
-
   const patterns = [
     /youtube(?:-nocookie)?\.com\/shorts\/([A-Za-z0-9_-]{11})/i,
     /youtu\.be\/([A-Za-z0-9_-]{11})/i,
@@ -43,72 +25,109 @@ const parseYouTubeId = (raw) => {
   return null;
 };
 
+// Whole sections are replaced on update, keeping only the keys the schema knows.
+const str = (v) => (v === undefined || v === null ? undefined : String(v));
+const strings = (obj, keys) => {
+  const out = {};
+  for (const k of keys) {
+    const v = str(obj?.[k]);
+    if (v !== undefined) out[k] = v;
+  }
+  return out;
+};
+const SECTION_PICKERS = {
+  hero: (v) => strings(v, ["title", "subtitle", "tagline"]),
+  about: (v) => strings(v, ["heading", "body"]),
+  contact: (v) => strings(v, ["phone", "email", "address", "morningHours", "eveningHours"]),
+  navbar: (v) => {
+    const out = strings(v, ["majorFestival"]);
+    if (v?.customLink && typeof v.customLink === "object") {
+      const cl = strings(v.customLink, ["label", "href"]);
+      if (v.customLink.enabled !== undefined) cl.enabled = toBool(v.customLink.enabled);
+      out.customLink = cl;
+    }
+    return out;
+  },
+  festival: (v) => strings(v, ["bannerDesktop", "bannerMobile"]),
+};
+
+// Mongoose filled missing sub-fields with schema defaults whenever a document was read.
+const withDefaults = (doc) => {
+  const defaults = siteContentDefaults();
+  const out = { ...doc };
+  for (const [section, def] of Object.entries(defaults)) out[section] = { ...def, ...(doc[section] || {}) };
+  out.navbar.customLink = { ...defaults.navbar.customLink, ...(doc.navbar?.customLink || {}) };
+  return out;
+};
+
+const getOrCreate = async () => {
+  const existing = await siteContent.findOne({ key: "main" });
+  if (existing) return withDefaults(existing);
+  await siteContent.insert({ key: "main", ...siteContentDefaults() }, { onConflictDoNothing: true });
+  return withDefaults(await siteContent.findOne({ key: "main" }));
+};
+
 const siteContentController = {
-  // PUBLIC - fetch site content (creates the default singleton on first read)
   get: async (req, res) => {
     try {
-      let content = await siteContentModel.findOne({ key: "main" });
-      if (!content) {
-        content = await siteContentModel.create({ key: "main" });
-      }
-      res.status(200).json({ content });
+      res.status(200).json({ content: await getOrCreate() });
     } catch (err) {
       console.error("Site content get error:", err);
       res.status(500).json({ message: "Server error", error: err.message });
     }
   },
 
-  // ADMIN - update any subset of hero/about/contact/navbar
   update: async (req, res) => {
     try {
-      const { hero, about, contact, navbar, festival, construction } = req.body;
-      const patch = { updatedBy: req.user?.userId };
-      if (hero) patch.hero = hero;
-      if (about) patch.about = about;
-      if (contact) patch.contact = contact;
-      if (navbar) patch.navbar = navbar;
-      if (festival) patch.festival = festival;
+      const { construction } = req.body;
+      const sections = {};
+      for (const name of Object.keys(SECTION_PICKERS)) {
+        if (req.body[name]) sections[name] = SECTION_PICKERS[name](req.body[name]);
+      }
 
+      let constructionPatch;
       if (construction) {
         const url = String(construction.videoUrl || "").trim();
         const videoId = parseYouTubeId(url);
-        // Refuse rather than store something the page can't play. The admin
-        // finds out here, while they're looking at the form, instead of the
-        // section silently going blank for every visitor.
         if (url && !videoId) {
           return res.status(400).json({
             message:
               "That doesn't look like a YouTube link. Paste the Share link from the video — e.g. https://youtube.com/shorts/XXXXXXXXXXX",
           });
         }
-        // Dotted paths, not a whole-object assignment: `$set: { construction:
-        // {...} }` would REPLACE the subdocument, so a request carrying only
-        // the video would silently wipe the photo gallery. Each field is set
-        // on its own so the two can be saved independently.
-        patch["construction.videoUrl"] = url;
-        patch["construction.videoId"] = videoId || DEFAULT_CONSTRUCTION_VIDEO_ID;
-        patch["construction.updatedAt"] = new Date();
-
+        // Merged key by key so saving the video never wipes the photo gallery.
+        constructionPatch = { videoUrl: url, videoId: videoId || DEFAULT_CONSTRUCTION_VIDEO_ID, updatedAt: new Date() };
         if (Array.isArray(construction.photos)) {
-          patch["construction.photos"] = construction.photos
+          constructionPatch.photos = construction.photos
             .map((p) => ({
               url: String(p?.url || "").trim(),
-              // Captions sit on top of the image, so an essay would spill out
-              // of the pill. Long ones are cut rather than rejected — the
-              // admin has already uploaded the photo by this point.
-              caption: String(p?.caption || "").trim().slice(0, 80),
+              caption: String(p?.caption || "")
+                .trim()
+                .slice(0, 80),
             }))
             .filter((p) => p.url)
             .slice(0, MAX_CONSTRUCTION_PHOTOS);
         }
       }
 
-      const content = await siteContentModel.findOneAndUpdate(
-        { key: "main" },
-        { $set: patch },
-        { new: true, upsert: true }
-      );
-      res.status(200).json({ message: "Content updated", content });
+      await getOrCreate();
+      const params = [];
+      const sets = [];
+      const bind = (v) => {
+        params.push(v);
+        return `$${params.length}`;
+      };
+      for (const [name, value] of Object.entries(sections))
+        sets.push(`"${name}" = ${bind(JSON.stringify(value))}::jsonb`);
+      if (constructionPatch)
+        sets.push(
+          `construction = COALESCE(construction, '{}'::jsonb) || ${bind(JSON.stringify(constructionPatch))}::jsonb`
+        );
+      if (req.user?.userId) sets.push(`updated_by = ${bind(req.user.userId)}`);
+      sets.push("updated_at = now()");
+
+      const { rows } = await query(`UPDATE site_content SET ${sets.join(", ")} WHERE key = 'main' RETURNING *`, params);
+      res.status(200).json({ message: "Content updated", content: withDefaults(siteContent.fromRow(rows[0])) });
     } catch (err) {
       console.error("Site content update error:", err);
       res.status(500).json({ message: "Server error", error: err.message });

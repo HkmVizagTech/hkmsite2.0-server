@@ -1,18 +1,23 @@
-import { galleryModel } from "../models/gallery.model.js";
+import fs from "node:fs";
+import { galleries } from "../db/tables.js";
 import { uploadToR2 } from "../utils/r2.js";
 import { istDayStart, istDayEnd } from "../config/timezone.js";
-import fs from "node:fs";
+import { validateDoc, pick, toStringArray, toDate } from "../domain/validate.js";
+
+const TYPES = ["darshan", "festival", "seva", "community", "other"];
+const STATUSES = ["active", "inactive"];
+const EDITABLE = ["title", "description", "images", "date", "category", "type", "status"];
+
+const fail = (res, label, err) => {
+  console.error(`${label}:`, err && err.stack ? err.stack : err);
+  res.status(500).json({ message: "Server error", error: err && err.message ? err.message : String(err) });
+};
 
 const galleryController = {
-  // POST /gallery/upload-image — upload a single image to R2 and return
-  // its URL so the admin page can collect URLs before creating a gallery
-  // entry. Matches the same pattern as donations-admin/upload-image,
-  // media library, etc.
   uploadImage: async (req, res) => {
     try {
       if (!req.file) return res.status(400).json({ message: "No file uploaded" });
       const result = await uploadToR2(req.file.path, "gallery");
-
       fs.unlink(req.file.path, () => {});
       res.status(200).json({ secure_url: result.secure_url });
     } catch (error) {
@@ -24,71 +29,78 @@ const galleryController = {
   list: async (req, res) => {
     try {
       const { category, type, date, status } = req.query;
-      let filter = {};
+      const filter = {};
       if (category) filter.category = category;
       if (type) filter.type = type;
       if (status) filter.status = status;
-      // IST calendar day — a bare YYYY-MM-DD parses as UTC midnight.
       if (date) {
         const start = istDayStart(date);
         const end = istDayEnd(date);
         if (start && end) filter.date = { $gte: start, $lte: end };
       }
-      const items = await galleryModel.find(filter).sort({ date: -1 });
+      const items = await galleries.find(filter, { sort: { date: -1, _id: 1 } });
       res.status(200).json({ items });
     } catch (err) {
-      console.error("Gallery list error:", err && err.stack ? err.stack : err);
-      res.status(500).json({ message: "Server error", error: err && err.message ? err.message : String(err) });
+      fail(res, "Gallery list error", err);
     }
   },
 
   get: async (req, res) => {
     try {
-      const item = await galleryModel.findById(req.params.id);
+      const item = await galleries.findById(req.params.id);
       if (!item) return res.status(404).json({ message: "Gallery item not found" });
       res.status(200).json({ item });
     } catch (err) {
-      console.error("Gallery get error:", err && err.stack ? err.stack : err);
-      res.status(500).json({ message: "Server error", error: err && err.message ? err.message : String(err) });
+      fail(res, "Gallery get error", err);
     }
   },
 
   create: async (req, res) => {
     try {
       const { title, description, images, date, category, type, status } = req.body;
-      const item = await galleryModel.create({
-        title, description, images, date, category, type, status,
-        createdBy: req.user.userId
+      validateDoc(
+        "gallery",
+        { title, date, type, status },
+        { required: ["title", "date"], enums: { type: TYPES, status: STATUSES } }
+      );
+      const item = await galleries.insert({
+        title,
+        description,
+        images: toStringArray(images) || [],
+        date: toDate(date),
+        category,
+        type,
+        status,
+        createdBy: req.user.userId,
       });
       res.status(201).json({ message: "Gallery item created", item });
     } catch (err) {
-      console.error("Gallery create error:", err && err.stack ? err.stack : err);
-      res.status(500).json({ message: "Server error", error: err && err.message ? err.message : String(err) });
+      fail(res, "Gallery create error", err);
     }
   },
 
   update: async (req, res) => {
     try {
-      const { id } = req.params;
-      const item = await galleryModel.findByIdAndUpdate(id, req.body, { new: true });
+      const patch = pick(req.body || {}, EDITABLE);
+      if (patch.images !== undefined) patch.images = toStringArray(patch.images) || [];
+      if (patch.date !== undefined) patch.date = toDate(patch.date);
+      validateDoc("gallery", patch, { enums: { type: TYPES, status: STATUSES } });
+      const item = await galleries.updateById(req.params.id, patch);
       if (!item) return res.status(404).json({ message: "Gallery item not found" });
       res.status(200).json({ message: "Gallery item updated", item });
     } catch (err) {
-      console.error("Gallery update error:", err && err.stack ? err.stack : err);
-      res.status(500).json({ message: "Server error", error: err && err.message ? err.message : String(err) });
+      fail(res, "Gallery update error", err);
     }
   },
 
   delete: async (req, res) => {
     try {
-      const { id } = req.params;
-      await galleryModel.findByIdAndDelete(id);
+      await galleries.deleteById(req.params.id);
       res.status(200).json({ message: "Gallery item deleted" });
     } catch (err) {
-      console.error("Gallery delete error:", err && err.stack ? err.stack : err);
-      res.status(500).json({ message: "Server error", error: err && err.message ? err.message : String(err) });
+      fail(res, "Gallery delete error", err);
     }
-  }
+  },
 };
 
 export { galleryController };

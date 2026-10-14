@@ -6,14 +6,6 @@ import { authMiddleware, adminMiddleware } from "../middlewares/auth.middleware.
 
 const paymentRouter = express.Router();
 
-// Order creation rate limiter — protects two things:
-// 1. Razorpay's own API rate limits, which cap how many orders you can
-//    create per minute. Hitting their limit blocks ALL donors, not just
-//    the one who caused it — catastrophic during a Janmashtami campaign.
-// 2. Accidental hammering from a donor clicking "Donate" repeatedly.
-// 30 order attempts per IP per minute is generous for real donors and
-// tight enough to stop abuse. The window is short (1 min) so a genuine
-// user who hits the limit is only delayed briefly, not blocked for long.
 const orderRateLimit = rateLimit({
   windowMs: 60 * 1000,
   max: 30,
@@ -27,36 +19,44 @@ const orderRateLimit = rateLimit({
   },
 });
 
-paymentRouter.post('/order', orderRateLimit, express.json(), paymentController.createOrder);
-paymentRouter.post('/subscription', orderRateLimit, express.json(), paymentController.createSubscription);
+paymentRouter.post("/order", orderRateLimit, express.json(), paymentController.createOrder);
+paymentRouter.post("/subscription", orderRateLimit, express.json(), paymentController.createSubscription);
 const verifyRateLimit = rateLimit({ windowMs: 60 * 1000, max: 60, standardHeaders: true, legacyHeaders: false });
-paymentRouter.post('/verify', verifyRateLimit, express.json(), paymentController.verifyPayment);
+paymentRouter.post("/verify", verifyRateLimit, express.json(), paymentController.verifyPayment);
 
-// "Prefer PhonePe / UPI?" fallback after a failed/closed Razorpay checkout:
-// the donor opened a UPI app, then tapped "I've paid". Both only annotate the
-// donation (proved by its Razorpay order id); an admin matches the payment.
 const upiFallbackRateLimit = rateLimit({ windowMs: 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false });
-paymentRouter.post('/upi-fallback/opened', upiFallbackRateLimit, express.json(), upiFallbackController.opened);
-paymentRouter.post('/upi-fallback/claim', upiFallbackRateLimit, express.json(), upiFallbackController.claim);
+paymentRouter.post("/upi-fallback/opened", upiFallbackRateLimit, express.json(), upiFallbackController.opened);
+paymentRouter.post("/upi-fallback/claim", upiFallbackRateLimit, express.json(), upiFallbackController.claim);
 
-// Public status-check endpoint — called by the frontend to poll for
-// webhook-triggered completion after a donor navigates away from the
-// Razorpay checkout widget (e.g. pays in their UPI app and goes back).
-// Returns only safe, non-sensitive fields. No auth required — the
-// orderId itself is the access token (long random string from Razorpay).
-// ?live=1 calls Razorpay, so it gets its own limiter; plain polls don't.
-const liveStatusRateLimit = rateLimit({ windowMs: 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false, skip: (req) => req.query.live !== '1' });
-paymentRouter.get('/status/:orderId', liveStatusRateLimit, express.json(), paymentController.checkStatus);
+const liveStatusRateLimit = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => req.query.live !== "1",
+});
+paymentRouter.get("/status/:orderId", liveStatusRateLimit, express.json(), paymentController.checkStatus);
 
 // Four distinct URLs, one per Razorpay account -- each account's own
 // dashboard gets its own webhook secret tied unambiguously to its URL.
-paymentRouter.post('/webhook', express.raw({ type: '*/*' }), paymentController.webhookFor('default'));
-paymentRouter.post('/webhook/donations', express.raw({ type: '*/*' }), paymentController.webhookFor('donations'));
-paymentRouter.post('/webhook/touchstone', express.raw({ type: '*/*' }), paymentController.webhookFor('touchstone'));
-paymentRouter.post('/webhook/shop', express.raw({ type: '*/*' }), paymentController.webhookFor('shop'));
+paymentRouter.post("/webhook", express.raw({ type: "*/*" }), paymentController.webhookFor("default"));
+paymentRouter.post("/webhook/donations", express.raw({ type: "*/*" }), paymentController.webhookFor("donations"));
+paymentRouter.post("/webhook/touchstone", express.raw({ type: "*/*" }), paymentController.webhookFor("touchstone"));
+paymentRouter.post("/webhook/shop", express.raw({ type: "*/*" }), paymentController.webhookFor("shop"));
 
-paymentRouter.post('/reconcile/:donationId', authMiddleware, adminMiddleware, express.json(), paymentController.reconcile);
-paymentRouter.get('/audit-subscriptions', authMiddleware, adminMiddleware, paymentController.auditSubscriptions);
-paymentRouter.post('/backfill-subscription-gaps', authMiddleware, adminMiddleware, paymentController.backfillSubscriptionGaps);
+paymentRouter.post(
+  "/reconcile/:donationId",
+  authMiddleware,
+  adminMiddleware,
+  express.json(),
+  paymentController.reconcile
+);
+paymentRouter.get("/audit-subscriptions", authMiddleware, adminMiddleware, paymentController.auditSubscriptions);
+paymentRouter.post(
+  "/backfill-subscription-gaps",
+  authMiddleware,
+  adminMiddleware,
+  paymentController.backfillSubscriptionGaps
+);
 
 export { paymentRouter };

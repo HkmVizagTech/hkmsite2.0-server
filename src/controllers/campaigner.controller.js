@@ -1,19 +1,16 @@
-import { campaignerModel } from "../models/campaigner.model.js";
-import { donationModel } from "../models/donation.model.js";
+import { campaigners, donations, templeDevotees } from "../db/tables.js";
+import { many, one } from "../db/pg.js";
 import { cacheWrap, cacheKeys } from "../cache/memoryCache.js";
 import { IST } from "../config/timezone.js";
-import { templeDevoteeModel } from "../models/templeDevotee.model.js";
 
-// Shorter than the site-wide stats TTL: a campaigner refreshing their own page
-// to watch donations land is the single most sensitive audience for staleness
-// on the whole site.
 const CAMPAIGNER_TTL = Number(process.env.CAMPAIGNER_CACHE_TTL_SECONDS || 20);
 
 const PRICE_PER_SQFT = () => Number(process.env.SQFT_PRICE_PER_UNIT) || 6000;
 
-// Privacy-safe display name for public donor lists: "Ramesh K."
 const toDisplayName = (fullName) => {
-  const parts = String(fullName || "A devotee").trim().split(/\s+/);
+  const parts = String(fullName || "A devotee")
+    .trim()
+    .split(/\s+/);
   if (parts.length === 1) return parts[0];
   return `${parts[0]} ${parts[parts.length - 1].charAt(0)}.`;
 };
@@ -28,10 +25,6 @@ const timeAgo = (date) => {
   const days = Math.floor(hrs / 24);
   if (days === 1) return "yesterday";
   if (days < 30) return `${days} days ago`;
-  // Explicit zone: this falls back to a human-readable calendar date
-  // ("5 Jul") once the donation is over a month old, and under the UTC
-  // process anything from the first 5.5 hours of an IST day showed the
-  // day before.
   return new Date(date).toLocaleDateString("en-IN", { timeZone: IST, month: "short", day: "numeric" });
 };
 
@@ -45,17 +38,16 @@ const slugify = (name) =>
     .slice(0, 60) || "campaigner";
 
 const campaignerController = {
-  // PUBLIC — register as a campaigner (SQFT or JANMASHTAMI).
-  // APPROVAL-FIRST: new registrations are created with status "pending";
-  // the campaign link only goes live after an admin approves. Idempotent
-  // on email+campaignType: re-registering returns the existing record's
-  // state (pending → "awaiting approval", active → the live link).
   register: async (req, res) => {
     try {
       const name = String(req.body.name || "").trim();
-      const email = String(req.body.email || "").trim().toLowerCase();
+      const email = String(req.body.email || "")
+        .trim()
+        .toLowerCase();
       const mobile = String(req.body.mobile || "").trim();
-      const message = String(req.body.message || "").trim().slice(0, 300);
+      const message = String(req.body.message || "")
+        .trim()
+        .slice(0, 300);
       const campaignType = req.body.campaignType === "JANMASHTAMI" ? "JANMASHTAMI" : "SQFT";
       const devoteeId = String(req.body.devoteeId || "").trim();
       let goalSqft = Number(req.body.goalSqft) || 0;
@@ -67,39 +59,47 @@ const campaignerController = {
       if (!/^[0-9+\-\s]{8,15}$/.test(mobile))
         return res.status(400).json({ message: "Please provide a valid mobile number." });
 
-      // Validate the selected devotee (required for new registrations —
-      // it drives DCC receipt attribution).
       let referredByDevotee = null;
       if (devoteeId) {
-
-        const devotee = await templeDevoteeModel.findOne({ _id: devoteeId, status: "active" }).lean();
+        const devotee = await templeDevotees.findOne({ _id: devoteeId, status: "active" });
         if (!devotee) return res.status(400).json({ message: "Please select a valid devotee from the list." });
         referredByDevotee = devotee._id;
       } else {
         return res.status(400).json({ message: "Please select the devotee you know from the list." });
       }
 
-      const existing = await campaignerModel.findOne({ email, campaignType }).lean();
+      const existing = await campaigners.findOne({ email, campaignType });
       if (existing) {
         return res.status(200).json({
           existing: true,
           status: existing.status,
-          campaigner: { name: existing.name, slug: existing.slug, goalSqft: existing.goalSqft, status: existing.status },
+          campaigner: {
+            name: existing.name,
+            slug: existing.slug,
+            goalSqft: existing.goalSqft,
+            status: existing.status,
+          },
         });
       }
 
-      // Generate a unique slug from the name.
       const base = slugify(name);
       let slug = base;
       let n = 1;
       // eslint-disable-next-line no-await-in-loop
-      while (await campaignerModel.exists({ slug })) {
+      while (await campaigners.exists({ slug })) {
         n += 1;
         slug = `${base}-${n}`;
       }
 
-      const campaigner = await campaignerModel.create({
-        name, email, mobile, slug, goalSqft, message, campaignType, referredByDevotee,
+      const campaigner = await campaigners.insert({
+        name,
+        email,
+        mobile,
+        slug,
+        goalSqft,
+        message,
+        campaignType,
+        referredByDevotee,
         status: "pending",
       });
 
@@ -114,45 +114,31 @@ const campaignerController = {
     }
   },
 
-  // PUBLIC — campaigner page data: profile + live stats for their campaign.
-  // Never exposes the campaigner's email/mobile or donor PII.
   getBySlug: async (req, res) => {
     try {
       const slug = String(req.params.slug || "").toLowerCase();
 
-      // P2P campaign pages are shared by the campaigner into WhatsApp groups,
-      // so traffic is bursty and lands on the same few slugs at once — many
-      // people opening one link within a minute of each other. That is the
-      // shape a short TTL suits best. Completing a donation busts this key
-      // (paymentCompletion.service.js), so a campaigner watching their own
-      // page still sees a new donation appear promptly.
-      //
-      // A 404 is deliberately NOT cached: an unknown slug is either a typo or
-      // a campaigner still awaiting approval, and caching the miss would keep
-      // their page broken for the whole TTL after they go active.
       const cached = await cacheWrap(cacheKeys.campaigner(slug), CAMPAIGNER_TTL, async () => {
-        const campaigner = await campaignerModel.findOne({ slug, status: "active" }).lean();
-        // null tells cacheWrap not to cache — see the 404 note above.
+        const campaigner = await campaigners.findOne({ slug, status: "active" });
         if (!campaigner) return null;
 
         const filter = { status: "completed", campaignerSlug: slug };
         const [recent, agg] = await Promise.all([
-          donationModel.find(filter).sort({ date: -1 }).limit(20).select("donorName amount date").lean(),
-          donationModel.aggregate([
-            { $match: filter },
-            { $group: { _id: null, totalAmount: { $sum: "$amount" }, donorCount: { $sum: 1 } } },
-          ]),
+          donations.find(filter, { sort: { date: -1, _id: -1 }, limit: 20, fields: ["donorName", "amount", "date"] }),
+          one(
+            `SELECT COALESCE(SUM(amount), 0) AS "totalAmount", count(*)::int AS "donorCount"
+               FROM donations WHERE status = 'completed' AND campaigner_slug = $1`,
+            [slug]
+          ),
         ]);
 
-        // Redact before caching; keep raw dates for per-request timeAgo, and
-        // raw amounts so the sqft conversion tracks the current price.
         return {
           name: campaigner.name,
           slug: campaigner.slug,
           goalSqft: campaigner.goalSqft || 0,
           message: campaigner.message || "",
-          totalAmount: agg[0]?.totalAmount || 0,
-          donorCount: agg[0]?.donorCount || 0,
+          totalAmount: agg?.totalAmount || 0,
+          donorCount: agg?.donorCount || 0,
           donors: recent.map((d) => ({
             name: toDisplayName(d.donorName),
             amount: d.amount,
@@ -186,35 +172,37 @@ const campaignerController = {
     }
   },
 
-  // ADMIN — list all campaigners with their raised totals for management.
   list: async (req, res) => {
     try {
       const price = PRICE_PER_SQFT();
-      const [campaigners, totals] = await Promise.all([
-        campaignerModel.find().sort({ createdAt: -1 }).populate("referredByDevotee", "name dccEnrolledById").lean(),
-        donationModel.aggregate([
-          { $match: { status: "completed", campaignerSlug: { $exists: true, $ne: null } } },
-          {
-            $group: {
-              _id: "$campaignerSlug",
-              totalAmount: { $sum: "$amount" },
-              donorCount: { $sum: 1 },
-            },
-          },
-        ]),
+      const [rows, totals] = await Promise.all([
+        many(
+          `SELECT c.*, d.name AS dev_name
+             FROM campaigners c LEFT JOIN temple_devotees d ON d.id = c.referred_by_devotee_id
+            ORDER BY c.created_at DESC, c.id DESC`
+        ),
+        many(
+          `SELECT campaigner_slug AS "_id", COALESCE(SUM(amount), 0) AS "totalAmount", count(*)::int AS "donorCount"
+             FROM donations WHERE status = 'completed' AND campaigner_slug IS NOT NULL
+            GROUP BY campaigner_slug`
+        ),
       ]);
+      const list = rows.map(({ dev_name, ...row }) => ({
+        ...campaigners.fromRow(row),
+        devoteeName: dev_name,
+      }));
 
       const bySlug = Object.fromEntries(totals.map((t) => [t._id, t]));
 
       res.status(200).json({
-        campaigners: campaigners.map((c) => ({
+        campaigners: list.map((c) => ({
           _id: c._id,
           name: c.name,
           email: c.email,
           mobile: c.mobile,
           slug: c.slug,
           campaignType: c.campaignType || "SQFT",
-          referredByDevotee: c.referredByDevotee ? { _id: c.referredByDevotee._id, name: c.referredByDevotee.name } : null,
+          referredByDevotee: c.referredByDevotee ? { _id: c.referredByDevotee, name: c.devoteeName } : null,
           goalSqft: c.goalSqft || 0,
           message: c.message || "",
           status: c.status,
@@ -230,16 +218,11 @@ const campaignerController = {
     }
   },
 
-  // ADMIN — approve (pending→active), hide, or re-activate a campaigner.
   updateStatus: async (req, res) => {
     try {
       const allowed = ["pending", "active", "hidden"];
       const status = allowed.includes(req.body.status) ? req.body.status : "active";
-      const campaigner = await campaignerModel.findByIdAndUpdate(
-        req.params.id,
-        { status },
-        { new: true }
-      );
+      const campaigner = await campaigners.updateById(req.params.id, { status });
       if (!campaigner) return res.status(404).json({ message: "Campaigner not found" });
       res.status(200).json({ message: "Updated", status: campaigner.status });
     } catch (err) {

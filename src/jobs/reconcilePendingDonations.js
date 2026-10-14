@@ -1,19 +1,9 @@
-import { reconcilePendingDonations, closeStalePendingWithoutOrder, CLOSE_UNPAID_AFTER_MINUTES } from "../services/reconciliation.service.js";
+import {
+  reconcilePendingDonations,
+  closeStalePendingWithoutOrder,
+  CLOSE_UNPAID_AFTER_MINUTES,
+} from "../services/reconciliation.service.js";
 
-// No donation stays "pending". Every run looks at donations pending for more
-// than CLOSE_UNPAID_AFTER_MINUTES (30) and settles each one against
-// Razorpay's own records:
-//   - captured                      -> completed (DCC + WhatsApp as usual)
-//   - every attempt failed          -> failed (Razorpay's reason kept)
-//   - never paid / donor left       -> failed, marked closedAsNotPaidAt
-//   - authorised, not yet captured  -> captured, then completed
-// Hand entries with a UTR whose completion never ran are completed, and
-// monthly seva sign-ups are completed (paid first invoice) or closed after
-// 24 h. It is also the safety net for missed webhooks (restart mid-delivery,
-// Razorpay's retry window running out).
-//
-// Runs on a plain setInterval rather than a cron library — avoids adding
-// a dependency for something this simple on an always-on Railway process.
 const INTERVAL_MS = Number(process.env.RECONCILE_INTERVAL_MINUTES || 15) * 60 * 1000;
 
 let running = false;
@@ -33,9 +23,9 @@ async function runReconciliation() {
     if (fixed > 0 || summary.markedFailed > 0 || summary.closedNotPaid > 0 || noOrder.closedNotPaid > 0) {
       console.log(
         `[reconcile] completed ${fixed} paid, marked ${summary.markedFailed} failed, ` +
-        `closed ${summary.closedNotPaid + noOrder.closedNotPaid} never paid ` +
-        `(checked ${summary.totalChecked + noOrder.checked}, ` +
-        `${summary.errors + noOrder.errors} errors)`
+          `closed ${summary.closedNotPaid + noOrder.closedNotPaid} never paid ` +
+          `(checked ${summary.totalChecked + noOrder.checked}, ` +
+          `${summary.errors + noOrder.errors} errors)`
       );
     }
   } catch (err) {

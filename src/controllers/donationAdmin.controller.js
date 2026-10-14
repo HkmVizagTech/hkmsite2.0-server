@@ -1,42 +1,39 @@
-// src/controllers/donationAdmin.controller.js
-//
-// Analytics/admin API for the standalone /donations page specifically —
-// scoped to donations where sourcePage === 'donations' (or legacy records
-// with type: 'Donation'), separate from the main site's seva donations.
-// Adapted from subhojanam-server's admin.controller.js (the proven
-// annadan.harekrishnavizag.org admin dashboard pattern), trimmed to what
-// this simpler one-time-donation page actually needs.
-
 import fs from "node:fs";
-import { donationModel } from "../models/donation.model.js";
+import { donations } from "../db/tables.js";
+import { isId } from "../db/pg.js";
 import { uploadToR2 } from "../utils/r2.js";
 import { createRazorpayInstance } from "./payment.controller.js";
 import { completeDonation } from "../services/paymentCompletion.service.js";
-import { IST, istDayStart, istDayEnd } from "../config/timezone.js";
-import { dccReceiptStatus, isSweepRunning, sweepDccReceipts, pushAndSendReceipt, pushResultMessage, setReceiptNumberAndSend } from "../services/dccSweep.service.js";
+import { istDayStart, istDayEnd } from "../config/timezone.js";
+import {
+  dccReceiptStatus,
+  isSweepRunning,
+  sweepDccReceipts,
+  pushAndSendReceipt,
+  pushResultMessage,
+  setReceiptNumberAndSend,
+} from "../services/dccSweep.service.js";
 import { isDccConfigured } from "../services/dcc.service.js";
+import {
+  DONATIONS_DOMAIN_PATTERN,
+  NEEDS_ATTENTION_OR,
+  SEVA_OR_TYPE_GENERAL,
+  aggregate,
+  sumCount,
+  sumTotal,
+  countGroups,
+  istDay,
+} from "../domain/donationQuery.js";
 
-// Every query here is scoped to the /donations page's own donations only —
-// never mixes in seva-page or campaign donations from the rest of the site.
-// Matches "donations" exactly or "donations/<anything>" (covers any future
-// page built under this path, e.g. donations/janmashtami2, automatically)
-// plus two legacy exact-match fallbacks for older data shapes that predate
-// this pattern ("/donations" with a leading slash, and type:"Donation").
-const DONATIONS_DOMAIN_PATTERN = /^donations(\/|$)/;
+// Scope of the standalone /donations page family (plus two legacy shapes). Repo-style filter,
+// also handed to dccSweep.service as `scope`.
 const DONATIONS_PAGE_FILTER = {
   $or: [{ sourcePage: DONATIONS_DOMAIN_PATTERN }, { sourcePage: "/donations" }, { type: "Donation" }],
 };
 
 const SUCCESS_STATUSES = ["completed"];
+const BY_NEWEST = { createdAt: -1, _id: 1 };
 
-// Builds a { createdAt: {...} } match clause from optional YYYY-MM-DD
-// startDate/endDate query params, interpreted as IST calendar days.
-// endDate is inclusive through 23:59:59.999 IST.
-//
-// This used to do `new Date(startDate)` on the bare string. ECMA-262
-// specifies a date-only string as UTC midnight regardless of process.env.TZ,
-// so "startDate=2026-10-01" meant 05:30 IST and quietly dropped every
-// donation taken in the first five and a half hours of the selected day.
 function buildDateRangeMatch(startDate, endDate) {
   if (!startDate && !endDate) return {};
   const createdAt = {};
@@ -51,8 +48,29 @@ function buildDateRangeMatch(startDate, endDate) {
   return Object.keys(createdAt).length ? { createdAt } : {};
 }
 
+const withUtmFilters = (match, { campaign, source, medium }) => {
+  if (campaign) match["utm.campaign"] = campaign === "direct" ? { $in: [null, ""] } : campaign;
+  if (source) match["utm.source"] = source === "direct" ? { $in: [null, ""] } : source;
+  if (medium) match["utm.medium"] = medium === "none" ? { $in: [null, ""] } : medium;
+  return match;
+};
+
+const utmGroupRows = (rows) =>
+  rows.map((r) => ({
+    _id: {
+      campaign: r.campaign === "" ? "direct" : r.campaign,
+      source: r.source === "" ? "direct" : r.source,
+      medium: r.medium === "" ? "none" : r.medium,
+    },
+    totalAmount: r.total_amount,
+    count: r.count,
+  }));
+
+const UTM_GROUP_SELECT =
+  "COALESCE(utm_campaign, '') AS campaign, COALESCE(utm_source, '') AS source, COALESCE(utm_medium, '') AS medium, SUM(amount) AS total_amount, COUNT(*) AS count";
+const UTM_GROUP_ORDER = `total_amount DESC, campaign COLLATE "C", source COLLATE "C", medium COLLATE "C"`;
+
 const donationAdminController = {
-  // GET /donations-admin/dashboard-stats
   getDashboardStats: async (req, res) => {
     try {
       const now = new Date();
@@ -62,55 +80,30 @@ const donationAdminController = {
       const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
 
       const baseMatch = { ...DONATIONS_PAGE_FILTER, status: { $in: SUCCESS_STATUSES } };
-
       const needsAttentionFilter = {
-        $and: [
-          DONATIONS_PAGE_FILTER,
-          { status: "completed" },
-          { $or: [
-            { dccSyncStatus: "failed" },
-            { whatsappReceiptSentAt: { $exists: false } },
-            { whatsappReceiptSentAt: null },
-          ]},
-        ],
+        $and: [DONATIONS_PAGE_FILTER, { status: "completed" }, { $or: NEEDS_ATTENTION_OR }],
       };
 
-      const [totalAgg, lastMonthAgg, thisMonthAgg, todayAgg, donorEmails, needsAttentionCount] = await Promise.all([
-        donationModel.aggregate([
-          { $match: baseMatch },
-          { $group: { _id: null, total: { $sum: "$amount" }, count: { $sum: 1 } } },
-        ]),
-        donationModel.aggregate([
-          { $match: { ...baseMatch, createdAt: { $gte: startOfLastMonth, $lte: endOfLastMonth } } },
-          { $group: { _id: null, total: { $sum: "$amount" } } },
-        ]),
-        donationModel.aggregate([
-          { $match: { ...baseMatch, createdAt: { $gte: startOfMonth } } },
-          { $group: { _id: null, total: { $sum: "$amount" } } },
-        ]),
-        donationModel.aggregate([
-          { $match: { ...baseMatch, createdAt: { $gte: startOfToday } } },
-          { $group: { _id: null, total: { $sum: "$amount" } } },
-        ]),
-        donationModel.distinct("donorEmail", baseMatch),
-        donationModel.countDocuments(needsAttentionFilter),
+      const [total, lastMonthTotal, thisMonthTotal, todayTotal, donorEmails, needsAttentionCount] = await Promise.all([
+        sumCount(baseMatch),
+        sumTotal({ ...baseMatch, createdAt: { $gte: startOfLastMonth, $lte: endOfLastMonth } }),
+        sumTotal({ ...baseMatch, createdAt: { $gte: startOfMonth } }),
+        sumTotal({ ...baseMatch, createdAt: { $gte: startOfToday } }),
+        // distinct donor emails (empty string is falsy and was filtered out before)
+        countGroups({ ...baseMatch, donorEmail: { $nin: [null, ""] } }, "donor_email"),
+        donations.count(needsAttentionFilter),
       ]);
 
-      const total = totalAgg[0]?.total || 0;
-      const lastMonthTotal = lastMonthAgg[0]?.total || 0;
-      const thisMonthTotal = thisMonthAgg[0]?.total || 0;
-      const todayTotal = todayAgg[0]?.total || 0;
-
       const pctChange = (curr, prev) => {
-        if (!prev) return null; // no prior-period baseline — don't fabricate a %
+        if (!prev) return null;
         return Number((((curr - prev) / prev) * 100).toFixed(1));
       };
 
       res.status(200).json({
         success: true,
         stats: {
-          totalDonations: { value: total, count: totalAgg[0]?.count || 0 },
-          totalDonors: { value: donorEmails.filter(Boolean).length },
+          totalDonations: { value: total.total, count: total.count },
+          totalDonors: { value: donorEmails },
           thisMonth: { value: thisMonthTotal, changePct: pctChange(thisMonthTotal, lastMonthTotal) },
           today: { value: todayTotal },
           needsAttentionCount,
@@ -122,64 +115,48 @@ const donationAdminController = {
     }
   },
 
-  // GET /donations-admin/report?startDate=&endDate=&sourcePage=
-  // Full report for the /donations family over a custom date range:
-  // per-page split (main /donations vs any sub-page like
-  // donations/janmashtami2), a day-by-day series, and a seva breakdown.
-  // Unlike GET /donations/report (the main site's report), this one is
-  // scoped TO the /donations family rather than excluding it, since that
-  // endpoint's EXCLUDE_DONATIONS_PAGE filter would return nothing for
-  // this domain.
   getReport: async (req, res) => {
     try {
       const { startDate, endDate, sourcePage } = req.query;
       if (!startDate || !endDate) {
         return res.status(400).json({ success: false, message: "startDate and endDate are required (YYYY-MM-DD)." });
       }
-      // IST calendar days — see buildDateRangeMatch above for why a bare
-      // YYYY-MM-DD cannot go through `new Date()` directly.
       const start = istDayStart(startDate);
       const end = istDayEnd(endDate);
       if (!start || !end) {
-        return res.status(400).json({ success: false, message: "startDate and endDate must be valid dates (YYYY-MM-DD)." });
+        return res
+          .status(400)
+          .json({ success: false, message: "startDate and endDate must be valid dates (YYYY-MM-DD)." });
       }
 
       const baseMatch = sourcePage
         ? { sourcePage, status: "completed", createdAt: { $gte: start, $lte: end } }
         : { ...DONATIONS_PAGE_FILTER, status: "completed", createdAt: { $gte: start, $lte: end } };
 
-      const [summaryAgg, byPageAgg, dailyAgg, sevaAgg] = await Promise.all([
-        donationModel.aggregate([
-          { $match: baseMatch },
-          { $group: { _id: null, total: { $sum: "$amount" }, count: { $sum: 1 } } },
-        ]),
-        donationModel.aggregate([
-          { $match: baseMatch },
-          { $group: { _id: { $ifNull: ["$sourcePage", "unknown"] }, amount: { $sum: "$amount" }, count: { $sum: 1 } } },
-          { $sort: { amount: -1 } },
-        ]),
-        donationModel.aggregate([
-          { $match: baseMatch },
-          // timezone is required: $dateToString runs inside MongoDB, which
-          // never sees this process's TZ and would bucket by UTC day.
-          { $group: { _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt", timezone: IST } }, amount: { $sum: "$amount" }, count: { $sum: 1 } } },
-          { $sort: { _id: 1 } },
-        ]),
-        donationModel.aggregate([
-          { $match: baseMatch },
-          { $group: { _id: { $ifNull: ["$sevaName", { $ifNull: ["$type", "General"] }] }, amount: { $sum: "$amount" }, count: { $sum: 1 } } },
-          { $sort: { amount: -1 } },
-          { $limit: 30 },
-        ]),
+      const [summary, byPageAgg, dailyAgg, sevaAgg] = await Promise.all([
+        sumCount(baseMatch),
+        aggregate(baseMatch, "COALESCE(source_page, 'unknown') AS k, SUM(amount) AS amount, COUNT(*) AS count", {
+          groupBy: "k",
+          orderBy: `amount DESC, k COLLATE "C"`,
+        }),
+        aggregate(baseMatch, `${istDay("created_at")} AS k, SUM(amount) AS amount, COUNT(*) AS count`, {
+          groupBy: "k",
+          orderBy: "k",
+        }),
+        aggregate(baseMatch, `${SEVA_OR_TYPE_GENERAL} AS k, SUM(amount) AS amount, COUNT(*) AS count`, {
+          groupBy: "k",
+          orderBy: `amount DESC, k COLLATE "C"`,
+          limit: 30,
+        }),
       ]);
 
       res.status(200).json({
         success: true,
         range: { start, end },
-        summary: { totalAmount: summaryAgg[0]?.total || 0, count: summaryAgg[0]?.count || 0 },
-        byPage: byPageAgg.map((p) => ({ sourcePage: p._id, amount: p.amount, count: p.count })),
-        daily: dailyAgg.map((d) => ({ date: d._id, amount: d.amount, count: d.count })),
-        sevaBreakdown: sevaAgg.map((s) => ({ name: s._id, amount: s.amount, count: s.count })),
+        summary: { totalAmount: summary.total, count: summary.count },
+        byPage: byPageAgg.map((p) => ({ sourcePage: p.k, amount: p.amount, count: p.count })),
+        daily: dailyAgg.map((d) => ({ date: d.k, amount: d.amount, count: d.count })),
+        sevaBreakdown: sevaAgg.map((s) => ({ name: s.k, amount: s.amount, count: s.count })),
       });
     } catch (error) {
       console.error("donationAdmin.getReport error:", error);
@@ -187,73 +164,58 @@ const donationAdminController = {
     }
   },
 
-  // GET /donations-admin/transactions?page=&limit=&search=&status=&startDate=&endDate=&campaign=&source=&medium=&sourcePage=
   getAllTransactions: async (req, res) => {
     try {
       const {
-        page = 1, limit = 20, search = "", status = "all",
-        startDate, endDate, campaign, source, medium, sourcePage,
+        page = 1,
+        limit = 20,
+        search = "",
+        status = "all",
+        startDate,
+        endDate,
+        campaign,
+        source,
+        medium,
+        sourcePage,
       } = req.query;
 
-      const query = { ...DONATIONS_PAGE_FILTER };
-
-      // Optional narrowing within the /donations family — e.g.
-      // sourcePage=donations for just the main page's own transactions,
-      // or sourcePage=donations/janmashtami2 for just that page's,
-      // instead of the combined family-wide total.
-      if (sourcePage) {
-        delete query.$or;
-        query.sourcePage = sourcePage;
-      }
+      // sourcePage narrows within the /donations family to one page.
+      const and = [sourcePage ? { sourcePage } : DONATIONS_PAGE_FILTER];
 
       if (status === "needs_attention") {
-        query.status = "completed";
-        query.$and = [
-          { $or: query.$or || [{ sourcePage: query.sourcePage }] },
-          { $or: [
-            { dccSyncStatus: "failed" },
-            { whatsappReceiptSentAt: { $exists: false } },
-            { whatsappReceiptSentAt: null },
-          ]},
-        ];
-        delete query.$or;
+        and.push({ status: "completed" }, { $or: NEEDS_ATTENTION_OR });
       } else if (status !== "all") {
-        const statuses = String(status).split(",").map((s) => s.trim()).filter(Boolean);
-        query.status = statuses.length === 1 ? statuses[0] : { $in: statuses };
+        const statuses = String(status)
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+        and.push({ status: statuses.length === 1 ? statuses[0] : { $in: statuses } });
       }
 
       if (search) {
-        const searchOr = {
+        and.push({
           $or: [
             { donorName: { $regex: search, $options: "i" } },
             { donorEmail: { $regex: search, $options: "i" } },
             { donorMobile: { $regex: search, $options: "i" } },
             { razorpayPaymentId: { $regex: search, $options: "i" } },
           ],
-        };
-        if (query.$and) {
-          query.$and.push(searchOr);
-        } else {
-          query.$and = [{ $or: query.$or }, searchOr];
-          delete query.$or;
-        }
+        });
       }
 
-      // Same IST calendar-day semantics as every other range filter here.
-      Object.assign(query, buildDateRangeMatch(startDate, endDate));
-
-      if (campaign) query["utm.campaign"] = campaign === "direct" ? { $in: [null, ""] } : campaign;
-      if (source) query["utm.source"] = source === "direct" ? { $in: [null, ""] } : source;
-      if (medium) query["utm.medium"] = medium === "none" ? { $in: [null, ""] } : medium;
+      const query = withUtmFilters(
+        { $and: and, ...buildDateRangeMatch(startDate, endDate) },
+        { campaign, source, medium }
+      );
 
       const pageNum = Math.max(1, parseInt(page, 10) || 1);
       const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
       const skip = (pageNum - 1) * limitNum;
 
-      const [transactions, totalCount, amountAgg] = await Promise.all([
-        donationModel.find(query).sort({ createdAt: -1 }).skip(skip).limit(limitNum).lean(),
-        donationModel.countDocuments(query),
-        donationModel.aggregate([{ $match: query }, { $group: { _id: null, total: { $sum: "$amount" } } }]),
+      const [transactions, totalCount, totalAmount] = await Promise.all([
+        donations.find(query, { sort: BY_NEWEST, skip, limit: limitNum }),
+        donations.count(query),
+        sumTotal(query),
       ]);
 
       res.status(200).json({
@@ -285,7 +247,7 @@ const donationAdminController = {
           currentPage: pageNum,
           totalPages: Math.ceil(totalCount / limitNum),
           totalTransactions: totalCount,
-          totalAmount: amountAgg[0]?.total || 0,
+          totalAmount,
           limit: limitNum,
         },
       });
@@ -295,14 +257,13 @@ const donationAdminController = {
     }
   },
 
-  // GET /donations-admin/transactions/:id
   getTransactionById: async (req, res) => {
     try {
       const { id } = req.params;
       if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
         return res.status(400).json({ success: false, message: "Invalid transaction ID" });
       }
-      const txn = await donationModel.findOne({ _id: id, ...DONATIONS_PAGE_FILTER }).lean();
+      const txn = await donations.findOne({ _id: id, ...DONATIONS_PAGE_FILTER });
       if (!txn) return res.status(404).json({ success: false, message: "Transaction not found" });
       res.status(200).json({ success: true, transaction: txn });
     } catch (error) {
@@ -311,16 +272,12 @@ const donationAdminController = {
     }
   },
 
-  // ── DCC receipts for /donations page donations (same tab as the main
-  // admin's Donations → DCC receipts, limited to this page's donations;
-  // logic in services/dccSweep.service.js) ──
-
-  // GET /donations-admin/dcc-status?includeOld=true
   dccStatus: async (req, res) => {
     try {
-
-
-      const status = await dccReceiptStatus({ includeOld: req.query.includeOld === "true", scope: DONATIONS_PAGE_FILTER });
+      const status = await dccReceiptStatus({
+        includeOld: req.query.includeOld === "true",
+        scope: DONATIONS_PAGE_FILTER,
+      });
       res.status(200).json({ success: true, configured: isDccConfigured(), running: isSweepRunning(), ...status });
     } catch (error) {
       console.error("donationAdmin.dccStatus error:", error);
@@ -328,15 +285,17 @@ const donationAdminController = {
     }
   },
 
-  // POST /donations-admin/dcc-push-all — runs in the background
   dccPushAll: async (req, res) => {
     try {
-
-
-      if (!isDccConfigured()) return res.status(400).json({ success: false, message: "DCC is not configured on this server." });
+      if (!isDccConfigured())
+        return res.status(400).json({ success: false, message: "DCC is not configured on this server." });
       if (isSweepRunning()) return res.status(202).json({ success: true, message: "A push is already running." });
       sweepDccReceipts({ limit: 200, ignoreBackoff: true, scope: DONATIONS_PAGE_FILTER })
-        .then((s) => console.log(`[dcc-sweep] /donations admin push: pushed ${s.pushed}, ${s.receipts} receipt(s), ${s.whatsappSent} WhatsApp sent, ${s.failed} failing`))
+        .then((s) =>
+          console.log(
+            `[dcc-sweep] /donations admin push: pushed ${s.pushed}, ${s.receipts} receipt(s), ${s.whatsappSent} WhatsApp sent, ${s.failed} failing`
+          )
+        )
         .catch((e) => console.error("[dcc-sweep] /donations admin push failed:", e && e.message ? e.message : e));
       res.status(202).json({ success: true, message: "Pushing to DCC now." });
     } catch (error) {
@@ -345,39 +304,42 @@ const donationAdminController = {
     }
   },
 
-  // POST /donations-admin/transactions/:id/dcc-push — push one donation to
-  // DCC and send the WhatsApp receipt once it has a number.
   dccPushOne: async (req, res) => {
     try {
       const { id } = req.params;
-      if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) return res.status(400).json({ success: false, message: "Invalid transaction ID" });
-      const txn = await donationModel.findOne({ _id: id, ...DONATIONS_PAGE_FILTER }).select("status").lean();
+      if (!id || !id.match(/^[0-9a-fA-F]{24}$/))
+        return res.status(400).json({ success: false, message: "Invalid transaction ID" });
+      const txn = await donations.findOne({ _id: id, ...DONATIONS_PAGE_FILTER }, { fields: ["status"] });
       if (!txn) return res.status(404).json({ success: false, message: "Transaction not found" });
-      if (txn.status !== "completed") return res.status(400).json({ success: false, message: "Only successful donations get a DCC receipt." });
+      if (txn.status !== "completed")
+        return res.status(400).json({ success: false, message: "Only successful donations get a DCC receipt." });
 
-      if (!isDccConfigured()) return res.status(400).json({ success: false, message: "DCC is not configured on this server." });
-
+      if (!isDccConfigured())
+        return res.status(400).json({ success: false, message: "DCC is not configured on this server." });
 
       const result = await pushAndSendReceipt(id);
       const message = pushResultMessage(result);
-      res.status(result.receiptNumber ? 200 : 502).json({ success: !!result.receiptNumber, message, receiptNumber: result.receiptNumber, whatsapp: result.whatsapp });
+      res.status(result.receiptNumber ? 200 : 502).json({
+        success: !!result.receiptNumber,
+        message,
+        receiptNumber: result.receiptNumber,
+        whatsapp: result.whatsapp,
+      });
     } catch (error) {
       console.error("donationAdmin.dccPushOne error:", error);
       res.status(500).json({ success: false, message: "Push to DCC failed" });
     }
   },
 
-  // PUT /donations-admin/transactions/:id/receipt-number { receiptNumber }
-  // — receipt number looked up in DCC by hand; sends the WhatsApp receipt.
   setReceiptNumber: async (req, res) => {
     try {
       const { id } = req.params;
       const clean = String((req.body && req.body.receiptNumber) || "").trim();
-      if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) return res.status(400).json({ success: false, message: "Invalid transaction ID" });
+      if (!id || !id.match(/^[0-9a-fA-F]{24}$/))
+        return res.status(400).json({ success: false, message: "Invalid transaction ID" });
       if (!clean) return res.status(400).json({ success: false, message: "receiptNumber is required." });
-      const txn = await donationModel.findOne({ _id: id, ...DONATIONS_PAGE_FILTER }).select("_id").lean();
+      const txn = await donations.findOne({ _id: id, ...DONATIONS_PAGE_FILTER }, { fields: ["_id"] });
       if (!txn) return res.status(404).json({ success: false, message: "Transaction not found" });
-
 
       const result = await setReceiptNumberAndSend(id, clean);
       res.status(200).json({ success: true, message: result.message, whatsapp: result.whatsapp });
@@ -387,60 +349,44 @@ const donationAdminController = {
     }
   },
 
-  // GET /donations-admin/utm-stats — aggregated campaign/source/medium metrics
   getUtmStats: async (req, res) => {
     try {
       const { startDate, endDate } = req.query;
-      const dateMatch = buildDateRangeMatch(startDate, endDate);
-      const stats = await donationModel.aggregate([
-        { $match: { ...DONATIONS_PAGE_FILTER, status: { $in: SUCCESS_STATUSES }, ...dateMatch } },
-        {
-          $group: {
-            _id: {
-              campaign: { $ifNull: ["$utm.campaign", ""] },
-              source: { $ifNull: ["$utm.source", ""] },
-              medium: { $ifNull: ["$utm.medium", ""] },
-            },
-            totalAmount: { $sum: "$amount" },
-            count: { $sum: 1 },
-          },
-        },
-        {
-          $project: {
-            _id: {
-              campaign: { $cond: [{ $eq: ["$_id.campaign", ""] }, "direct", "$_id.campaign"] },
-              source: { $cond: [{ $eq: ["$_id.source", ""] }, "direct", "$_id.source"] },
-              medium: { $cond: [{ $eq: ["$_id.medium", ""] }, "none", "$_id.medium"] },
-            },
-            totalAmount: 1,
-            count: 1,
-          },
-        },
-        { $sort: { totalAmount: -1 } },
-      ]);
-      res.status(200).json({ success: true, stats });
+      const rows = await aggregate(
+        { ...DONATIONS_PAGE_FILTER, status: { $in: SUCCESS_STATUSES }, ...buildDateRangeMatch(startDate, endDate) },
+        UTM_GROUP_SELECT,
+        { groupBy: "campaign, source, medium", orderBy: UTM_GROUP_ORDER }
+      );
+      res.status(200).json({ success: true, stats: utmGroupRows(rows) });
     } catch (error) {
       console.error("donationAdmin.getUtmStats error:", error);
       res.status(500).json({ success: false, message: "Failed to fetch UTM stats" });
     }
   },
 
-  // GET /donations-admin/utm-transactions?campaign=&source=&medium=&startDate=&endDate=
-  // — the "View" drill-down: real transaction list for one specific campaign row.
   getUtmTransactions: async (req, res) => {
     try {
       const { campaign, source, medium, startDate, endDate } = req.query;
-      const match = { ...DONATIONS_PAGE_FILTER, status: { $in: SUCCESS_STATUSES }, ...buildDateRangeMatch(startDate, endDate) };
-      if (campaign) match["utm.campaign"] = campaign === "direct" ? { $in: [null, ""] } : campaign;
-      if (source) match["utm.source"] = source === "direct" ? { $in: [null, ""] } : source;
-      if (medium) match["utm.medium"] = medium === "none" ? { $in: [null, ""] } : medium;
+      const match = withUtmFilters(
+        { ...DONATIONS_PAGE_FILTER, status: { $in: SUCCESS_STATUSES }, ...buildDateRangeMatch(startDate, endDate) },
+        { campaign, source, medium }
+      );
 
-      const transactions = await donationModel
-        .find(match)
-        .sort({ createdAt: -1 })
-        .limit(200)
-        .select("donorName donorEmail donorMobile amount status createdAt utm receiptNumber razorpayPaymentId")
-        .lean();
+      const transactions = await donations.find(match, {
+        sort: BY_NEWEST,
+        limit: 200,
+        fields: [
+          "donorName",
+          "donorEmail",
+          "donorMobile",
+          "amount",
+          "status",
+          "createdAt",
+          "utm",
+          "receiptNumber",
+          "razorpayPaymentId",
+        ],
+      });
 
       res.status(200).json({ success: true, count: transactions.length, transactions });
     } catch (error) {
@@ -448,28 +394,48 @@ const donationAdminController = {
       res.status(500).json({ success: false, message: "Failed to fetch UTM transactions" });
     }
   },
-  // GET /donations-admin/export?startDate=&endDate=&status= — CSV download
+
   exportTransactions: async (req, res) => {
     try {
       const { startDate, endDate, status = "all" } = req.query;
       const query = { ...DONATIONS_PAGE_FILTER };
 
       if (status !== "all") {
-        const statuses = String(status).split(",").map((s) => s.trim()).filter(Boolean);
+        const statuses = String(status)
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
         query.status = statuses.length === 1 ? statuses[0] : { $in: statuses };
       }
-      // Same IST calendar-day semantics as every other range filter here.
       Object.assign(query, buildDateRangeMatch(startDate, endDate));
 
-      const transactions = await donationModel.find(query).sort({ createdAt: -1 }).lean();
+      const transactions = await donations.find(query, { sort: BY_NEWEST });
 
       const headers = [
-        "Transaction ID", "Donor Name", "Email", "Mobile", "Date", "Amount", "Status",
-        "Seva", "Occasion / Note", "80G Certificate", "PAN Number",
-        "Mahaprasadam Requested", "Prasadam Address",
-        "Receipt Number", "DCC Sync Status", "WhatsApp Receipt Sent", "WhatsApp Error",
-        "Campaign", "UTM Source", "UTM Medium", "UTM Content", "UTM Term",
-        "Razorpay Order ID", "Razorpay Payment ID",
+        "Transaction ID",
+        "Donor Name",
+        "Email",
+        "Mobile",
+        "Date",
+        "Amount",
+        "Status",
+        "Seva",
+        "Occasion / Note",
+        "80G Certificate",
+        "PAN Number",
+        "Mahaprasadam Requested",
+        "Prasadam Address",
+        "Receipt Number",
+        "DCC Sync Status",
+        "WhatsApp Receipt Sent",
+        "WhatsApp Error",
+        "Campaign",
+        "UTM Source",
+        "UTM Medium",
+        "UTM Content",
+        "UTM Term",
+        "Razorpay Order ID",
+        "Razorpay Payment ID",
       ];
 
       const csvEscape = (val) => {
@@ -500,7 +466,9 @@ const donationAdminController = {
         formatAddress(txn.prasadamAddress),
         txn.receiptNumber || "",
         txn.dccSyncStatus || "",
-        txn.whatsappReceiptSentAt ? new Date(txn.whatsappReceiptSentAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) : "",
+        txn.whatsappReceiptSentAt
+          ? new Date(txn.whatsappReceiptSentAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })
+          : "",
         txn.whatsappReceiptError || "",
         txn.utm?.campaign || "",
         txn.utm?.source || "",
@@ -521,10 +489,7 @@ const donationAdminController = {
       res.status(500).json({ success: false, message: "Failed to export transactions" });
     }
   },
-  // POST /donations-admin/upload-image — for the Page Content tab's image
-  // fields (hero banner, seva cards, etc). Uses R2 like the rest of the
-  // site instead of the old client-side unsigned Cloudinary upload, which
-  // depended on NEXT_PUBLIC_CLOUDINARY_* env vars that may not even be set.
+
   uploadImage: async (req, res) => {
     try {
       if (!req.file) return res.status(400).json({ message: "No file uploaded" });
@@ -537,24 +502,21 @@ const donationAdminController = {
     }
   },
 
-  // POST /donations-admin/reconcile-pending — checks every pending
-  // /donations-page transaction against Razorpay's real payment records
-  // (never guesses) and properly completes any that were actually
-  // captured, same pipeline as a normal successful checkout (DCC +
-  // WhatsApp). Streams a small delay between Razorpay calls to stay well
-  // within rate limits over what can be a large batch.
-  // TEMPORARY diagnostic — checks whether Razorpay recognizes an order ID
-  // at all (not just whether it has payments), to distinguish "genuinely
-  // abandoned checkout" from "wrong Razorpay credentials/account mismatch".
+  // Diagnostic: does Razorpay recognise this order id at all (vs wrong credentials/account)?
   diagnoseOrder: async (req, res) => {
     try {
       const { orderId, account } = req.query;
       const created = createRazorpayInstance(account || "donations");
-      if (!created) return res.status(500).json({ message: `No Razorpay credentials configured for account "${account || "donations"}"` });
+      if (!created)
+        return res
+          .status(500)
+          .json({ message: `No Razorpay credentials configured for account "${account || "donations"}"` });
       try {
         const order = await created.instance.orders.fetch(orderId);
         const payments = await created.instance.orders.fetchPayments(orderId);
-        return res.status(200).json({ keyIdPrefix: created.account.key_id?.slice(0, 8), order, payments: payments.items });
+        return res
+          .status(200)
+          .json({ keyIdPrefix: created.account.key_id?.slice(0, 8), order, payments: payments.items });
       } catch (err) {
         return res.status(200).json({
           keyIdPrefix: created.account.key_id?.slice(0, 8),
@@ -566,20 +528,18 @@ const donationAdminController = {
     }
   },
 
-  // POST /donations-admin/manual-complete — for donations from before an
-  // API key rotation, where Razorpay's dashboard (login-based) still shows
-  // the truth but our API can no longer look the order up with the new
-  // keys. Admin manually confirms a real payment ID found in the
-  // dashboard, and this runs it through the exact same completion
-  // pipeline (DCC + WhatsApp) as a normal successful checkout — no
-  // Razorpay API call needed, since the admin has already verified it.
+  // Completes a donation with a payment id the admin confirmed in the Razorpay dashboard.
   manualComplete: async (req, res) => {
     try {
       const { donationId, razorpayPaymentId } = req.body;
       if (!donationId || !razorpayPaymentId) {
         return res.status(400).json({ message: "donationId and razorpayPaymentId are required." });
       }
-      const donation = await donationModel.findById(donationId);
+      if (!isId(donationId))
+        throw new Error(
+          `Cast to ObjectId failed for value "${donationId}" (type string) at path "_id" for model "donation"`
+        );
+      const donation = await donations.findById(donationId);
       if (!donation) return res.status(404).json({ message: "Donation not found" });
       if (donation.status === "completed") {
         return res.status(200).json({ message: "Already marked completed.", receiptNumber: donation.receiptNumber });
@@ -599,28 +559,26 @@ const donationAdminController = {
     try {
       const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 25));
 
-      // When the Razorpay keys change again, everything marked "checked"
-      // under the OLD keys needs a fresh look under the NEW ones --
-      // resetChecked=true clears that marker for all still-pending
-      // donations-page transactions before this batch runs.
       if (req.query.resetChecked === "true") {
-        await donationModel.updateMany(
+        await donations.updateMany(
           { ...DONATIONS_PAGE_FILTER, status: "pending" },
           { $set: { lastReconcileCheckAt: null } }
         );
       }
 
-      const pending = await donationModel
-        .find({
+      const pending = await donations.find(
+        {
           ...DONATIONS_PAGE_FILTER,
           status: "pending",
-          razorpayOrderId: { $exists: true, $ne: null },
-          lastReconcileCheckAt: null, // skip anything already checked and confirmed not-captured
-        })
-        .sort({ createdAt: 1 }) // oldest first — works through the backlog systematically
-        .limit(limit)
-        .select("_id donorName amount razorpayOrderId paymentAccount createdAt")
-        .lean();
+          razorpayOrderId: { $ne: null },
+          lastReconcileCheckAt: null,
+        },
+        {
+          sort: { createdAt: 1, _id: 1 },
+          limit,
+          fields: ["_id", "donorName", "amount", "razorpayOrderId", "paymentAccount", "createdAt"],
+        }
+      );
 
       const results = { total: pending.length, completed: [], stillPending: [], noRazorpayRecord: [], errors: [] };
 
@@ -637,18 +595,35 @@ const donationAdminController = {
 
           if (captured) {
             await completeDonation({ orderId: donation.razorpayOrderId, paymentId: captured.id });
-            results.completed.push({ id: donation._id, donorName: donation.donorName, amount: donation.amount, createdAt: donation.createdAt, razorpayPaymentId: captured.id });
+            results.completed.push({
+              id: donation._id,
+              donorName: donation.donorName,
+              amount: donation.amount,
+              createdAt: donation.createdAt,
+              razorpayPaymentId: captured.id,
+            });
           } else if ((payments.items || []).length === 0) {
-            await donationModel.findByIdAndUpdate(donation._id, { lastReconcileCheckAt: new Date() });
-            results.noRazorpayRecord.push({ id: donation._id, donorName: donation.donorName, amount: donation.amount, createdAt: donation.createdAt });
+            await donations.updateById(donation._id, { lastReconcileCheckAt: new Date() });
+            results.noRazorpayRecord.push({
+              id: donation._id,
+              donorName: donation.donorName,
+              amount: donation.amount,
+              createdAt: donation.createdAt,
+            });
           } else {
-            await donationModel.findByIdAndUpdate(donation._id, { lastReconcileCheckAt: new Date() });
-            results.stillPending.push({ id: donation._id, donorName: donation.donorName, amount: donation.amount, createdAt: donation.createdAt, statuses: payments.items.map((p) => p.status) });
+            await donations.updateById(donation._id, { lastReconcileCheckAt: new Date() });
+            results.stillPending.push({
+              id: donation._id,
+              donorName: donation.donorName,
+              amount: donation.amount,
+              createdAt: donation.createdAt,
+              statuses: payments.items.map((p) => p.status),
+            });
           }
         } catch (err) {
           results.errors.push({ id: donation._id, reason: err.message });
         }
-        await new Promise((resolve) => setTimeout(resolve, 150)); // stay well within Razorpay's rate limits
+        await new Promise((resolve) => setTimeout(resolve, 150)); // stay within Razorpay's rate limits
       }
 
       res.status(200).json({

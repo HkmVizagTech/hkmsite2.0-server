@@ -1,16 +1,7 @@
-import { donationModel } from "../models/donation.model.js";
-import { eventModel } from "../models/event.model.js";
-import { galleryModel } from "../models/gallery.model.js";
-import { blogModel } from "../models/blog.model.js";
-import { contactMessageModel } from "../models/contactMessage.model.js";
-import { IST } from "../config/timezone.js";
+import { donations, events, galleries, blogs, contactMessages } from "../db/tables.js";
+import { aggregate, sumCount, sumTotal, countGroups, istDay, IST_ZONE } from "../domain/donationQuery.js";
 
-// The standalone /donations page is a fully separate donation flow with its
-// own dedicated admin (/donations/admin) -- it must never be blended into
-// these site-wide totals/charts. sourcePage === "donations" (exact, no
-// leading slash) is the reliable signal for it; every other donation flow
-// (seva pages, sqft campaign, janmashtami) uses a real path or a distinct
-// value, confirmed by sampling real records.
+// The standalone /donations page (sourcePage === "donations") has its own admin and is excluded here.
 const EXCLUDE_DONATIONS_PAGE = { sourcePage: { $ne: "donations" } };
 
 const timeAgo = (date) => {
@@ -35,123 +26,87 @@ const dashboardController = {
       const startOfLastMonth = new Date(startOfMonth);
       startOfLastMonth.setMonth(startOfLastMonth.getMonth() - 1);
 
-      const [
-        donationAgg,
-        lastMonthDonationAgg,
-        eventsThisMonth,
-        galleryCount,
-        galleryLastMonthCount,
-        blogCount,
-        distinctDonorsAgg,
-        newMessagesCount,
-      ] = await Promise.all([
-        donationModel.aggregate([
-          { $match: { status: "completed", ...EXCLUDE_DONATIONS_PAGE } },
-          { $group: { _id: null, total: { $sum: "$amount" }, count: { $sum: 1 } } },
-        ]),
-        donationModel.aggregate([
-          { $match: { status: "completed", date: { $gte: startOfLastMonth, $lt: startOfMonth }, ...EXCLUDE_DONATIONS_PAGE } },
-          { $group: { _id: null, total: { $sum: "$amount" } } },
-        ]),
-        eventModel.countDocuments({ date: { $gte: startOfMonth } }),
-        galleryModel.countDocuments({}),
-        galleryModel.countDocuments({ createdAt: { $lt: startOfMonth } }),
-        blogModel.countDocuments({ status: "published" }),
-        donationModel.aggregate([
-          { $match: { status: "completed", ...EXCLUDE_DONATIONS_PAGE } },
-          {
-            $group: {
-              _id: { $ifNull: ["$donorEmail", "$donorMobile"] },
-            },
-          },
-          { $count: "distinctDonors" },
-        ]),
-        contactMessageModel.countDocuments({ status: "new" }),
-      ]);
+      const completed = { status: "completed", ...EXCLUDE_DONATIONS_PAGE };
 
-      const totalDonations = donationAgg[0]?.total || 0;
-      const lastMonthDonations = lastMonthDonationAgg[0]?.total || 0;
-      const donationChangePct = lastMonthDonations > 0
-        ? Math.round(((totalDonations - lastMonthDonations) / lastMonthDonations) * 100)
-        : null;
-
-      const galleryNewThisMonth = galleryCount - galleryLastMonthCount;
-      const distinctDonors = distinctDonorsAgg[0]?.distinctDonors || 0;
-
-      // Monthly trend for the last 6 months — real aggregation, not fabricated
       const sixMonthsAgo = new Date();
       sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 5);
       sixMonthsAgo.setDate(1);
       sixMonthsAgo.setHours(0, 0, 0, 0);
 
-      const monthlyDonations = await donationModel.aggregate([
-        { $match: { status: "completed", date: { $gte: sixMonthsAgo }, ...EXCLUDE_DONATIONS_PAGE } },
-        {
-          $group: {
-            // timezone is required: $year/$month run inside MongoDB, which
-            // never sees this process's TZ and would split by UTC month.
-            _id: { year: { $year: { date: "$date", timezone: IST } }, month: { $month: { date: "$date", timezone: IST } } },
-            donations: { $sum: "$amount" },
-            count: { $sum: 1 },
-          },
-        },
-        { $sort: { "_id.year": 1, "_id.month": 1 } },
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 29);
+      thirtyDaysAgo.setHours(0, 0, 0, 0);
+
+      const [
+        donationAgg,
+        lastMonthDonations,
+        eventsThisMonth,
+        galleryCount,
+        galleryLastMonthCount,
+        blogCount,
+        distinctDonors,
+        newMessagesCount,
+        monthlyDonations,
+        sevaAgg,
+        statusAgg,
+        dailyAgg,
+      ] = await Promise.all([
+        sumCount(completed),
+        sumTotal({ ...completed, date: { $gte: startOfLastMonth, $lt: startOfMonth } }),
+        events.count({ date: { $gte: startOfMonth } }),
+        galleries.count({}),
+        galleries.count({ createdAt: { $lt: startOfMonth } }),
+        blogs.count({ status: "published" }),
+        countGroups(completed, "COALESCE(donor_email, donor_mobile)"),
+        contactMessages.count({ status: "new" }),
+        aggregate(
+          { ...completed, date: { $gte: sixMonthsAgo } },
+          `EXTRACT(YEAR FROM "date" AT TIME ZONE '${IST_ZONE}') AS y, EXTRACT(MONTH FROM "date" AT TIME ZONE '${IST_ZONE}') AS m, SUM(amount) AS donations, COUNT(*) AS count`,
+          { groupBy: "y, m", orderBy: "y, m" }
+        ),
+        aggregate(completed, "COALESCE(seva_name, type) AS k, COUNT(*) AS value", {
+          groupBy: "k",
+          orderBy: `value DESC, k COLLATE "C" NULLS FIRST`,
+          limit: 6,
+        }),
+        aggregate(EXCLUDE_DONATIONS_PAGE, "status AS k, COUNT(*) AS count, SUM(amount) AS amount", {
+          groupBy: "k",
+          orderBy: `k COLLATE "C"`,
+        }),
+        aggregate(
+          { ...completed, date: { $gte: thirtyDaysAgo } },
+          `${istDay('"date"')} AS k, SUM(amount) AS donations, COUNT(*) AS count`,
+          { groupBy: "k", orderBy: "k" }
+        ),
       ]);
+
+      const totalDonations = donationAgg.total;
+      const donationChangePct =
+        lastMonthDonations > 0 ? Math.round(((totalDonations - lastMonthDonations) / lastMonthDonations) * 100) : null;
+
+      const galleryNewThisMonth = galleryCount - galleryLastMonthCount;
 
       const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
       const monthlyData = monthlyDonations.map((m) => ({
-        month: monthNames[m._id.month - 1],
+        month: monthNames[m.m - 1],
         donations: m.donations,
         count: m.count,
       }));
 
-      // Real seva-type breakdown (was a hardcoded pie chart before)
-      const sevaAgg = await donationModel.aggregate([
-        { $match: { status: "completed", ...EXCLUDE_DONATIONS_PAGE } },
-        {
-          $group: {
-            _id: { $ifNull: ["$sevaName", "$type"] },
-            value: { $sum: 1 },
-          },
-        },
-        { $sort: { value: -1 } },
-        { $limit: 6 },
-      ]);
-      const sevaBreakdown = sevaAgg.map((s) => ({ name: s._id || "Other", value: s.value }));
-
-      // Status breakdown (completed / pending / failed) - real data for Analytics page
-      const statusAgg = await donationModel.aggregate([
-        { $match: EXCLUDE_DONATIONS_PAGE },
-        { $group: { _id: "$status", count: { $sum: 1 }, amount: { $sum: "$amount" } } },
-      ]);
-      const statusBreakdown = statusAgg.map((s) => ({ status: s._id, count: s.count, amount: s.amount }));
-
-      // Daily donation count for the last 30 days - finer-grained trend for Analytics
-      const thirtyDaysAgo = new Date();
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 29);
-      thirtyDaysAgo.setHours(0, 0, 0, 0);
-      const dailyAgg = await donationModel.aggregate([
-        { $match: { status: "completed", date: { $gte: thirtyDaysAgo }, ...EXCLUDE_DONATIONS_PAGE } },
-        {
-          $group: {
-            // timezone is required: $dateToString runs inside MongoDB, which
-            // never sees this process's TZ and would bucket by UTC day.
-            _id: { $dateToString: { format: "%Y-%m-%d", date: "$date", timezone: IST } },
-            donations: { $sum: "$amount" },
-            count: { $sum: 1 },
-          },
-        },
-        { $sort: { _id: 1 } },
-      ]);
-      const dailyData = dailyAgg.map((d) => ({ date: d._id, donations: d.donations, count: d.count }));
+      const sevaBreakdown = sevaAgg.map((s) => ({ name: s.k || "Other", value: s.value }));
+      const statusBreakdown = statusAgg.map((s) => ({ status: s.k, count: s.count, amount: s.amount }));
+      const dailyData = dailyAgg.map((d) => ({ date: d.k, donations: d.donations, count: d.count }));
 
       // Real recent-activity feed merged across collections (was hardcoded before)
       const [recentDonation, recentEvent, recentGallery, recentBlog, recentMessage] = await Promise.all([
-        donationModel.findOne({ status: "completed", ...EXCLUDE_DONATIONS_PAGE }).sort({ createdAt: -1 }).select("amount sevaName type createdAt").lean(),
-        eventModel.findOne().sort({ createdAt: -1 }).select("title createdAt").lean(),
-        galleryModel.findOne().sort({ createdAt: -1 }).select("title images createdAt").lean(),
-        blogModel.findOne({ status: "published" }).sort({ createdAt: -1 }).select("title createdAt").lean(),
-        contactMessageModel.findOne().sort({ createdAt: -1 }).select("name subject createdAt").lean(),
+        donations.findOne(completed, {
+          sort: { createdAt: -1, _id: 1 },
+          fields: ["amount", "sevaName", "type", "createdAt"],
+        }),
+        events.findOne({}, { sort: { createdAt: -1, _id: 1 }, fields: ["title", "createdAt"] }),
+        galleries.findOne({}, { sort: { createdAt: -1, _id: 1 }, fields: ["title", "images", "createdAt"] }),
+        blogs.findOne({ status: "published" }, { sort: { createdAt: -1, _id: 1 }, fields: ["title", "createdAt"] }),
+        contactMessages.findOne({}, { sort: { createdAt: -1, _id: 1 }, fields: ["name", "subject", "createdAt"] }),
       ]);
       const recentActivity = [
         recentDonation && {
@@ -184,12 +139,14 @@ const dashboardController = {
           time: timeAgo(recentMessage.createdAt),
           at: recentMessage.createdAt,
         },
-      ].filter(Boolean).sort((a, b) => new Date(b.at) - new Date(a.at));
+      ]
+        .filter(Boolean)
+        .sort((a, b) => new Date(b.at) - new Date(a.at));
 
       res.status(200).json({
         stats: {
           totalDonations,
-          donationCount: donationAgg[0]?.count || 0,
+          donationCount: donationAgg.count,
           donationChangePct,
           eventsThisMonth,
           galleryImages: galleryCount,

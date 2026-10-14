@@ -1,32 +1,25 @@
 import crypto from "node:crypto";
-import { productModel, resolvePurchasable } from "../models/product.model.js";
-import { shopOrderModel } from "../models/shopOrder.model.js";
-import { getShopSettings, calculateShipping } from "../models/shopSettings.model.js";
-import { donorModel } from "../models/donor.model.js";
+import { many, tx, isId } from "../db/pg.js";
+import { products, shopOrders, donors } from "../db/tables.js";
+import {
+  resolvePurchasable,
+  getShopSettings,
+  calculateShipping,
+  attachVariants,
+  attachItems,
+  insertOrderItems,
+  escapeLike,
+} from "../domain/shop.js";
 import { getNextSequence } from "../utils/counter.js";
 import { IST } from "../config/timezone.js";
 import { createRazorpayInstance } from "./payment.controller.js";
 import { isWhatsAppConfigured, sendUtilityMessage } from "../services/whatsapp.service.js";
 import * as trackingService from "../services/tracking.service.js";
 
-// Which Razorpay account the shop sells through. Shop sales now settle
-// through their own account, separate from donations, so the two money
-// streams are cleanly separable. Override with SHOP_RAZORPAY_ACCOUNT if the
-// business decision ever changes again.
-//
-// The account is resolved through a named env var rather than hard-coded,
-// and until the shop account's keys (RAZORPAY_SHOP_KEY_ID/KEY_SECRET) are
-// present in the environment this falls back to the donations account so the
-// storefront keeps working during the switch-over.
-//
-// Crucially, a separate ACCOUNT does not change the PIPELINE: a shop order
-// never runs completeDonation(), never syncs to DCC, never gets an 80G
-// receipt number, and never sends the donation receipt template. A book sale
-// is not a donation and must never produce a donation receipt.
+// A shop order never runs completeDonation(): no DCC sync, no 80G receipt, no donation template.
 const SHOP_ACCOUNT = process.env.SHOP_RAZORPAY_ACCOUNT || "shop";
 
 function resolveShopRazorpay() {
-
   const shop = createRazorpayInstance(SHOP_ACCOUNT);
   if (shop) return shop;
   console.warn(
@@ -38,18 +31,21 @@ function resolveShopRazorpay() {
 
 async function generateOrderNumber() {
   const seq = await getNextSequence("shopOrder");
-  // Permanent order identifier shown to the customer, so the year is pinned
-  // to IST explicitly rather than following process.env.TZ — an order placed
-  // between midnight and 05:30 IST on 1 January used to be numbered with the
-  // previous year.
+  // Year pinned to IST: an order at 00:30 IST on 1 January must not get the previous year.
   const year = new Date().toLocaleDateString("en-GB", { timeZone: IST, year: "numeric" });
   return `HKMS-${year}-${String(seq).padStart(5, "0")}`;
 }
 
-// Rebuilds the cart from the database. The browser sends only product IDs,
-// variant IDs and quantities — never prices. Every rupee in an order is
-// computed here from the live catalog, so a tampered cart payload can't buy
-// a ₹2000 deity dress for ₹1.
+async function loadOrder(filter, client) {
+  const order = await shopOrders.findOne(filter, { client });
+  if (!order) return null;
+  await attachItems([order], client);
+  return order;
+}
+
+const historyEntry = (status, note, extra = {}) => ({ status, note: note || undefined, at: new Date(), ...extra });
+
+// Rebuilds the cart from the catalog; the browser only sends ids and quantities, never prices.
 async function buildCartFromRequest(rawItems) {
   if (!Array.isArray(rawItems) || rawItems.length === 0) {
     return { error: "Your cart is empty." };
@@ -65,11 +61,21 @@ async function buildCartFromRequest(rawItems) {
   for (const raw of rawItems) {
     const quantity = Math.floor(Number(raw.quantity) || 0);
     if (quantity < 1 || quantity > 99) {
-      problems.push({ productId: raw.productId, reason: "invalid_quantity", message: "Choose a quantity between 1 and 99." });
+      problems.push({
+        productId: raw.productId,
+        reason: "invalid_quantity",
+        message: "Choose a quantity between 1 and 99.",
+      });
       continue;
     }
 
-    const product = await productModel.findById(raw.productId).lean();
+    let product = null;
+    if (raw.productId !== undefined && raw.productId !== null) {
+      if (!isId(String(raw.productId)))
+        throw new Error(`Cast to ObjectId failed for value ${JSON.stringify(raw.productId)}`);
+      product = await products.findById(String(raw.productId).toLowerCase());
+      if (product) await attachVariants([product]);
+    }
     if (!product || product.status !== "active") {
       problems.push({ productId: raw.productId, reason: "unavailable", message: "This item is no longer available." });
       continue;
@@ -119,101 +125,140 @@ async function buildCartFromRequest(rawItems) {
   return { items, subtotal: Math.round(subtotal * 100) / 100, problems };
 }
 
-// Marks an order paid and commits its stock — EXACTLY ONCE, no matter how
-// many times it's called. Both the browser's verify call and Razorpay's
-// webhook confirm the same payment, and they routinely race; the atomic
-// findOneAndUpdate guarded on paymentStatus:"pending" is what makes the
-// loser of that race a harmless no-op instead of a double stock decrement.
-async function confirmShopOrderPaid({ orderId, razorpayOrderId, paymentId }) {
-  const filter = { paymentStatus: "pending" };
-  if (orderId) filter._id = orderId;
-  else if (razorpayOrderId) filter.razorpayOrderId = razorpayOrderId;
-  else return { ok: false, reason: "no_identifier" };
-
-  const order = await shopOrderModel.findOneAndUpdate(
-    filter,
-    {
-      paymentStatus: "paid",
-      paidAt: new Date(),
-      razorpayPaymentId: paymentId,
-      $push: { statusHistory: { status: "paid", note: "Payment confirmed", at: new Date() } },
-    },
-    { new: true }
+// Conditional decrement: succeeds only while the shelf still holds enough, which is the oversell guard.
+async function decrementStock(client, item) {
+  if (item.variantId) {
+    const r = await client.query(
+      `WITH v AS (
+         UPDATE product_variants SET stock = stock - $1
+         WHERE id = $2 AND product_id = $3 AND stock >= $1 RETURNING product_id
+       )
+       UPDATE products SET updated_at = now() WHERE id IN (SELECT product_id FROM v) RETURNING id`,
+      [item.quantity, item.variantId, item.productId]
+    );
+    return r.rowCount > 0;
+  }
+  if (!item.productId) return false;
+  const r = await client.query(
+    "UPDATE products SET stock = stock - $1, updated_at = now() WHERE id = $2 AND has_variants = false AND stock >= $1 RETURNING id",
+    [item.quantity, item.productId]
   );
+  return r.rowCount > 0;
+}
 
-  if (!order) {
-    // Either it doesn't exist, or another path already confirmed it.
-    const existing = await shopOrderModel.findOne(orderId ? { _id: orderId } : { razorpayOrderId });
+async function restoreStock(client, item) {
+  if (!item.productId) return;
+  if (item.variantId) {
+    await client.query(
+      `WITH v AS (
+         UPDATE product_variants SET stock = stock + $1 WHERE id = $2 AND product_id = $3 RETURNING product_id
+       )
+       UPDATE products SET updated_at = now() WHERE id IN (SELECT product_id FROM v)`,
+      [item.quantity, item.variantId, item.productId]
+    );
+  } else {
+    await client.query(
+      "UPDATE products SET stock = stock + $1, updated_at = now() WHERE id = $2 AND has_variants = false",
+      [item.quantity, item.productId]
+    );
+  }
+}
+
+async function availableStock(client, item) {
+  if (!item.productId) return 0;
+  if (item.variantId) {
+    const r = await client.query("SELECT stock FROM product_variants WHERE id = $1 AND product_id = $2", [
+      item.variantId,
+      item.productId,
+    ]);
+    return r.rows[0]?.stock || 0;
+  }
+  const r = await client.query("SELECT stock FROM products WHERE id = $1", [item.productId]);
+  return r.rows[0]?.stock || 0;
+}
+
+// Marks an order paid and commits its stock in one transaction. The pending->paid claim makes a
+// second call (verify racing the webhook) a no-op, so stock is decremented exactly once.
+async function confirmShopOrderPaid({ orderId, razorpayOrderId, paymentId }) {
+  if (!orderId && !razorpayOrderId) return { ok: false, reason: "no_identifier" };
+
+  const claimed = await tx(async (client) => {
+    const params = [paymentId ?? null, JSON.stringify([historyEntry("paid", "Payment confirmed")])];
+    let match;
+    if (orderId) {
+      params.push(orderId);
+      match = "id = $3";
+    } else {
+      params.push(razorpayOrderId);
+      match = "razorpay_order_id = $3";
+    }
+    const r = await client.query(
+      `UPDATE shop_orders SET payment_status = 'paid', paid_at = now(), razorpay_payment_id = $1,
+         status_history = status_history || $2::jsonb, updated_at = now()
+       WHERE id = (SELECT id FROM shop_orders WHERE payment_status = 'pending' AND ${match} ORDER BY created_at, id LIMIT 1 FOR UPDATE)
+       RETURNING *`,
+      params
+    );
+    if (!r.rows.length) return null;
+    const row = r.rows[0];
+    const order = shopOrders.fromRow(row);
+    await attachItems([order], client);
+
+    const shortfall = [];
+    if (!row.stock_committed) {
+      // Lock rows in a fixed order so two overlapping orders can't deadlock.
+      const sorted = order.items
+        .map((item, idx) => ({ item, idx }))
+        .sort((a, b) =>
+          `${a.item.productId}|${a.item.variantId}` < `${b.item.productId}|${b.item.variantId}` ? -1 : 1
+        );
+      const failed = new Map();
+      for (const { item, idx } of sorted) {
+        if (!(await decrementStock(client, item))) {
+          failed.set(idx, {
+            productId: item.productId,
+            productName: item.productName,
+            variantLabel: item.variantLabel,
+            requested: item.quantity,
+            available: await availableStock(client, item),
+          });
+        }
+      }
+      for (let i = 0; i < order.items.length; i++) if (failed.has(i)) shortfall.push(failed.get(i));
+    }
+
+    const history = shortfall.length
+      ? [
+          historyEntry(
+            "stock_shortfall",
+            `Paid, but ${shortfall.length} item(s) could not be fully reserved. Needs staff review.`
+          ),
+        ]
+      : [];
+    const updated = await client.query(
+      `UPDATE shop_orders SET stock_committed = true,
+         stock_shortfall = CASE WHEN $1::jsonb = '[]'::jsonb THEN stock_shortfall ELSE $1::jsonb END,
+         needs_attention = needs_attention OR $2,
+         status_history = status_history || $3::jsonb, updated_at = now()
+       WHERE id = $4 RETURNING *`,
+      [JSON.stringify(shortfall), shortfall.length > 0, JSON.stringify(history), order._id]
+    );
+    const final = shopOrders.fromRow(updated.rows[0]);
+    final.items = order.items;
+    return { order: final, shortfall };
+  });
+
+  if (!claimed) {
+    const existing = await loadOrder(orderId ? { _id: orderId } : { razorpayOrderId });
     if (existing) return { ok: true, skipped: true, reason: "already_confirmed", order: existing };
     return { ok: false, reason: "order_not_found" };
   }
-
-  // ---- Commit stock ----
-  // Each decrement is a single conditional update: it only succeeds if the
-  // shelf still holds enough. That condition is the entire oversell
-  // protection — two simultaneous buyers of the last unit cannot both pass.
-  const shortfall = [];
-  for (const item of order.items) {
-    let updated;
-    if (item.variantId) {
-      updated = await productModel.findOneAndUpdate(
-        {
-          _id: item.productId,
-          variants: { $elemMatch: { _id: item.variantId, stock: { $gte: item.quantity } } },
-        },
-        { $inc: { "variants.$.stock": -item.quantity } },
-        { new: true }
-      );
-    } else {
-      updated = await productModel.findOneAndUpdate(
-        { _id: item.productId, stock: { $gte: item.quantity } },
-        { $inc: { stock: -item.quantity } },
-        { new: true }
-      );
-    }
-
-    if (!updated) {
-      // The money is already taken, so refusing the order here would be the
-      // worst outcome. Record what's missing and flag it for staff, who can
-      // restock, part-ship or refund — a human decision, not a silent one.
-      const current = await productModel.findById(item.productId).lean();
-      const available = current
-        ? item.variantId
-          ? (current.variants || []).find((v) => String(v._id) === String(item.variantId))?.stock || 0
-          : current.stock || 0
-        : 0;
-      shortfall.push({
-        productId: item.productId,
-        productName: item.productName,
-        variantLabel: item.variantLabel,
-        requested: item.quantity,
-        available,
-      });
-    }
-  }
-
-  order.stockCommitted = true;
-  if (shortfall.length) {
-    order.stockShortfall = shortfall;
-    order.needsAttention = true;
-    order.statusHistory.push({
-      status: "stock_shortfall",
-      note: `Paid, but ${shortfall.length} item(s) could not be fully reserved. Needs staff review.`,
-      at: new Date(),
-    });
-  }
-  await order.save();
-
-  return { ok: true, order, shortfall };
+  return { ok: true, order: claimed.order, shortfall: claimed.shortfall };
 }
 
-// WhatsApp order confirmation. Deliberately fire-and-forget and fully
-// swallowed: a messaging failure must never turn a successful, paid order
-// into an error for the devotee. Uses the generic utility template, NOT the
-// donation receipt template.
+// Fire-and-forget: a messaging failure must never turn a paid order into an error.
 async function sendOrderWhatsApp(order) {
   try {
-
     if (!isWhatsAppConfigured()) return;
 
     const lines = order.items
@@ -225,21 +270,15 @@ async function sendOrderWhatsApp(order) {
       `We'll message you again when it ships. Thank you for your support.`;
 
     await sendUtilityMessage(order.customerMobile, message);
-    await shopOrderModel.findByIdAndUpdate(order._id, { whatsappConfirmationSentAt: new Date() });
+    await shopOrders.updateById(order._id, { whatsappConfirmationSentAt: new Date() });
   } catch (err) {
     const message = err && err.message ? err.message : String(err);
     console.warn("shopOrder WhatsApp confirmation failed:", message);
-    await shopOrderModel
-      .findByIdAndUpdate(order._id, { whatsappConfirmationError: message.slice(0, 300) })
-      .catch(() => {});
+    await shopOrders.updateById(order._id, { whatsappConfirmationError: message.slice(0, 300) }).catch(() => {});
   }
 }
 
 const shopOrderController = {
-  // POST /shop/cart/quote — public. Re-prices a cart against the live
-  // catalog so the cart page shows authoritative prices, real stock and the
-  // actual shipping charge, instead of whatever was cached in the browser
-  // when the item was added days ago.
   quoteCart: async (req, res) => {
     try {
       const settings = await getShopSettings();
@@ -263,17 +302,17 @@ const shopOrderController = {
     }
   },
 
-  // POST /shop/orders — customer (donor session required). Creates the
-  // order in "pending" and hands back a Razorpay order to pay against.
-  // Stock is checked here but NOT decremented — see confirmShopOrderPaid.
+  // Stock is checked here but only decremented on payment (see confirmShopOrderPaid).
   createOrder: async (req, res) => {
     try {
       const settings = await getShopSettings();
       if (!settings.shopEnabled) {
-        return res.status(503).json({ success: false, message: "The shop is temporarily closed. Please try again later." });
+        return res
+          .status(503)
+          .json({ success: false, message: "The shop is temporarily closed. Please try again later." });
       }
 
-      const donor = await donorModel.findById(req.donor.donorId).lean();
+      const donor = await donors.findById(req.donor.donorId);
       if (!donor) return res.status(404).json({ success: false, message: "Customer record not found." });
 
       const { shippingAddress = {}, customerNote, customerName, customerEmail } = req.body || {};
@@ -307,7 +346,9 @@ const shopOrderController = {
 
       const razorpay = resolveShopRazorpay();
       if (!razorpay) {
-        return res.status(500).json({ success: false, message: "Payments aren't configured. Please contact the temple." });
+        return res
+          .status(500)
+          .json({ success: false, message: "Payments aren't configured. Please contact the temple." });
       }
 
       const orderNumber = await generateOrderNumber();
@@ -316,30 +357,34 @@ const shopOrderController = {
         currency: "INR",
         receipt: orderNumber,
         payment_capture: 1,
-        // Tagged so a shop payment is identifiable in the Razorpay dashboard
-        // at a glance, even though it shares an account with donations.
         notes: { type: "shop_order", orderNumber, mobile: donor.mobile },
       });
 
-      const order = await shopOrderModel.create({
-        orderNumber,
-        donorRecordId: donor._id,
-        customerName: name,
-        customerMobile: donor.mobile,
-        customerEmail: customerEmail || donor.email,
-        items: cart.items,
-        subtotal: cart.subtotal,
-        shippingCharge,
-        total,
-        shippingRuleSnapshot: {
-          flatCharge: settings.flatShippingCharge,
-          freeAbove: settings.freeShippingAbove,
-        },
-        shippingAddress: { street, city, state, pincode, country: "India" },
-        customerNote: customerNote ? String(customerNote).slice(0, 500) : undefined,
-        razorpayOrderId: rzpOrder.id,
-        paymentAccount: razorpay.account.name,
-        statusHistory: [{ status: "placed", note: "Order created", at: new Date() }],
+      const order = await tx(async (client) => {
+        const created = await shopOrders.insert(
+          {
+            orderNumber,
+            donorRecordId: donor._id,
+            customerName: name,
+            customerMobile: donor.mobile,
+            customerEmail: customerEmail || donor.email,
+            subtotal: cart.subtotal,
+            shippingCharge,
+            total,
+            shippingRuleSnapshot: {
+              flatCharge: settings.flatShippingCharge,
+              freeAbove: settings.freeShippingAbove,
+            },
+            shippingAddress: { street, city, state, pincode, country: "India" },
+            customerNote: customerNote ? String(customerNote).slice(0, 500).trim() : undefined,
+            razorpayOrderId: rzpOrder.id,
+            paymentAccount: razorpay.account.name,
+            statusHistory: [historyEntry("placed", "Order created")],
+          },
+          { client }
+        );
+        await insertOrderItems(client, created._id, cart.items);
+        return created;
       });
 
       res.status(200).json({
@@ -360,11 +405,7 @@ const shopOrderController = {
     }
   },
 
-  // POST /shop/orders/verify — called by the browser right after Razorpay's
-  // success callback. The webhook is the safety net for when the devotee
-  // closes the tab (very common with UPI app switches), so this and the
-  // webhook are both allowed to confirm, and confirmShopOrderPaid makes
-  // that safe.
+  // Browser verify and the Razorpay webhook may both confirm; confirmShopOrderPaid makes that safe.
   verifyPayment: async (req, res) => {
     try {
       const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body || {};
@@ -372,13 +413,11 @@ const shopOrderController = {
         return res.status(400).json({ success: false, message: "Payment details missing." });
       }
 
-      const order = await shopOrderModel.findOne({ razorpayOrderId: razorpay_order_id });
+      const order = await shopOrders.findOne({ razorpayOrderId: razorpay_order_id });
       if (!order) return res.status(404).json({ success: false, message: "Order not found." });
-      // A logged-in customer can only verify their own order.
       if (req.donor && String(order.donorRecordId) !== String(req.donor.donorId)) {
         return res.status(403).json({ success: false, message: "This order belongs to another account." });
       }
-
 
       const created = createRazorpayInstance(order.paymentAccount);
       const keySecret = created && created.account ? created.account.key_secret : null;
@@ -413,14 +452,26 @@ const shopOrderController = {
     }
   },
 
-  // GET /shop/my-orders — the customer's own order history.
   myOrders: async (req, res) => {
     try {
-      const orders = await shopOrderModel
-        .find({ donorRecordId: req.donor.donorId })
-        .sort({ createdAt: -1 })
-        .select("orderNumber items subtotal shippingCharge total paymentStatus fulfilmentStatus tracking createdAt shippingAddress")
-        .lean();
+      const orders = await shopOrders.find(
+        { donorRecordId: req.donor.donorId },
+        {
+          sort: { createdAt: -1, _id: -1 },
+          fields: [
+            "orderNumber",
+            "subtotal",
+            "shippingCharge",
+            "total",
+            "paymentStatus",
+            "fulfilmentStatus",
+            "tracking",
+            "createdAt",
+            "shippingAddress",
+          ],
+        }
+      );
+      await attachItems(orders);
       res.status(200).json({ success: true, orders });
     } catch (err) {
       console.error("shopOrder.myOrders error:", err);
@@ -428,13 +479,10 @@ const shopOrderController = {
     }
   },
 
-  // GET /shop/my-orders/:orderNumber — ownership enforced by query, so a
-  // guessed order number returns nothing rather than someone else's address.
+  // Ownership is part of the query, so a guessed order number returns nothing.
   getMyOrder: async (req, res) => {
     try {
-      const order = await shopOrderModel
-        .findOne({ orderNumber: req.params.orderNumber, donorRecordId: req.donor.donorId })
-        .lean();
+      const order = await loadOrder({ orderNumber: req.params.orderNumber, donorRecordId: req.donor.donorId });
       if (!order) return res.status(404).json({ success: false, message: "Order not found." });
       res.status(200).json({ success: true, order });
     } catch (err) {
@@ -443,9 +491,6 @@ const shopOrderController = {
     }
   },
 
-  // ---------------------------------------------------------------------
-  // ADMIN
-  // ---------------------------------------------------------------------
   adminListOrders: async (req, res) => {
     try {
       const { paymentStatus, fulfilmentStatus, search, needsAttention, page = 1, limit = 30 } = req.query;
@@ -454,27 +499,30 @@ const shopOrderController = {
       if (fulfilmentStatus && fulfilmentStatus !== "all") filter.fulfilmentStatus = fulfilmentStatus;
       if (String(needsAttention) === "true") filter.needsAttention = true;
       if (search && String(search).trim()) {
-        const rx = new RegExp(String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-        filter.$or = [{ orderNumber: rx }, { customerMobile: rx }, { customerName: rx }];
+        const pattern = `%${escapeLike(String(search).trim())}%`;
+        filter.$raw = [
+          "(order_number ILIKE ? OR customer_mobile ILIKE ? OR customer_name ILIKE ?)",
+          [pattern, pattern, pattern],
+        ];
       }
 
       const pageNum = Math.max(1, Number(page) || 1);
       const perPage = Math.min(100, Math.max(1, Number(limit) || 30));
 
       const [orders, total, stats] = await Promise.all([
-        shopOrderModel.find(filter).sort({ createdAt: -1 }).skip((pageNum - 1) * perPage).limit(perPage).lean(),
-        shopOrderModel.countDocuments(filter),
-        shopOrderModel.aggregate([
-          { $match: { paymentStatus: "paid" } },
-          { $group: { _id: null, revenue: { $sum: "$total" }, count: { $sum: 1 } } },
-        ]),
+        shopOrders.find(filter, { sort: { createdAt: -1, _id: -1 }, skip: (pageNum - 1) * perPage, limit: perPage }),
+        shopOrders.count(filter),
+        many(
+          "SELECT coalesce(sum(total), 0) AS revenue, count(*) AS count FROM shop_orders WHERE payment_status = 'paid'"
+        ),
       ]);
+      await attachItems(orders);
 
       res.status(200).json({
         success: true,
         orders,
         pagination: { page: pageNum, limit: perPage, total, pages: Math.ceil(total / perPage) },
-        stats: { paidRevenue: stats[0]?.revenue || 0, paidOrders: stats[0]?.count || 0 },
+        stats: { paidRevenue: Number(stats[0]?.revenue) || 0, paidOrders: Number(stats[0]?.count) || 0 },
       });
     } catch (err) {
       console.error("shopOrder.adminListOrders error:", err);
@@ -482,100 +530,85 @@ const shopOrderController = {
     }
   },
 
-  // PATCH /shop-admin/orders/:id — fulfilment status, tracking and notes.
-  // Cancelling a paid order puts its stock back on the shelf, but only if
-  // that stock was actually committed and only once (guarded by
-  // stockCommitted), so a double-cancel can't inflate inventory.
+  // Cancelling a paid order returns its stock, once (guarded by stockCommitted under a row lock).
   adminUpdateOrder: async (req, res) => {
     try {
-      const order = await shopOrderModel.findById(req.params.id);
-      if (!order) return res.status(404).json({ success: false, message: "Order not found." });
-
       const { fulfilmentStatus, tracking, adminNote, note, needsAttention, paymentStatus } = req.body || {};
+      if (!isId(req.params.id)) {
+        throw new Error(`Cast to ObjectId failed for value ${JSON.stringify(req.params.id)}`);
+      }
 
-      if (fulfilmentStatus && fulfilmentStatus !== order.fulfilmentStatus) {
-        const valid = ["placed", "packed", "shipped", "delivered", "cancelled"];
-        if (!valid.includes(fulfilmentStatus)) {
-          return res.status(400).json({ success: false, message: "Unknown fulfilment status." });
-        }
+      const result = await tx(async (client) => {
+        const locked = await client.query("SELECT id FROM shop_orders WHERE id = $1 FOR UPDATE", [req.params.id]);
+        if (!locked.rows.length) return { status: 404, message: "Order not found." };
+        const order = await loadOrder({ _id: req.params.id }, client);
 
-        if (fulfilmentStatus === "cancelled" && order.stockCommitted) {
-          for (const item of order.items) {
-            if (item.variantId) {
-              await productModel.updateOne(
-                { _id: item.productId, "variants._id": item.variantId },
-                { $inc: { "variants.$.stock": item.quantity } }
-              );
-            } else {
-              await productModel.updateOne({ _id: item.productId }, { $inc: { stock: item.quantity } });
-            }
+        const patch = {};
+        const history = [...(order.statusHistory || [])];
+        let currentFulfilment = order.fulfilmentStatus;
+
+        if (fulfilmentStatus && fulfilmentStatus !== order.fulfilmentStatus) {
+          const valid = ["placed", "packed", "shipped", "delivered", "cancelled"];
+          if (!valid.includes(fulfilmentStatus)) return { status: 400, message: "Unknown fulfilment status." };
+
+          if (fulfilmentStatus === "cancelled" && order.stockCommitted) {
+            for (const item of order.items) await restoreStock(client, item);
+            patch.stockCommitted = false;
+            history.push(
+              historyEntry("stock_restored", "Stock returned to inventory on cancellation", {
+                byUserId: req.user.userId,
+              })
+            );
           }
-          order.stockCommitted = false;
-          order.statusHistory.push({
-            status: "stock_restored",
-            note: "Stock returned to inventory on cancellation",
-            at: new Date(),
-            byUserId: req.user.userId,
-          });
+
+          patch.fulfilmentStatus = fulfilmentStatus;
+          currentFulfilment = fulfilmentStatus;
+          history.push(historyEntry(fulfilmentStatus, note, { byUserId: req.user.userId }));
         }
 
-        order.fulfilmentStatus = fulfilmentStatus;
-        order.statusHistory.push({
-          status: fulfilmentStatus,
-          note: note || undefined,
-          at: new Date(),
-          byUserId: req.user.userId,
-        });
-      }
-
-      if (paymentStatus && ["pending", "paid", "failed", "refunded"].includes(paymentStatus)) {
-        order.paymentStatus = paymentStatus;
-        order.statusHistory.push({
-          status: `payment_${paymentStatus}`,
-          note: note || "Payment status set manually",
-          at: new Date(),
-          byUserId: req.user.userId,
-        });
-      }
-
-      if (tracking) {
-        // Fill the customer-facing tracking URL automatically from the
-        // courier registry when the admin didn't paste one by hand, and
-        // guess the courier from the number's format when they didn't pick
-        // one. Both are conveniences only — an explicit admin value always
-        // wins over an auto-built URL.
-
-        const newTracking = {
-          courier: tracking.courier || order.tracking?.courier,
-          trackingNumber: tracking.trackingNumber || order.tracking?.trackingNumber,
-          url: tracking.url || order.tracking?.url,
-        };
-        if (!newTracking.courier && newTracking.trackingNumber) {
-          newTracking.courier = trackingService.detectCourier(newTracking.trackingNumber) || undefined;
+        if (paymentStatus && ["pending", "paid", "failed", "refunded"].includes(paymentStatus)) {
+          patch.paymentStatus = paymentStatus;
+          history.push(
+            historyEntry(`payment_${paymentStatus}`, note || "Payment status set manually", {
+              byUserId: req.user.userId,
+            })
+          );
         }
-        if (!newTracking.url && newTracking.courier && newTracking.trackingNumber) {
-          newTracking.url =
-            trackingService.buildTrackingUrl(newTracking.courier, newTracking.trackingNumber) || undefined;
+
+        if (tracking) {
+          const newTracking = {
+            courier: tracking.courier || order.tracking?.courier,
+            trackingNumber: tracking.trackingNumber || order.tracking?.trackingNumber,
+            url: tracking.url || order.tracking?.url,
+          };
+          if (!newTracking.courier && newTracking.trackingNumber) {
+            newTracking.courier = trackingService.detectCourier(newTracking.trackingNumber) || undefined;
+          }
+          if (!newTracking.url && newTracking.courier && newTracking.trackingNumber) {
+            newTracking.url =
+              trackingService.buildTrackingUrl(newTracking.courier, newTracking.trackingNumber) || undefined;
+          }
+          patch.tracking = newTracking;
         }
-        order.tracking = newTracking;
-      }
 
-      // Remember when the parcel actually left, so the auto-tracking job
-      // knows how long to keep polling the courier for this order.
-      if (fulfilmentStatus === "shipped" && order.fulfilmentStatus === "shipped" && !order.shippedAt) {
-        order.shippedAt = new Date();
-      }
-      if (adminNote !== undefined) order.adminNote = adminNote;
-      if (needsAttention !== undefined) order.needsAttention = !!needsAttention;
+        if (fulfilmentStatus === "shipped" && currentFulfilment === "shipped" && !order.shippedAt) {
+          patch.shippedAt = new Date();
+        }
+        if (adminNote !== undefined) patch.adminNote = adminNote;
+        if (needsAttention !== undefined) patch.needsAttention = !!needsAttention;
+        if (history.length !== (order.statusHistory || []).length) patch.statusHistory = history;
 
-      await order.save();
+        const saved = Object.keys(patch).length ? await shopOrders.updateById(order._id, patch, { client }) : order;
+        saved.items = order.items;
+        return { order: saved };
+      });
 
-      // Tell the customer when it ships — same fire-and-forget rules as the
-      // confirmation message.
+      if (result.status) return res.status(result.status).json({ success: false, message: result.message });
+      const order = result.order;
+
       if (fulfilmentStatus === "shipped") {
         setImmediate(async () => {
           try {
-
             if (!isWhatsAppConfigured()) return;
             const trackingLine = order.tracking?.trackingNumber
               ? `\nTracking: ${order.tracking.courier || ""} ${order.tracking.trackingNumber}`.trim()

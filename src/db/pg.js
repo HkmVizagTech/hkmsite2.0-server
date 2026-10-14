@@ -35,7 +35,11 @@ async function tx(fn) {
     await client.query("COMMIT");
     return out;
   } catch (err) {
-    try { await client.query("ROLLBACK"); } catch (_) { /* ignore */ }
+    try {
+      await client.query("ROLLBACK");
+    } catch (_) {
+      /* ignore */
+    }
     throw err;
   } finally {
     client.release();
@@ -46,7 +50,13 @@ const processRandom = randomBytes(5).toString("hex");
 let idCounter = randomBytes(3).readUIntBE(0, 3);
 const newId = () => {
   idCounter = (idCounter + 1) & 0xffffff;
-  return Math.floor(Date.now() / 1000).toString(16).padStart(8, "0") + processRandom + idCounter.toString(16).padStart(6, "0");
+  return (
+    Math.floor(Date.now() / 1000)
+      .toString(16)
+      .padStart(8, "0") +
+    processRandom +
+    idCounter.toString(16).padStart(6, "0")
+  );
 };
 const isId = (v) => typeof v === "string" && /^[0-9a-f]{24}$/i.test(v);
 
@@ -55,7 +65,19 @@ async function connectDb() {
   if (!r.rows[0] || r.rows[0].ok !== 1) throw new Error("Postgres ping failed");
   console.log("Postgres connected");
 }
-const dbState = async () => { try { await query("SELECT 1"); return "connected"; } catch (_) { return "disconnected"; } };
-const closeDb = async () => { if (pool) { await pool.end(); pool = undefined; } };
+const dbState = async () => {
+  try {
+    await query("SELECT 1");
+    return "connected";
+  } catch (_) {
+    return "disconnected";
+  }
+};
+const closeDb = async () => {
+  if (pool) {
+    await pool.end();
+    pool = undefined;
+  }
+};
 
 export { getPool, query, one, many, tx, newId, isId, connectDb, dbState, closeDb };

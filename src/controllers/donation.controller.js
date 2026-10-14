@@ -1,38 +1,41 @@
-import mongoose from "mongoose";
-import { donationModel } from "../models/donation.model.js";
-import { createRazorpayInstance } from "./payment.controller.js";
+import { donations, donors, templeDevotees, festivalDonations } from "../db/tables.js";
+import { isId } from "../db/pg.js";
 import { IST, istDayStart, istDayEnd } from "../config/timezone.js";
 import { reconcilePendingDonations } from "../services/reconciliation.service.js";
-import { templeDevoteeModel } from "../models/templeDevotee.model.js";
 import { findOrCreateDonor } from "../services/donor.service.js";
-import { markDonationCompleted, sendDonationWhatsAppReceipt, resendRecentFailedReceipts } from "../services/paymentCompletion.service.js";
+import {
+  markDonationCompleted,
+  sendDonationWhatsAppReceipt,
+  resendRecentFailedReceipts,
+} from "../services/paymentCompletion.service.js";
 import { syncDonationToDcc as dccSync, isDccConfigured } from "../services/dcc.service.js";
 import { notifyDrmOfDonation } from "../services/drmNotify.service.js";
-import { festivalDonationModel } from "../models/festivalDonation.model.js";
-import { pushAndSendReceipt, pushResultMessage, setReceiptNumberAndSend, dccReceiptStatus, isSweepRunning, sweepDccReceipts } from "../services/dccSweep.service.js";
-import { donorModel } from "../models/donor.model.js";
+import {
+  pushAndSendReceipt,
+  pushResultMessage,
+  setReceiptNumberAndSend,
+  dccReceiptStatus,
+  isSweepRunning,
+  sweepDccReceipts,
+} from "../services/dccSweep.service.js";
 import { isWhatsAppConfigured } from "../services/whatsapp.service.js";
 import { isGupshupReceiptConfigured } from "../services/gupshup.service.js";
+import {
+  EXCLUDE_DONATIONS_PAGE,
+  NEEDS_ATTENTION_OR,
+  SEVA_OR_TYPE_GENERAL,
+  aggregate,
+  sumCount,
+  sumTotal,
+  countGroups,
+  castId,
+  castNumber,
+  istDay,
+  istMonth,
+  IST_ZONE,
+} from "../domain/donationQuery.js";
 
-// The standalone /donations page (and anything built under /donations/...,
-// e.g. /donations/janmashtami2) is fully separate from the rest of the
-// site's donation flows and has its own dedicated admin at /donations/admin
-// — it must never show up blended into this main site-wide donations
-// list/stats. Matches "donations" exactly or "donations/<anything>", so a
-// future page added under this path is automatically covered without
-// needing this list updated by hand each time.
-const DONATIONS_DOMAIN_PATTERN = /^donations(\/|$)/;
-const EXCLUDE_DONATIONS_PAGE = { sourcePage: { $not: DONATIONS_DOMAIN_PATTERN } };
-
-// Shared helper: builds a { createdAt: {...} } match clause from optional
-// YYYY-MM-DD from/to query params, interpreted as IST calendar days. `to`
-// is inclusive through 23:59:59.999 IST.
-//
-// This used to do `new Date(from)` on the bare string. ECMA-262 specifies a
-// date-only string as UTC midnight regardless of process.env.TZ, so
-// "from=2026-10-01" meant 05:30 IST and quietly dropped every donation taken
-// in the first five and a half hours of the day the admin had selected.
-// istDayStart/istDayEnd anchor the string to +05:30 instead.
+// The standalone /donations page family has its own admin and never shows in site-wide lists/stats.
 function buildDateRangeMatch(from, to) {
   if (!from && !to) return {};
   const createdAt = {};
@@ -47,140 +50,156 @@ function buildDateRangeMatch(from, to) {
   return Object.keys(createdAt).length ? { createdAt } : {};
 }
 
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const BY_NEWEST = { createdAt: -1, _id: 1 };
+
+const LIST_FIELDS = [
+  "donorName",
+  "donorEmail",
+  "donorMobile",
+  "amount",
+  "status",
+  "date",
+  "panNumber",
+  "certificate",
+  "wantPrasadam",
+  "prasadamAddress",
+  "transactionId",
+  "razorpayOrderId",
+  "razorpayPaymentId",
+  "receiptNumber",
+  "dccSyncStatus",
+  "whatsappReceiptSentAt",
+  "whatsappReceiptError",
+  "sevaName",
+  "type",
+  "sourcePage",
+  "utm",
+  "createdAt",
+  "manualEntry",
+  "utrNumber",
+  "manualPaymentMode",
+  "manualEntryNote",
+];
+
+const PRASADAM_LIST_FIELDS = [
+  "donorName",
+  "donorEmail",
+  "donorMobile",
+  "amount",
+  "status",
+  "wantPrasadam",
+  "prasadamAddress",
+  "prasadamStatus",
+  "prasadamCourier",
+  "prasadamTrackingNumber",
+  "prasadamDispatchedAt",
+  "prasadamDeliveredAt",
+  "prasadamNotes",
+  "sevaName",
+  "type",
+  "sourcePage",
+  "createdAt",
+  "razorpayOrderId",
+  "razorpayPaymentId",
+  "receiptNumber",
+];
+
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const str = (v) => (v === undefined || v === null ? undefined : String(v).trim());
+
+// Fields a donation create/update from the admin may set. Never ids, receipt/DCC fields or status.
+function safeDonationFields(body = {}) {
+  const out = {};
+  for (const key of [
+    "donorName",
+    "donorEmail",
+    "donorMobile",
+    "message",
+    "panNumber",
+    "sevakName",
+    "sevaDate",
+    "dob",
+  ]) {
+    if (body[key] !== undefined && body[key] !== null) out[key] = str(body[key]);
+  }
+  for (const key of ["certificate", "wantPrasadam"]) {
+    if (body[key] !== undefined) out[key] = body[key] === true || body[key] === "true";
+  }
+  const a = body.prasadamAddress;
+  if (a && typeof a === "object" && !Array.isArray(a)) {
+    const addr = {};
+    for (const key of ["doorNo", "house", "street", "area", "country", "state", "city", "pincode"]) {
+      if (a[key] !== undefined && a[key] !== null) addr[key] = String(a[key]).trim();
+    }
+    if (Object.keys(addr).length) out.prasadamAddress = addr;
+  }
+  return out;
+}
+
 const donationController = {
-  // GET /donations/stats — real aggregated analytics for the main admin
-  // donations dashboard. Every number comes from the database, nothing
-  // hardcoded. Scoped to seva/campaign donations only (EXCLUDE_DONATIONS_PAGE).
   stats: async (req, res) => {
     try {
       const now = new Date();
       const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
       const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
       const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
-      // 12 months ago for the bar chart
       const twelveMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 11, 1);
 
       const completedBase = { ...EXCLUDE_DONATIONS_PAGE, status: "completed" };
-
-      // Completed donations where DCC sync failed or WhatsApp receipt wasn't sent
-      const needsAttentionFilter = {
-        ...EXCLUDE_DONATIONS_PAGE,
-        status: "completed",
-        $or: [
-          { dccSyncStatus: "failed" },
-          { whatsappReceiptSentAt: { $exists: false } },
-          { whatsappReceiptSentAt: null },
-        ],
-      };
+      const needsAttentionFilter = { ...completedBase, $or: NEEDS_ATTENTION_OR };
 
       const [
-        totalAgg,
-        thisMonthAgg,
-        lastMonthAgg,
+        total,
+        thisMonthTotal,
+        lastMonthTotal,
         totalTransactions,
-        donorIdentities,
+        totalDonors,
         monthlyAgg,
         sevaAgg,
         needsAttentionCount,
       ] = await Promise.all([
-        // Total collected (completed only)
-        donationModel.aggregate([
-          { $match: completedBase },
-          { $group: { _id: null, total: { $sum: "$amount" }, count: { $sum: 1 } } },
-        ]),
-        // This month (completed)
-        donationModel.aggregate([
-          { $match: { ...completedBase, createdAt: { $gte: startOfMonth } } },
-          { $group: { _id: null, total: { $sum: "$amount" } } },
-        ]),
-        // Last month (for % change)
-        donationModel.aggregate([
-          { $match: { ...completedBase, createdAt: { $gte: startOfLastMonth, $lte: endOfLastMonth } } },
-          { $group: { _id: null, total: { $sum: "$amount" } } },
-        ]),
-        // Total transaction count (all statuses)
-        donationModel.countDocuments(EXCLUDE_DONATIONS_PAGE),
-        // Unique donors — union of email + mobile
-        donationModel.aggregate([
-          { $match: completedBase },
-          {
-            $group: {
-              _id: {
-                $cond: [
-                  { $and: [{ $ne: ["$donorEmail", null] }, { $ne: ["$donorEmail", ""] }] },
-                  { $toLower: "$donorEmail" },
-                  { $ifNull: ["$donorMobile", "$$REMOVE"] },
-                ],
-              },
-            },
-          },
-          { $count: "count" },
-        ]),
-        // Monthly donations (last 12 months, completed)
-        donationModel.aggregate([
-          { $match: { ...completedBase, createdAt: { $gte: twelveMonthsAgo } } },
-          {
-            $group: {
-              // timezone is required: $year/$month run inside MongoDB, which
-              // never sees this process's TZ and would split by UTC month.
-              _id: { year: { $year: { date: "$createdAt", timezone: IST } }, month: { $month: { date: "$createdAt", timezone: IST } } },
-              amount: { $sum: "$amount" },
-              count: { $sum: 1 },
-            },
-          },
-          { $sort: { "_id.year": 1, "_id.month": 1 } },
-        ]),
-        // Seva-wise split (completed)
-        donationModel.aggregate([
-          { $match: completedBase },
-          {
-            $group: {
-              _id: { $ifNull: [{ $ifNull: ["$sevaName", "$type"] }, "General"] },
-              value: { $sum: "$amount" },
-              count: { $sum: 1 },
-            },
-          },
-          { $sort: { value: -1 } },
-        ]),
-        donationModel.countDocuments(needsAttentionFilter),
+        sumCount(completedBase),
+        sumTotal({ ...completedBase, createdAt: { $gte: startOfMonth } }),
+        sumTotal({ ...completedBase, createdAt: { $gte: startOfLastMonth, $lte: endOfLastMonth } }),
+        donations.count(EXCLUDE_DONATIONS_PAGE),
+        countGroups(
+          completedBase,
+          // Mongo parity: donations with no email all fall into one group; only an empty-string email falls back to the mobile.
+          "CASE WHEN donor_email = '' THEN donor_mobile ELSE lower(donor_email) END"
+        ),
+        aggregate(
+          { ...completedBase, createdAt: { $gte: twelveMonthsAgo } },
+          `EXTRACT(YEAR FROM created_at AT TIME ZONE '${IST_ZONE}') AS y, EXTRACT(MONTH FROM created_at AT TIME ZONE '${IST_ZONE}') AS m, SUM(amount) AS amount, COUNT(*) AS count`,
+          { groupBy: "y, m", orderBy: "y, m" }
+        ),
+        aggregate(completedBase, `${SEVA_OR_TYPE_GENERAL} AS k, SUM(amount) AS value, COUNT(*) AS count`, {
+          groupBy: "k",
+          orderBy: `value DESC, k COLLATE "C"`,
+        }),
+        donations.count(needsAttentionFilter),
       ]);
 
-      const totalCollected = totalAgg[0]?.total || 0;
-      const totalCount = totalAgg[0]?.count || 0;
-      const thisMonthTotal = thisMonthAgg[0]?.total || 0;
-      const lastMonthTotal = lastMonthAgg[0]?.total || 0;
       const changePct = lastMonthTotal
         ? Number((((thisMonthTotal - lastMonthTotal) / lastMonthTotal) * 100).toFixed(1))
         : null;
 
-      // Format monthly data with readable labels
-      const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-      const monthly = monthlyAgg.map((m) => ({
-        month: `${monthNames[m._id.month - 1]} ${m._id.year}`,
-        amount: m.amount,
-        count: m.count,
-      }));
-
-      const sevaWise = sevaAgg.map((s) => ({
-        name: s._id,
-        value: s.value,
-        count: s.count,
-      }));
-
-      // Current month label
-      const currentMonthLabel = `${monthNames[now.getMonth()]} ${now.getFullYear()}`;
-
       res.status(200).json({
         success: true,
         stats: {
-          totalCollected,
-          totalCompletedCount: totalCount,
+          totalCollected: total.total,
+          totalCompletedCount: total.count,
           totalTransactions,
-          totalDonors: donorIdentities[0]?.count || 0,
-          thisMonth: { value: thisMonthTotal, changePct, label: currentMonthLabel },
+          totalDonors,
+          thisMonth: { value: thisMonthTotal, changePct, label: `${MONTH_NAMES[now.getMonth()]} ${now.getFullYear()}` },
           needsAttentionCount,
-          monthly,
-          sevaWise,
+          monthly: monthlyAgg.map((m) => ({
+            month: `${MONTH_NAMES[m.m - 1]} ${m.y}`,
+            amount: m.amount,
+            count: m.count,
+          })),
+          sevaWise: sevaAgg.map((s) => ({ name: s.k, value: s.value, count: s.count })),
         },
       });
     } catch (err) {
@@ -189,33 +208,18 @@ const donationController = {
     }
   },
 
-  // GET /donations/audit-pending — reconciliation check for pending donations.
-  //
-  // Query params:
-  //   ?fix=true    — actually update statuses (captured→completed w/ DCC pipeline,
-  //                  all_failed→failed). Without this, read-only.
-  //   ?scope=all   — include /donations page transactions too (default: exclude them)
-  //   ?limit=100   — max transactions to check (capped at 200)
-  //
-  // For each transaction reports:
-  //   - razorpayStatus: what Razorpay says (captured/failed/created/etc)
-  //   - hasReceiptInDB: whether this donation already has a receiptNumber
-  //   - action: what was done (if fix=true) or what would be done (if read-only)
   auditPending: async (req, res) => {
     try {
       const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 100));
       const skip = Math.max(0, parseInt(req.query.skip, 10) || 0);
       const fix = req.query.fix === "true";
-      const scope = req.query.scope || "seva"; // "seva" (default) or "all"
-      // statuses=pending,failed — comma-separated. Defaults to just
-      // "pending" (existing behavior). Pass "pending,failed" for a
-      // thorough sweep that also re-verifies records already marked
-      // failed, in case any were wrong (e.g. failed before a later
-      // successful retry that Razorpay captured).
+      const scope = req.query.scope || "seva";
       const statuses = req.query.statuses
-        ? String(req.query.statuses).split(",").map((s) => s.trim()).filter(Boolean)
+        ? String(req.query.statuses)
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean)
         : ["pending"];
-
 
       const { summary, results } = await reconcilePendingDonations({ limit, skip, fix, scope, statuses });
 
@@ -231,61 +235,39 @@ const donationController = {
     }
   },
 
-  // GET /donations/utm-stats?from=&to= — sitewide campaign/source/medium
-  // metrics across ALL seva/campaign donation flows (excludes the
-  // standalone /donations page, which has its own dedicated stats at
-  // /donations-admin). Optional from/to (YYYY-MM-DD) filters by createdAt.
   getUtmStats: async (req, res) => {
     try {
       const { from, to } = req.query;
-      const dateMatch = buildDateRangeMatch(from, to);
-      const baseMatch = { ...EXCLUDE_DONATIONS_PAGE, status: "completed", ...dateMatch };
+      const baseMatch = { ...EXCLUDE_DONATIONS_PAGE, status: "completed", ...buildDateRangeMatch(from, to) };
 
-      const stats = await donationModel.aggregate([
-        { $match: baseMatch },
+      const rows = await aggregate(
+        baseMatch,
+        "COALESCE(utm_campaign, '') AS campaign, COALESCE(utm_source, '') AS source, COALESCE(utm_medium, '') AS medium, SUM(amount) AS total_amount, COUNT(*) AS count",
         {
-          $group: {
-            _id: {
-              campaign: { $ifNull: ["$utm.campaign", ""] },
-              source: { $ifNull: ["$utm.source", ""] },
-              medium: { $ifNull: ["$utm.medium", ""] },
-            },
-            totalAmount: { $sum: "$amount" },
-            count: { $sum: 1 },
-          },
+          groupBy: "campaign, source, medium",
+          orderBy: `total_amount DESC, campaign COLLATE "C", source COLLATE "C", medium COLLATE "C"`,
+        }
+      );
+      const stats = rows.map((r) => ({
+        _id: {
+          campaign: r.campaign === "" ? "direct" : r.campaign,
+          source: r.source === "" ? "direct" : r.source,
+          medium: r.medium === "" ? "none" : r.medium,
         },
-        {
-          $project: {
-            _id: {
-              campaign: { $cond: [{ $eq: ["$_id.campaign", ""] }, "direct", "$_id.campaign"] },
-              source: { $cond: [{ $eq: ["$_id.source", ""] }, "direct", "$_id.source"] },
-              medium: { $cond: [{ $eq: ["$_id.medium", ""] }, "none", "$_id.medium"] },
-            },
-            totalAmount: 1,
-            count: 1,
-          },
-        },
-        { $sort: { totalAmount: -1 } },
-      ]);
+        totalAmount: r.total_amount,
+        count: r.count,
+      }));
 
-      // Also break down by sourcePage, since sitewide spans 9 different
-      // origin flows (unlike the single-page /donations-admin equivalent).
-      const bySourcePage = await donationModel.aggregate([
-        { $match: baseMatch },
-        {
-          $group: {
-            _id: { $ifNull: ["$sourcePage", "unknown"] },
-            totalAmount: { $sum: "$amount" },
-            count: { $sum: 1 },
-          },
-        },
-        { $sort: { totalAmount: -1 } },
-      ]);
+      const bySourcePage = await aggregate(
+        baseMatch,
+        "COALESCE(source_page, 'unknown') AS k, SUM(amount) AS total_amount, COUNT(*) AS count",
+        { groupBy: "k", orderBy: `total_amount DESC, k COLLATE "C"` }
+      );
 
       res.status(200).json({
         success: true,
         stats,
-        bySourcePage: bySourcePage.map((r) => ({ sourcePage: r._id, totalAmount: r.totalAmount, count: r.count })),
+        bySourcePage: bySourcePage.map((r) => ({ sourcePage: r.k, totalAmount: r.total_amount, count: r.count })),
       });
     } catch (error) {
       console.error("donation.getUtmStats error:", error);
@@ -293,8 +275,6 @@ const donationController = {
     }
   },
 
-  // GET /donations/utm-transactions?campaign=&source=&medium=&sourcePage=&from=&to=
-  // Drill-down: real transaction list for one specific campaign/page row.
   getUtmTransactions: async (req, res) => {
     try {
       const { campaign, source, medium, sourcePage, from, to } = req.query;
@@ -302,14 +282,26 @@ const donationController = {
       if (campaign) match["utm.campaign"] = campaign === "direct" ? { $in: [null, ""] } : campaign;
       if (source) match["utm.source"] = source === "direct" ? { $in: [null, ""] } : source;
       if (medium) match["utm.medium"] = medium === "none" ? { $in: [null, ""] } : medium;
-      if (sourcePage) match["sourcePage"] = sourcePage === "unknown" ? { $in: [null, ""] } : sourcePage;
+      if (sourcePage) match.sourcePage = sourcePage === "unknown" ? { $in: [null, ""] } : sourcePage;
 
-      const transactions = await donationModel
-        .find(match)
-        .sort({ createdAt: -1 })
-        .limit(200)
-        .select("donorName donorEmail donorMobile amount status createdAt sourcePage utm receiptNumber razorpayPaymentId sevaName type")
-        .lean();
+      const transactions = await donations.find(match, {
+        sort: BY_NEWEST,
+        limit: 200,
+        fields: [
+          "donorName",
+          "donorEmail",
+          "donorMobile",
+          "amount",
+          "status",
+          "createdAt",
+          "sourcePage",
+          "utm",
+          "receiptNumber",
+          "razorpayPaymentId",
+          "sevaName",
+          "type",
+        ],
+      });
 
       res.status(200).json({ success: true, count: transactions.length, transactions });
     } catch (error) {
@@ -318,42 +310,49 @@ const donationController = {
     }
   },
 
-  // GET /donations/report?period=today|yesterday|week|month|year|custom&from=&to=
-  // One endpoint backing all the report views in the admin Reports tab.
-  // Returns total/count/average for the period, a comparison against the
-  // equivalent previous period, seva-wise and status breakdowns, and a
-  // day-by-day (or month-by-month for "year") series for charting.
   getReport: async (req, res) => {
     try {
       const { period = "today", from, to } = req.query;
       const now = new Date();
 
-      // These take a Date, not a string: the multi-argument Date constructor
-      // and the getters below both read process.env.TZ, which is pinned to
-      // IST at startup, so "today" here is an IST day. The bare-string case
-      // (period=custom) is the one that could not rely on that and is
-      // anchored explicitly further down.
+      // process.env.TZ is pinned to IST, so these Date getters are IST calendar days.
       const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
       const endOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
 
-      let start, end, prevStart, prevEnd, granularity = "day";
+      let start,
+        end,
+        prevStart,
+        prevEnd,
+        granularity = "day";
 
       if (period === "today") {
-        start = startOfDay(now); end = endOfDay(now);
-        const yest = new Date(now); yest.setDate(yest.getDate() - 1);
-        prevStart = startOfDay(yest); prevEnd = endOfDay(yest);
+        start = startOfDay(now);
+        end = endOfDay(now);
+        const yest = new Date(now);
+        yest.setDate(yest.getDate() - 1);
+        prevStart = startOfDay(yest);
+        prevEnd = endOfDay(yest);
       } else if (period === "yesterday") {
-        const yest = new Date(now); yest.setDate(yest.getDate() - 1);
-        start = startOfDay(yest); end = endOfDay(yest);
-        const dayBefore = new Date(yest); dayBefore.setDate(dayBefore.getDate() - 1);
-        prevStart = startOfDay(dayBefore); prevEnd = endOfDay(dayBefore);
+        const yest = new Date(now);
+        yest.setDate(yest.getDate() - 1);
+        start = startOfDay(yest);
+        end = endOfDay(yest);
+        const dayBefore = new Date(yest);
+        dayBefore.setDate(dayBefore.getDate() - 1);
+        prevStart = startOfDay(dayBefore);
+        prevEnd = endOfDay(dayBefore);
       } else if (period === "week") {
-        const dow = now.getDay(); // 0 = Sunday
-        const monday = new Date(now); monday.setDate(now.getDate() - ((dow + 6) % 7));
-        start = startOfDay(monday); end = endOfDay(now);
-        const prevMonday = new Date(monday); prevMonday.setDate(prevMonday.getDate() - 7);
-        const prevSunday = new Date(monday); prevSunday.setDate(prevSunday.getDate() - 1);
-        prevStart = startOfDay(prevMonday); prevEnd = endOfDay(prevSunday);
+        const dow = now.getDay();
+        const monday = new Date(now);
+        monday.setDate(now.getDate() - ((dow + 6) % 7));
+        start = startOfDay(monday);
+        end = endOfDay(now);
+        const prevMonday = new Date(monday);
+        prevMonday.setDate(prevMonday.getDate() - 7);
+        const prevSunday = new Date(monday);
+        prevSunday.setDate(prevSunday.getDate() - 1);
+        prevStart = startOfDay(prevMonday);
+        prevEnd = endOfDay(prevSunday);
       } else if (period === "month") {
         start = new Date(now.getFullYear(), now.getMonth(), 1);
         end = endOfDay(now);
@@ -366,12 +365,12 @@ const donationController = {
         prevEnd = new Date(now.getFullYear() - 1, 11, 31, 23, 59, 59, 999);
         granularity = "month";
       } else if (period === "custom") {
-        if (!from || !to) return res.status(400).json({ success: false, message: "from and to are required for a custom period." });
-        // from/to arrive as bare YYYY-MM-DD; anchor them to IST rather than
-        // letting `new Date()` read them as UTC midnight.
+        if (!from || !to)
+          return res.status(400).json({ success: false, message: "from and to are required for a custom period." });
         start = istDayStart(from);
         end = istDayEnd(to);
-        if (!start || !end) return res.status(400).json({ success: false, message: "from and to must be valid dates (YYYY-MM-DD)." });
+        if (!start || !end)
+          return res.status(400).json({ success: false, message: "from and to must be valid dates (YYYY-MM-DD)." });
         const spanMs = end.getTime() - start.getTime();
         prevEnd = new Date(start.getTime() - 1);
         prevStart = new Date(prevEnd.getTime() - spanMs);
@@ -382,47 +381,34 @@ const donationController = {
 
       const baseMatch = { ...EXCLUDE_DONATIONS_PAGE, createdAt: { $gte: start, $lte: end } };
       const completedMatch = { ...baseMatch, status: "completed" };
-      const prevCompletedMatch = { ...EXCLUDE_DONATIONS_PAGE, status: "completed", createdAt: { $gte: prevStart, $lte: prevEnd } };
+      const prevCompletedMatch = {
+        ...EXCLUDE_DONATIONS_PAGE,
+        status: "completed",
+        createdAt: { $gte: prevStart, $lte: prevEnd },
+      };
+      const bucket = granularity === "month" ? istMonth("created_at") : istDay("created_at");
 
-      // timezone is required on both: $dateToString runs inside MongoDB,
-      // which never sees this process's TZ. Without it the chart series
-      // below was bucketed by UTC day while the range filter above it was
-      // IST — two numbers on one screen that disagreed.
-      const dateTrunc = granularity === "month"
-        ? { $dateToString: { format: "%Y-%m", date: "$createdAt", timezone: IST } }
-        : { $dateToString: { format: "%Y-%m-%d", date: "$createdAt", timezone: IST } };
-
-      const [summaryAgg, prevSummaryAgg, sevaAgg, statusAgg, seriesAgg] = await Promise.all([
-        donationModel.aggregate([
-          { $match: completedMatch },
-          { $group: { _id: null, total: { $sum: "$amount" }, count: { $sum: 1 } } },
-        ]),
-        donationModel.aggregate([
-          { $match: prevCompletedMatch },
-          { $group: { _id: null, total: { $sum: "$amount" }, count: { $sum: 1 } } },
-        ]),
-        donationModel.aggregate([
-          { $match: completedMatch },
-          { $group: { _id: { $ifNull: ["$sevaName", { $ifNull: ["$type", "General"] }] }, amount: { $sum: "$amount" }, count: { $sum: 1 } } },
-          { $sort: { amount: -1 } },
-          { $limit: 15 },
-        ]),
-        donationModel.aggregate([
-          { $match: baseMatch },
-          { $group: { _id: "$status", amount: { $sum: "$amount" }, count: { $sum: 1 } } },
-        ]),
-        donationModel.aggregate([
-          { $match: completedMatch },
-          { $group: { _id: dateTrunc, amount: { $sum: "$amount" }, count: { $sum: 1 } } },
-          { $sort: { _id: 1 } },
-        ]),
+      const [summary, prevSummary, sevaAgg, statusAgg, seriesAgg] = await Promise.all([
+        sumCount(completedMatch),
+        sumCount(prevCompletedMatch),
+        aggregate(completedMatch, `${SEVA_OR_TYPE_GENERAL} AS k, SUM(amount) AS amount, COUNT(*) AS count`, {
+          groupBy: "k",
+          orderBy: `amount DESC, k COLLATE "C"`,
+          limit: 15,
+        }),
+        aggregate(baseMatch, "status AS k, SUM(amount) AS amount, COUNT(*) AS count", {
+          groupBy: "k",
+          orderBy: `k COLLATE "C"`,
+        }),
+        aggregate(completedMatch, `${bucket} AS k, SUM(amount) AS amount, COUNT(*) AS count`, {
+          groupBy: "k",
+          orderBy: "k",
+        }),
       ]);
 
-      const total = summaryAgg[0]?.total || 0;
-      const count = summaryAgg[0]?.count || 0;
-      const prevTotal = prevSummaryAgg[0]?.total || 0;
-      const prevCount = prevSummaryAgg[0]?.count || 0;
-      const percentChange = prevTotal > 0 ? Number((((total - prevTotal) / prevTotal) * 100).toFixed(1)) : null;
+      const { total, count } = summary;
+      const percentChange =
+        prevSummary.total > 0 ? Number((((total - prevSummary.total) / prevSummary.total) * 100).toFixed(1)) : null;
 
       res.status(200).json({
         success: true,
@@ -432,12 +418,12 @@ const donationController = {
           totalAmount: total,
           count,
           avgDonation: count > 0 ? Math.round(total / count) : 0,
-          previousPeriod: { totalAmount: prevTotal, count: prevCount },
+          previousPeriod: { totalAmount: prevSummary.total, count: prevSummary.count },
           percentChange,
         },
-        sevaBreakdown: sevaAgg.map((s) => ({ name: s._id, amount: s.amount, count: s.count })),
-        statusBreakdown: statusAgg.map((s) => ({ status: s._id, amount: s.amount, count: s.count })),
-        series: seriesAgg.map((s) => ({ date: s._id, amount: s.amount, count: s.count })),
+        sevaBreakdown: sevaAgg.map((s) => ({ name: s.k, amount: s.amount, count: s.count })),
+        statusBreakdown: statusAgg.map((s) => ({ status: s.k, amount: s.amount, count: s.count })),
+        series: seriesAgg.map((s) => ({ date: s.k, amount: s.amount, count: s.count })),
         granularity,
       });
     } catch (error) {
@@ -446,30 +432,27 @@ const donationController = {
     }
   },
 
-  // POST /donations/manual — ADMIN ONLY. Records a donation that arrived
-  // OUTSIDE the website checkout entirely (direct bank transfer, UPI paid
-  // straight to the temple's VPA, cash, cheque) using the bank/UPI
-  // reference (UTR) to identify the payment instead of a Razorpay ID.
-  // Creates the record already completed (admin is confirming money has
-  // actually arrived) and runs the SAME DCC + WhatsApp receipt pipeline as
-  // any other completed donation — deliberately skips the Meta CAPI
-  // purchase event since this was never an on-site/ad-attributed
-  // conversion and sending it would inflate ad performance data.
   createManual: async (req, res) => {
     try {
       const {
-        donorName, donorEmail, donorMobile, amount, type, sevaName,
-        utrNumber, manualPaymentMode, paymentDate, manualEntryNote,
-        panNumber, certificate, wantPrasadam, prasadamAddress,
-        sevakName, dob, devoteeId,
-        // The gateway's own id for money that came through a Razorpay QR
-        // (sent by DRM). Kept in transactionId, which the receipt prints and
-        // the admin search already covers.
+        donorName,
+        donorEmail,
+        donorMobile,
+        amount,
+        type,
+        sevaName,
+        utrNumber,
+        manualPaymentMode,
+        paymentDate,
+        manualEntryNote,
+        panNumber,
+        certificate,
+        wantPrasadam,
+        prasadamAddress,
+        sevakName,
+        dob,
+        devoteeId,
         razorpayPaymentId: gatewayPaymentId,
-        // The DCC id number itself, for callers that know the number but not
-        // this site's templeDevotee record — DRM, which holds its own list of
-        // preachers keyed on the same numbers. Read below, after devoteeId,
-        // which keeps its priority.
         dccEnrolledById: dccEnrolledByIdRaw,
       } = req.body;
 
@@ -478,40 +461,35 @@ const donationController = {
       const utr = String(utrNumber || "").trim();
 
       if (!name) return res.status(400).json({ success: false, message: "Donor name is required." });
-      if (!Number.isFinite(amt) || amt <= 0) return res.status(400).json({ success: false, message: "A valid amount is required." });
-      if (!utr) return res.status(400).json({ success: false, message: "UTR / reference number is required to record a manual payment." });
-      if (!donorEmail && !donorMobile) return res.status(400).json({ success: false, message: "Please provide at least an email or mobile number for the receipt." });
+      if (!Number.isFinite(amt) || amt <= 0)
+        return res.status(400).json({ success: false, message: "A valid amount is required." });
+      if (!utr)
+        return res
+          .status(400)
+          .json({ success: false, message: "UTR / reference number is required to record a manual payment." });
+      if (!donorEmail && !donorMobile)
+        return res
+          .status(400)
+          .json({ success: false, message: "Please provide at least an email or mobile number for the receipt." });
 
       const validModes = ["upi", "bank", "cash", "cheque"];
       const mode = validModes.includes(manualPaymentMode) ? manualPaymentMode : "bank";
 
-      // Optional "Enrolled By" devotee — same mechanism as campaigner
-      // attribution. If selected, the DCC receipt is credited to that
-      // devotee instead of the generic default (36 for most flows).
       let dccEnrolledById;
       if (devoteeId) {
-
-        // Guarded: a malformed id used to throw a Mongoose CastError that the
-        // outer catch returned as a 500, so one bad value failed the whole
-        // donation rather than just the attribution.
-        const devotee = mongoose.isValidObjectId(devoteeId)
-          ? await templeDevoteeModel.findById(devoteeId).lean()
-          : null;
+        const devotee = isId(devoteeId) ? await templeDevotees.findById(devoteeId) : null;
         if (devotee?.dccEnrolledById != null) dccEnrolledById = devotee.dccEnrolledById;
       }
-      // Failing that, a raw DCC number sent directly. DRM keeps its own
-      // preacher list with these numbers on it and has no templeDevotee id to
-      // offer, so without this every donation it raises is enrolled under the
-      // site's generic default instead of the preacher who brought the donor
-      // in. Validated rather than trusted: anything that is not a finite
-      // number is ignored, and the default applies as before.
-      if (dccEnrolledById == null && Number.isFinite(Number(dccEnrolledByIdRaw)) && dccEnrolledByIdRaw !== "" && dccEnrolledByIdRaw != null) {
+      if (
+        dccEnrolledById == null &&
+        Number.isFinite(Number(dccEnrolledByIdRaw)) &&
+        dccEnrolledByIdRaw !== "" &&
+        dccEnrolledByIdRaw != null
+      ) {
         dccEnrolledById = Number(dccEnrolledByIdRaw);
       }
 
-      // Duplicate-UTR guard — the same bank reference should never be
-      // entered twice (classic double-entry mistake).
-      const existingWithUtr = await donationModel.findOne({ utrNumber: utr }).lean();
+      const existingWithUtr = await donations.findOne({ utrNumber: utr });
       if (existingWithUtr) {
         return res.status(409).json({
           success: false,
@@ -519,7 +497,7 @@ const donationController = {
         });
       }
 
-      const donation = await donationModel.create({
+      const donation = await donations.insert({
         donorName: name,
         donorEmail: donorEmail ? String(donorEmail).trim().toLowerCase() : undefined,
         donorMobile: donorMobile ? String(donorMobile).trim() : undefined,
@@ -527,7 +505,7 @@ const donationController = {
         type: type || "Manual Entry",
         sevaName: sevaName || undefined,
         sourcePage: "admin-manual",
-        status: "pending", // completeDonation flow below transitions this properly
+        status: "pending",
         date: paymentDate ? new Date(paymentDate) : new Date(),
         manualEntry: true,
         utrNumber: utr,
@@ -538,24 +516,15 @@ const donationController = {
         panNumber: panNumber || undefined,
         certificate: !!certificate,
         wantPrasadam: !!wantPrasadam,
-        // Kept for 80G as well as for prasadam: this is the only address a
-        // donation has, and the receipt and DCC both read it. Dropping it
-        // whenever prasadam was not wanted sent every 80G-only manual entry
-        // to DCC and onto the certificate with no address at all.
+        // Kept for 80G as well as prasadam: the receipt and DCC both read this address.
         prasadamAddress: wantPrasadam || certificate ? prasadamAddress : undefined,
         transactionId: gatewayPaymentId ? String(gatewayPaymentId).trim() : undefined,
         sevakName: sevakName || undefined,
         dob: dob || undefined,
       });
 
-      // Link (or create) this donor's stable identity record. If a
-      // preacher raised this receipt, they become the donor's assigned
-      // preacher (only when the donor is brand new — an existing donor
-      // keeps whoever they're currently assigned to, even if a different
-      // preacher happens to raise this particular receipt for them).
       if (donation.donorMobile) {
         try {
-
           const raisedByPreacherId = req.user?.role === "preacher" ? req.user.userId : undefined;
           const donorRecord = await findOrCreateDonor({
             mobile: donation.donorMobile,
@@ -563,43 +532,33 @@ const donationController = {
             email: donation.donorEmail,
             raisedByPreacherId,
           });
-          await donationModel.findByIdAndUpdate(donation._id, { donorRecordId: donorRecord._id, donorId: donorRecord.donorId });
+          await donations.updateById(donation._id, { donorRecordId: donorRecord._id, donorId: donorRecord.donorId });
         } catch (e) {
           console.error("Donor record linking failed (non-fatal):", e && e.message ? e.message : e);
         }
       }
 
-
       await markDonationCompleted({ donationId: donation._id });
 
-      // DCC sync + WhatsApp — same pipeline as automated completions,
-      // Meta CAPI deliberately excluded (see comment above).
       try {
-
-        await dccSync(await donationModel.findById(donation._id), utr);
+        await dccSync(await donations.findById(donation._id), utr);
       } catch (e) {
         console.error("Manual entry DCC sync failed:", e && e.message ? e.message : e);
       }
       try {
-        await sendDonationWhatsAppReceipt(await donationModel.findById(donation._id));
+        await sendDonationWhatsAppReceipt(await donations.findById(donation._id));
       } catch (e) {
         console.error("Manual entry WhatsApp receipt failed:", e && e.message ? e.message : e);
       }
 
-
-      // Tell DRM. Hand-entered donations - this admin's manual entry, a
-      // preacher's Raise Receipt, a pending donation completed by UTR - do
-      // not run the online pipeline, which is the only place that pushed, so
-      // they never reached DRM until somebody ran a full import there. Last,
-      // after DCC, so the receipt number goes too. Never throws.
+      // DRM push goes last so the receipt number is included. Never throws.
       try {
-
         notifyDrmOfDonation(donation._id, { reason: "manual_entry" }).catch(() => undefined);
       } catch (e) {
         console.warn("DRM push not started (non-fatal):", e && e.message ? e.message : e);
       }
 
-      const final = await donationModel.findById(donation._id);
+      const final = await donations.findById(donation._id);
       res.status(201).json({ success: true, donation: final });
     } catch (error) {
       console.error("donation.createManual error:", error);
@@ -607,25 +566,19 @@ const donationController = {
     }
   },
 
-  // PUT /donations/:id/manual-complete — ADMIN ONLY. For a donation that
-  // ALREADY exists (donor attempted on-site and got stuck pending) but
-  // where the payment actually arrived via a channel with no Razorpay
-  // order to reconcile against (e.g. they abandoned checkout, then paid
-  // by scanning the UPI QR directly). Attaches a UTR and completes it
-  // through the same pipeline — avoids creating a duplicate record.
   completeManualPending: async (req, res) => {
     try {
       const { utrNumber, manualPaymentMode, manualEntryNote } = req.body;
       const utr = String(utrNumber || "").trim();
       if (!utr) return res.status(400).json({ success: false, message: "UTR / reference number is required." });
 
-      const donation = await donationModel.findById(req.params.id);
+      const donation = await donations.findById(castId(req.params.id));
       if (!donation) return res.status(404).json({ success: false, message: "Donation not found" });
       if (donation.status === "completed") {
         return res.status(409).json({ success: false, message: "This donation is already completed." });
       }
 
-      const existingWithUtr = await donationModel.findOne({ utrNumber: utr, _id: { $ne: donation._id } }).lean();
+      const existingWithUtr = await donations.findOne({ utrNumber: utr, _id: { $ne: donation._id } });
       if (existingWithUtr) {
         return res.status(409).json({
           success: false,
@@ -636,7 +589,7 @@ const donationController = {
       const validModes = ["upi", "bank", "cash", "cheque"];
       const mode = validModes.includes(manualPaymentMode) ? manualPaymentMode : "upi";
 
-      await donationModel.findByIdAndUpdate(donation._id, {
+      await donations.updateById(donation._id, {
         manualEntry: true,
         utrNumber: utr,
         manualPaymentMode: mode,
@@ -644,35 +597,26 @@ const donationController = {
         manualEnteredBy: req.user?.userId || undefined,
       });
 
-
       await markDonationCompleted({ donationId: donation._id });
 
       try {
-
-        await dccSync(await donationModel.findById(donation._id), utr);
+        await dccSync(await donations.findById(donation._id), utr);
       } catch (e) {
         console.error("Manual completion DCC sync failed:", e && e.message ? e.message : e);
       }
       try {
-        await sendDonationWhatsAppReceipt(await donationModel.findById(donation._id));
+        await sendDonationWhatsAppReceipt(await donations.findById(donation._id));
       } catch (e) {
         console.error("Manual completion WhatsApp receipt failed:", e && e.message ? e.message : e);
       }
 
-
-      // Tell DRM. Hand-entered donations - this admin's manual entry, a
-      // preacher's Raise Receipt, a pending donation completed by UTR - do
-      // not run the online pipeline, which is the only place that pushed, so
-      // they never reached DRM until somebody ran a full import there. Last,
-      // after DCC, so the receipt number goes too. Never throws.
       try {
-
         notifyDrmOfDonation(donation._id, { reason: "manual_entry" }).catch(() => undefined);
       } catch (e) {
         console.warn("DRM push not started (non-fatal):", e && e.message ? e.message : e);
       }
 
-      const final = await donationModel.findById(donation._id);
+      const final = await donations.findById(donation._id);
       res.status(200).json({ success: true, donation: final });
     } catch (error) {
       console.error("donation.completeManualPending error:", error);
@@ -683,25 +627,16 @@ const donationController = {
   list: async (req, res) => {
     try {
       const { type, status, date, festivalId, festivalSlug, q, from, to, minAmount, maxAmount } = req.query;
-      let filter = { ...EXCLUDE_DONATIONS_PAGE };
+      const filter = { ...EXCLUDE_DONATIONS_PAGE };
       if (type) filter.type = type;
-      if (status === 'needs_attention') {
-        filter.status = 'completed';
-        filter.$or = [
-          { dccSyncStatus: 'failed' },
-          { whatsappReceiptSentAt: { $exists: false } },
-          { whatsappReceiptSentAt: null },
-        ];
-      } else if (status === 'unpaid') {
-        // Not paid yet: still pending, or closed as failed after 30 minutes
-        // (Manual Entry attaches a UTR to either).
-        filter.status = { $in: ['pending', 'failed'] };
-      } else if (status && status !== 'all') {
+      if (status === "needs_attention") {
+        filter.status = "completed";
+        filter.$or = NEEDS_ATTENTION_OR;
+      } else if (status === "unpaid") {
+        filter.status = { $in: ["pending", "failed"] };
+      } else if (status && status !== "all") {
         filter.status = status;
       }
-      // All three are IST calendar days — a bare YYYY-MM-DD parses as UTC
-      // midnight, which is 05:30 IST, so these used to miss the first five
-      // and a half hours of the day the admin asked for.
       if (date) {
         const start = istDayStart(date);
         const end = istDayEnd(date);
@@ -709,19 +644,33 @@ const donationController = {
       }
       if (from) {
         const d = istDayStart(from);
-        if (d) { filter.date = filter.date || {}; filter.date.$gte = d; }
+        if (d) {
+          filter.date = filter.date || {};
+          filter.date.$gte = d;
+        }
       }
       if (to) {
         const d = istDayEnd(to);
-        if (d) { filter.date = filter.date || {}; filter.date.$lte = d; }
+        if (d) {
+          filter.date = filter.date || {};
+          filter.date.$lte = d;
+        }
       }
       if (festivalId) filter.festivalId = festivalId;
       if (festivalSlug) filter.festivalSlug = festivalSlug;
-      if (minAmount) filter.amount = Object.assign({}, filter.amount, { $gte: Number(minAmount) });
-      if (maxAmount) filter.amount = Object.assign({}, filter.amount, { $lte: Number(maxAmount) });
+      if (minAmount) filter.amount = Object.assign({}, filter.amount, { $gte: castNumber(minAmount) });
+      if (maxAmount) filter.amount = Object.assign({}, filter.amount, { $lte: castNumber(maxAmount) });
       if (q) {
-        const re = new RegExp(String(q), 'i');
-        const searchOr = [ { donorName: re }, { donorEmail: re }, { donorMobile: re }, { transactionId: re }, { razorpayOrderId: re }, { razorpayPaymentId: re }, { utrNumber: re } ];
+        const re = new RegExp(String(q), "i");
+        const searchOr = [
+          { donorName: re },
+          { donorEmail: re },
+          { donorMobile: re },
+          { transactionId: re },
+          { razorpayOrderId: re },
+          { razorpayPaymentId: re },
+          { utrNumber: re },
+        ];
         if (filter.$or) {
           filter.$and = [{ $or: filter.$or }, { $or: searchOr }];
           delete filter.$or;
@@ -730,63 +679,35 @@ const donationController = {
         }
       }
 
-      // parseInt('abc') is NaN, and both Math.max and Math.min propagate it —
-      // so a non-numeric ?page or ?limit used to reach .skip()/.limit() as NaN.
       const toInt = (value, fallback) => {
         const n = parseInt(value, 10);
         return Number.isFinite(n) ? n : fallback;
       };
       const page = Math.max(1, toInt(req.query.page, 1));
 
-      // Browsing the table is capped at 200 rows per page — plenty for a
-      // screen, and it stops a hand-crafted ?limit=50000 from trying to
-      // serialise the whole collection into one response.
-      //
-      // A CSV export is a different job: it legitimately wants every row that
-      // matches the filter. It used to ask for ?limit=10000 and silently get
-      // 200 back, so an admin exporting 300+ failed payments downloaded a file
-      // containing 200 of them with nothing to indicate the rest were missing.
-      // That is the worst kind of bug in an accounting tool — the output looks
-      // complete.
-      //
-      // The cap stays, because an unbounded page is still a bad idea; export
-      // mode simply gets a larger one and the client pages through until it has
-      // `total` rows. The response already echoes `total` and the `limit`
-      // actually applied, so truncation is now visible to any caller.
+      // Browsing is capped at 200 rows/page; CSV export mode may ask for up to 1000 per page.
       const MAX_BROWSE_LIMIT = 200;
       const MAX_EXPORT_LIMIT = 1000;
-      const isExport = String(req.query.export || '') === '1';
-      const limit = Math.min(
-        isExport ? MAX_EXPORT_LIMIT : MAX_BROWSE_LIMIT,
-        Math.max(1, toInt(req.query.limit, 20))
-      );
+      const isExport = String(req.query.export || "") === "1";
+      const limit = Math.min(isExport ? MAX_EXPORT_LIMIT : MAX_BROWSE_LIMIT, Math.max(1, toInt(req.query.limit, 20)));
       const skip = (page - 1) * limit;
 
-      const projection = {
-        donorName: 1, donorEmail: 1, donorMobile: 1, amount: 1, status: 1, date: 1,
-        panNumber: 1, certificate: 1, wantPrasadam: 1, prasadamAddress: 1,
-        transactionId: 1, razorpayOrderId: 1, razorpayPaymentId: 1,
-        receiptNumber: 1, dccSyncStatus: 1, whatsappReceiptSentAt: 1, whatsappReceiptError: 1,
-        sevaName: 1, type: 1, sourcePage: 1, utm: 1, createdAt: 1,
-        manualEntry: 1, utrNumber: 1, manualPaymentMode: 1, manualEntryNote: 1,
-      };
-
-      const [total, donations, totalAmountAgg] = await Promise.all([
-        donationModel.countDocuments(filter),
-        donationModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).select(projection).lean(),
-        donationModel.aggregate([{ $match: filter }, { $group: { _id: null, sum: { $sum: "$amount" } } }]),
+      const [total, rows, totalAmount] = await Promise.all([
+        donations.count(filter),
+        donations.find(filter, { sort: BY_NEWEST, skip, limit, fields: LIST_FIELDS }),
+        sumTotal(filter),
       ]);
 
-      res.status(200).json({ donations, total, page, limit, totalAmount: totalAmountAgg[0]?.sum || 0 });
+      res.status(200).json({ donations: rows, total, page, limit, totalAmount });
     } catch (err) {
-      console.error('donation list error', err);
+      console.error("donation list error", err);
       res.status(500).json({ message: "Server error" });
     }
   },
 
   get: async (req, res) => {
     try {
-      const donation = await donationModel.findById(req.params.id);
+      const donation = await donations.findById(castId(req.params.id));
       if (!donation) return res.status(404).json({ message: "Donation not found" });
       res.status(200).json({ donation });
     } catch (err) {
@@ -796,37 +717,33 @@ const donationController = {
 
   create: async (req, res) => {
     try {
-      const { donorName, donorEmail, donorMobile, amount, type, message, transactionId, festivalId, festivalSlug,
-        panNumber, certificate, wantPrasadam, prasadamAddress, razorpayOrderId } = req.body;
-      if (!donorName || !amount) {
+      const body = req.body || {};
+      const { festivalId, festivalSlug, type, transactionId, razorpayOrderId } = body;
+      if (!body.donorName || !body.amount) {
         return res.status(400).json({ message: "Name and amount are required" });
+      }
+      const amount = Number(body.amount);
+      if (!Number.isFinite(amount) || amount <= 0) {
+        return res.status(400).json({ message: "A valid amount is required" });
       }
       let resolvedFestivalId = festivalId;
       if (!resolvedFestivalId && festivalSlug) {
         try {
-
-          const fest = await festivalDonationModel.findOne({ slug: festivalSlug }).select('_id');
+          const fest = await festivalDonations.findOne({ slug: String(festivalSlug) }, { fields: ["_id"] });
           if (fest) resolvedFestivalId = fest._id;
         } catch (err) {
-          console.warn('Could not resolve festivalSlug to festivalId', festivalSlug, err);
+          console.warn("Could not resolve festivalSlug to festivalId", festivalSlug, err);
         }
       }
-      const donation = await donationModel.create({
-        donorName,
-        donorEmail,
-        donorMobile,
+      const donation = await donations.insert({
+        ...safeDonationFields(body),
         amount,
-        type,
-        message,
-        transactionId,
-        festivalId: resolvedFestivalId,
-        festivalSlug,
-        panNumber,
-        certificate,
-        wantPrasadam,
-        prasadamAddress,
-        razorpayOrderId,
-        status: "pending"
+        type: type ? String(type) : undefined,
+        transactionId: str(transactionId),
+        festivalId: resolvedFestivalId ? String(resolvedFestivalId) : undefined,
+        festivalSlug: str(festivalSlug),
+        razorpayOrderId: str(razorpayOrderId),
+        status: "pending",
       });
       res.status(201).json({ message: "Donation created", donation });
     } catch (err) {
@@ -837,7 +754,9 @@ const donationController = {
   update: async (req, res) => {
     try {
       const { id } = req.params;
-      const donation = await donationModel.findByIdAndUpdate(id, req.body, { new: true });
+      castId(id);
+      const patch = safeDonationFields(req.body);
+      const donation = Object.keys(patch).length ? await donations.updateById(id, patch) : await donations.findById(id);
       if (!donation) return res.status(404).json({ message: "Donation not found" });
       res.status(200).json({ message: "Donation updated", donation });
     } catch (err) {
@@ -847,33 +766,27 @@ const donationController = {
 
   delete: async (req, res) => {
     try {
-      const { id } = req.params;
-      await donationModel.findByIdAndDelete(id);
+      await donations.deleteById(castId(req.params.id));
       res.status(200).json({ message: "Donation deleted" });
     } catch (err) {
       res.status(500).json({ message: "Server error" });
     }
   },
 
-  // ADMIN - real "Resend Receipt" action: force-retries the DCC donor-CRM
-  // sync for this donation, which is what actually generates/re-generates
-  // the receiptNumber. Replaces the previous no-op empty-body PUT.
   resendReceipt: async (req, res) => {
     try {
       const { id } = req.params;
 
-      const donation = await donationModel.findById(id);
+      const donation = await donations.findById(castId(id));
       if (!donation) return res.status(404).json({ message: "Donation not found" });
 
       if (!isDccConfigured()) {
         return res.status(200).json({
-          message: "DCC_API_KEY is not configured on this server, so no receipt system is connected yet. Nothing was sent.",
+          message:
+            "DCC_API_KEY is not configured on this server, so no receipt system is connected yet. Nothing was sent.",
           skipped: true,
         });
       }
-
-      // Push to DCC (DCC answers a repeat push with the receipt it already
-      // issued), then send the WhatsApp receipt once there is a number.
 
       const result = await pushAndSendReceipt(id);
       const message = pushResultMessage(result);
@@ -887,17 +800,11 @@ const donationController = {
     }
   },
 
-  // ADMIN - manually set the DCC receipt number on a donation when DCC
-  // already has it in their system but the sync was never linked back
-  // (e.g. the "Transaction details exist" error from DCC). Useful when
-  // you log into DCC directly and find the receipt number there.
   patchReceiptNumber: async (req, res) => {
     try {
       const { receiptNumber } = req.body;
       const clean = String(receiptNumber || "").trim();
       if (!clean) return res.status(400).json({ success: false, message: "receiptNumber is required." });
-
-      // Stores it and sends the donor the WhatsApp receipt (never twice).
 
       const result = await setReceiptNumberAndSend(req.params.id, clean);
       if (!result) return res.status(404).json({ success: false, message: "Donation not found." });
@@ -908,13 +815,8 @@ const donationController = {
     }
   },
 
-  // GET /donations/dcc-status?includeOld=true — Admin → Donations → DCC
-  // receipts: every successful donation still without a DCC receipt number,
-  // what the automatic sweep will do with it, and the counts.
   dccStatus: async (req, res) => {
     try {
-
-
       const status = await dccReceiptStatus({ includeOld: req.query.includeOld === "true" });
       res.status(200).json({ success: true, configured: isDccConfigured(), running: isSweepRunning(), ...status });
     } catch (err) {
@@ -923,17 +825,17 @@ const donationController = {
     }
   },
 
-  // POST /donations/dcc-push-all — push every due donation now instead of
-  // waiting for the next sweep (retry waits skipped). Runs in the background;
-  // the panel refreshes /dcc-status to follow it.
   dccPushAll: async (req, res) => {
     try {
-
-
-      if (!isDccConfigured()) return res.status(400).json({ success: false, message: "DCC is not configured on this server." });
+      if (!isDccConfigured())
+        return res.status(400).json({ success: false, message: "DCC is not configured on this server." });
       if (isSweepRunning()) return res.status(202).json({ success: true, message: "A push is already running." });
       sweepDccReceipts({ limit: 200, ignoreBackoff: true })
-        .then((s) => console.log(`[dcc-sweep] admin push: pushed ${s.pushed}, ${s.receipts} receipt(s), ${s.whatsappSent} WhatsApp sent, ${s.failed} failing`))
+        .then((s) =>
+          console.log(
+            `[dcc-sweep] admin push: pushed ${s.pushed}, ${s.receipts} receipt(s), ${s.whatsappSent} WhatsApp sent, ${s.failed} failing`
+          )
+        )
         .catch((e) => console.error("[dcc-sweep] admin push failed:", e && e.message ? e.message : e));
       res.status(202).json({ success: true, message: "Pushing to DCC now." });
     } catch (err) {
@@ -942,94 +844,71 @@ const donationController = {
     }
   },
 
-  // GET /donations/needs-manual-receipt — completed donations where DCC
-  // already has the transaction on record (from a prior sync attempt that
-  // succeeded on their side without the response reaching us) but we never
-  // captured a receipt number, so it's stuck needing a human to look it up
-  // in DCC directly. DCC's addDonation API is create-only and doesn't
-  // return the receipt number in this "already exists" response, and there
-  // is no lookup/search endpoint in their API to query it back — this list
-  // is the practical way to see and clear the backlog quickly instead of
-  // discovering these one at a time.
+  // Completed donations whose DCC sync failed or DCC already has the transaction, with no receipt number captured.
   needsManualReceipt: async (req, res) => {
     try {
-      const donations = await donationModel
-        .find({
+      const rows = await donations.find(
+        {
           status: "completed",
           receiptNumber: { $in: [null, ""] },
-          $or: [
-            { dccSyncStatus: "failed" },
-            { dccSyncError: { $regex: "transaction details exist", $options: "i" } },
+          $or: [{ dccSyncStatus: "failed" }, { dccSyncError: { $regex: "transaction details exist", $options: "i" } }],
+        },
+        {
+          sort: BY_NEWEST,
+          limit: 200,
+          fields: [
+            "donorName",
+            "donorEmail",
+            "donorMobile",
+            "amount",
+            "sevaName",
+            "type",
+            "createdAt",
+            "dccSyncStatus",
+            "dccSyncError",
+            "razorpayPaymentId",
+            "utrNumber",
           ],
-        })
-        .sort({ createdAt: -1 })
-        .limit(200)
-        .select("donorName donorEmail donorMobile amount sevaName type createdAt dccSyncStatus dccSyncError razorpayPaymentId utrNumber")
-        .lean();
+        }
+      );
 
-      res.status(200).json({ success: true, count: donations.length, donations });
+      res.status(200).json({ success: true, count: rows.length, donations: rows });
     } catch (err) {
       console.error("needsManualReceipt error:", err);
       res.status(500).json({ success: false, message: err.message || "Server error" });
     }
   },
 
-  // GET /donations/needs-whatsapp — completed donations that HAVE a real
-  // DCC receipt number but never got a WhatsApp receipt delivered (no
-  // phone number, WhatsApp not configured at the time, API/template
-  // error, or the donor's number bounced). Flagged here specifically so
-  // admin can review and send manually — separate from Needs Manual
-  // Receipt, which is about missing receipt NUMBERS, not missing
-  // deliveries of a receipt that already exists.
-  // POST /donations/backfill-donors?limit=200&skip=0&execute=true
-  // Backfills Donor records for historical completed donations that
-  // predate the Donor system (or came through the regular website flow
-  // before it was wired into the completion pipeline). Groups by mobile
-  // number so a repeat donor gets exactly ONE Donor record covering all
-  // their past donations, not one per donation. No preacher involved -
-  // assignedPreacherId stays unset, same as any other website donation.
-  //
-  // Processes unique mobile numbers in batches (not individual
-  // donations) since there are ~4,000 of them - call repeatedly with
-  // increasing skip until totalGroupsThisBatch < limit.
+  // Groups completed donations without a donor record by mobile and links/creates one Donor per number.
   backfillDonors: async (req, res) => {
     try {
       const limit = Math.min(300, Math.max(1, parseInt(req.query.limit, 10) || 200));
       const execute = req.query.execute === "true";
-      // CORRECTNESS: when executing, each processed group gets
-      // donorRecordId set and drops out of the $match filter below - the
-      // matching pool shrinks as we go, exactly like the reconciliation
-      // pagination bug found earlier this session. A fixed/incrementing
-      // skip would then skip over unprocessed donors, not just already-
-      // processed ones. So execute mode always uses skip=0 - the next
-      // batch is always at the top of whatever's left. skip is only
-      // meaningful (and only accepted) in preview mode, for browsing
-      // without changing anything between calls.
+      // In execute mode processed groups drop out of the filter, so the next batch is always at skip 0.
       const skip = execute ? 0 : Math.max(0, parseInt(req.query.skip, 10) || 0);
 
-      const groups = await donationModel.aggregate([
-        { $match: { status: "completed", donorMobile: { $exists: true, $ne: "" }, donorRecordId: { $exists: false } } },
-        { $sort: { createdAt: -1 } },
-        { $group: { _id: "$donorMobile", name: { $first: "$donorName" }, email: { $first: "$donorEmail" }, count: { $sum: 1 } } },
-        { $sort: { _id: 1 } },
-        { $skip: skip },
-        { $limit: limit },
-      ]);
-
+      const groups = await aggregate(
+        { status: "completed", donorMobile: { $exists: true, $ne: "" }, donorRecordId: null },
+        `donor_mobile AS k,
+         (array_agg(donor_name ORDER BY created_at DESC, id))[1] AS name,
+         (array_agg(donor_email ORDER BY created_at DESC, id))[1] AS email,
+         COUNT(*) AS count`,
+        { groupBy: "donor_mobile", orderBy: `k COLLATE "C"`, limit, offset: skip }
+      );
 
       const results = [];
 
       for (const g of groups) {
-        const entry = { mobile: g._id, name: g.name, email: g.email, donationCount: g.count };
+        const entry = { mobile: g.k, name: g.name, email: g.email, donationCount: g.count };
         if (execute) {
           try {
-            const donor = await findOrCreateDonor({ mobile: g._id, name: g.name, email: g.email });
-            const updateResult = await donationModel.updateMany(
-              { donorMobile: g._id, status: "completed", donorRecordId: { $exists: false } },
+            const donor = await findOrCreateDonor({ mobile: g.k, name: g.name, email: g.email });
+            const linked = await donations.updateMany(
+              { donorMobile: g.k, status: "completed", donorRecordId: null },
               { donorRecordId: donor._id, donorId: donor.donorId }
             );
             entry.donorId = donor.donorId;
-            entry.donationsLinked = updateResult.modifiedCount;
+            entry.donationsLinked = linked;
             entry.action = "LINKED";
           } catch (err) {
             entry.action = "ERROR";
@@ -1053,40 +932,32 @@ const donationController = {
     }
   },
 
-  // POST /donations/backfill-dcc-donor-numbers?limit=200&execute=true
-  // Backfills the real DCC DonorNumber onto existing Donor records that
-  // predate this fix. For each Donor missing dccDonorNumber, checks their
-  // linked donations for any already-synced dccResponse.DonorNumber and
-  // copies it over. Same skip=0-when-executing correctness rule as the
-  // other backfills in this file (a fixed/incrementing skip would skip
-  // over unprocessed donors once earlier ones drop out of the filter).
   backfillDccDonorNumbers: async (req, res) => {
     try {
       const limit = Math.min(300, Math.max(1, parseInt(req.query.limit, 10) || 200));
       const execute = req.query.execute === "true";
 
-
-      const donors = await donorModel
-        .find({ dccDonorNumber: { $exists: false } })
-        .sort({ _id: 1 })
-        .limit(limit)
-        .lean();
+      const pending = await donors.find({ dccDonorNumber: null }, { sort: { _id: 1 }, limit });
 
       const results = [];
-      for (const donor of donors) {
-        const donation = await donationModel
-          .findOne({ donorRecordId: donor._id, "dccResponse.DonorNumber": { $exists: true, $ne: null } })
-          .select("dccResponse")
-          .lean();
+      for (const donor of pending) {
+        const rows = await aggregate(
+          {
+            donorRecordId: donor._id,
+            $raw: ["(jsonb_exists(dcc_response, 'DonorNumber') AND dcc_response->'DonorNumber' <> 'null'::jsonb)", []],
+          },
+          "dcc_response->'DonorNumber' AS dn",
+          { orderBy: "created_at, id", limit: 1 }
+        );
 
         const entry = { donorId: donor.donorId, name: donor.name, mobile: donor.mobile };
-        if (!donation) {
+        if (!rows.length) {
           entry.action = "NO_SYNCED_DONATION_FOUND";
         } else {
-          const dccDonorNumber = donation.dccResponse.DonorNumber;
+          const dccDonorNumber = String(rows[0].dn);
           entry.dccDonorNumber = dccDonorNumber;
           if (execute) {
-            await donorModel.findByIdAndUpdate(donor._id, { dccDonorNumber });
+            await donors.updateById(donor._id, { dccDonorNumber });
             entry.action = "BACKFILLED";
           } else {
             entry.action = "WOULD_BACKFILL";
@@ -1098,7 +969,7 @@ const donationController = {
       res.status(200).json({
         success: true,
         mode: execute ? "EXECUTED" : "PREVIEW ONLY — nothing changed",
-        checkedThisBatch: donors.length,
+        checkedThisBatch: pending.length,
         results,
       });
     } catch (err) {
@@ -1107,69 +978,53 @@ const donationController = {
     }
   },
 
+  // Completed donations with a real receipt number but no delivered WhatsApp receipt.
   needsWhatsApp: async (req, res) => {
     try {
-      const donations = await donationModel
-        .find({
+      const rows = await donations.find(
+        {
           status: "completed",
           receiptNumber: { $nin: [null, ""] },
-          $or: [
-            // Never sent at all.
-            { whatsappReceiptSentAt: { $in: [null, undefined] } },
-            // Sent, accepted by the provider's API, then reported FAILED by
-            // the delivery callback — the donor has no receipt even though
-            // whatsappReceiptSentAt is set. Without this clause those
-            // donations were invisible: the send looked successful and only
-            // the callback knew otherwise.
-            { whatsappDeliveryStatus: "failed" },
+          $or: [{ whatsappReceiptSentAt: null }, { whatsappDeliveryStatus: "failed" }],
+        },
+        {
+          sort: BY_NEWEST,
+          limit: 200,
+          fields: [
+            "donorName",
+            "donorEmail",
+            "donorMobile",
+            "amount",
+            "sevaName",
+            "type",
+            "createdAt",
+            "receiptNumber",
+            "whatsappReceiptError",
+            "whatsappReceiptSentAt",
+            "whatsappProvider",
+            "whatsappDeliveryStatus",
           ],
-        })
-        .sort({ createdAt: -1 })
-        .limit(200)
-        .select(
-          "donorName donorEmail donorMobile amount sevaName type createdAt receiptNumber whatsappReceiptError whatsappReceiptSentAt whatsappProvider whatsappDeliveryStatus"
-        )
-        .lean();
+        }
+      );
 
-      res.status(200).json({ success: true, count: donations.length, donations });
+      res.status(200).json({ success: true, count: rows.length, donations: rows });
     } catch (err) {
       console.error("needsWhatsApp error:", err);
       res.status(500).json({ success: false, message: err.message || "Server error" });
     }
   },
 
-  // ADMIN - bulk resend for a window of receipts that never went out, e.g.
-  // the hours in which every Flaxxa send failed on that number's spam/quality
-  // limit. Same auth as the rest of this admin API; no internal secret and no
-  // shell access needed, which is the point — this is driven from the Needs
-  // WhatsApp tab.
-  //
-  // POST /donations/resend-recent-whatsapp  { hours, limit, send }
-  //   send !== true  -> DRY RUN: returns exactly who would be messaged.
-  //   send === true  -> sends, sequentially, with a delay between each.
-  //
-  // Safe to run twice: it only picks donations with no recorded receipt send,
-  // and the send path keeps its idempotency guard (no force), so a donor who
-  // already has a receipt is skipped rather than messaged again.
   resendRecentWhatsApp: async (req, res) => {
     try {
       const body = req.body || {};
-      // hours = 0 (or "all") drops the time window entirely: every donation
-      // with a receipt and no recorded send. Offline/manual donations are the
-      // reason this matters — the window filters on when the donation record
-      // was created, not when its receipt was raised.
       const rawHours = body.hours ?? req.query.hours ?? 9;
       const hours = String(rawHours).toLowerCase() === "all" ? 0 : Number(rawHours);
-      // Capped per call so one click can't run long enough to be cut off by a
-      // proxy timeout mid-batch. `remaining` in the response tells the UI
-      // whether to offer another round.
       const limit = Math.min(Number(body.limit ?? req.query.limit ?? 25), 100);
       const dryRun = String(body.send ?? req.query.send ?? "") !== "true";
 
       if (!Number.isFinite(hours) || hours < 0 || hours > 24 * 365) {
         return res.status(400).json({ success: false, message: "hours must be 0 (all time) or between 1 and 8760." });
       }
-
 
       const result = await resendRecentFailedReceipts({ hours, limit, dryRun, delayMs: 700 });
 
@@ -1180,52 +1035,39 @@ const donationController = {
     }
   },
 
-  // ADMIN - manually re-trigger the WhatsApp receipt message, isolated from
-  // DCC so a WhatsApp-only failure (bad phone, template not approved yet)
-  // can be retried without re-running the DCC sync.
   resendWhatsApp: async (req, res) => {
     try {
       const { id } = req.params;
 
-
-
-      const donation = await donationModel.findById(id);
+      const donation = await donations.findById(castId(id));
       if (!donation) return res.status(404).json({ message: "Donation not found" });
 
-      // Must match the provider sendDonationWhatsAppReceipt will actually use
-      // (RECEIPT_WHATSAPP_PROVIDER, default gupshup). This gate used to check
-      // WAPI_TOKEN unconditionally, which would refuse every resend on a
-      // Gupshup-only setup even though the send would have worked.
       const provider = String(process.env.RECEIPT_WHATSAPP_PROVIDER || "gupshup").toLowerCase();
       const configured = provider === "gupshup" ? isGupshupReceiptConfigured() : isWhatsAppConfigured();
       if (!configured) {
-        const missing =
-          provider === "gupshup"
-            ? "GUPSHUP_API_KEY / GUPSHUP_APP_NAME are"
-            : "WAPI_TOKEN is";
+        const missing = provider === "gupshup" ? "GUPSHUP_API_KEY / GUPSHUP_APP_NAME are" : "WAPI_TOKEN is";
         return res.status(200).json({
           message: `${missing} not configured on this server, so WhatsApp isn't connected yet. Nothing was sent.`,
           skipped: true,
         });
       }
 
-      // force:true — this is a deliberate, human-initiated resend (admin
-      // clicked the button), so it's allowed to send again even if a
-      // receipt was already sent before. The atomic lock inside still
-      // prevents a genuine double-click from sending twice.
+      // force: a deliberate admin resend may send again; the atomic lock inside still blocks a double-click.
       const result = await sendDonationWhatsAppReceipt(donation, { force: true });
       if (result.ok) {
         return res.status(200).json({ message: "WhatsApp receipt sent successfully" });
       }
       if (result.reason === "no_receipt_yet") {
         return res.status(200).json({
-          message: "This donation doesn't have a DCC receipt number yet, so no WhatsApp message was sent (per policy, we never message a donor without the real receipt). Try 'Resend Receipt' first, then Resend WhatsApp again.",
+          message:
+            "This donation doesn't have a DCC receipt number yet, so no WhatsApp message was sent (per policy, we never message a donor without the real receipt). Try 'Resend Receipt' first, then Resend WhatsApp again.",
           skipped: true,
         });
       }
       if (result.reason === "send_in_progress") {
         return res.status(200).json({
-          message: "A WhatsApp send for this donation is already in progress (possibly from double-clicking). Please wait a moment and check whether it went through before resending.",
+          message:
+            "A WhatsApp send for this donation is already in progress (possibly from double-clicking). Please wait a moment and check whether it went through before resending.",
           skipped: true,
         });
       }
@@ -1236,26 +1078,29 @@ const donationController = {
     }
   },
 
-  // GET /donations/whatsapp-audit — finds donations where whatsappReceiptSentAt
-  // is set but there's no receiptNumber. These are stale from before the
-  // no-receipt-no-WhatsApp policy: the old fallback behavior sent a plain
-  // text message even when DCC hadn't returned a receipt yet, so this field
-  // reflects a real send that happened, but under the current policy it's
-  // misleading in the admin UI (looks like "receipt sent" when no receipt
-  // ever existed). ?fix=true clears the field on all matches found.
+  // whatsappReceiptSentAt set but no receipt number (pre-policy sends); ?fix=true clears the field.
   whatsappAudit: async (req, res) => {
     try {
       const query = {
         whatsappReceiptSentAt: { $ne: null },
-        $or: [{ receiptNumber: null }, { receiptNumber: { $exists: false } }, { receiptNumber: "" }],
+        $or: [{ receiptNumber: null }, { receiptNumber: "" }],
       };
-      const stale = await donationModel
-        .find(query)
-        .select("_id donorName donorMobile amount sourcePage sevaName whatsappReceiptSentAt dccSyncStatus")
-        .lean();
+      const stale = await donations.find(query, {
+        sort: { _id: 1 },
+        fields: [
+          "_id",
+          "donorName",
+          "donorMobile",
+          "amount",
+          "sourcePage",
+          "sevaName",
+          "whatsappReceiptSentAt",
+          "dccSyncStatus",
+        ],
+      });
 
       if (req.query.fix === "true" && stale.length > 0) {
-        await donationModel.updateMany(query, { $set: { whatsappReceiptSentAt: null } });
+        await donations.updateMany(query, { $set: { whatsappReceiptSentAt: null } });
       }
 
       res.status(200).json({
@@ -1269,17 +1114,7 @@ const donationController = {
     }
   },
 
-  // ─── Maha Prasadam courier tracking ───────────────────────────────────
-  // Powers the Prasadam tab in /admin/donations: every donation where the
-  // donor opted for Maha Prasadam delivery, with admin-managed dispatch
-  // status (pending → dispatched → delivered, or cancelled), courier
-  // details, and a CSV download for the courier run.
-
-  // GET /donations/prasadam-requests?status=&q=&from=&to=&seva=&sourcePage=&page=&limit=
-  // Lists prasadam opt-ins (wantPrasadam=true, completed payments only — only
-  // those actually get a courier box), newest first. The standalone /donations
-  // page family is EXCLUDED: that page has its own dedicated admin and its
-  // donors are not this panel's business, so they never show up here.
+  // Maha Prasadam: completed donations with wantPrasadam, excluding the /donations page family.
   listPrasadamRequests: async (req, res) => {
     try {
       const { status, q, seva, sourcePage } = req.query;
@@ -1293,13 +1128,8 @@ const donationController = {
       let statusOr = null;
       if (status && status !== "all") {
         if (status === "not_dispatched" || status === "pending") {
-          // Work queue: not sent yet. Old records pre-dating tracking have no
-          // prasadamStatus at all — they ARE pending, so include them.
-          statusOr = [
-            { prasadamStatus: "pending" },
-            { prasadamStatus: { $exists: false } },
-            { prasadamStatus: null },
-          ];
+          // Old records predating tracking have no prasadamStatus and count as pending.
+          statusOr = [{ prasadamStatus: "pending" }, { prasadamStatus: null }];
         } else {
           filter.prasadamStatus = status;
         }
@@ -1309,7 +1139,7 @@ const donationController = {
       if (sourcePage) filter.sourcePage = sourcePage;
 
       if (q) {
-        const re = new RegExp(String(q).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+        const re = new RegExp(escapeRegex(String(q)), "i");
         const searchOr = [
           { donorName: re },
           { donorMobile: re },
@@ -1317,8 +1147,6 @@ const donationController = {
           { "prasadamAddress.pincode": re },
           { prasadamTrackingNumber: re },
         ];
-        // statusOr and searchOr are both $or clauses — merging needs $and,
-        // otherwise one silently overwrites the other.
         if (statusOr) {
           filter.$and = [{ $or: statusOr }, { $or: searchOr }];
         } else {
@@ -1332,50 +1160,19 @@ const donationController = {
       const limit = Math.min(200, Math.max(1, parseInt(req.query.limit || "20", 10)));
       const skip = (page - 1) * limit;
 
-      const projection = {
-        donorName: 1, donorEmail: 1, donorMobile: 1, amount: 1, status: 1,
-        wantPrasadam: 1, prasadamAddress: 1,
-        prasadamStatus: 1, prasadamCourier: 1, prasadamTrackingNumber: 1,
-        prasadamDispatchedAt: 1, prasadamDeliveredAt: 1, prasadamNotes: 1,
-        sevaName: 1, type: 1, sourcePage: 1, createdAt: 1,
-        razorpayOrderId: 1, razorpayPaymentId: 1, receiptNumber: 1,
-      };
-
-      // Dropdown options for the seva / page filters — distinct values
-      // across ALL prasadam opt-ins (excluding /donations), so the option
-      // lists stay stable no matter what is currently filtered.
       const optMatch = { wantPrasadam: true, status: "completed", ...EXCLUDE_DONATIONS_PAGE };
 
       const [total, requests, counts, sevaAgg, pageAgg] = await Promise.all([
-        donationModel.countDocuments(filter),
-        donationModel
-          .find(filter)
-          .sort({ createdAt: -1 })
-          .skip(skip)
-          .limit(limit)
-          .select(projection)
-          .lean(),
-        // Tab badges — computed on the full opt-in set so the numbers don't
-        // shift meaning when filters are active.
-        donationModel.aggregate([
-          { $match: optMatch },
-          { $group: { _id: "$prasadamStatus", count: { $sum: 1 } } },
-        ]),
-        donationModel.aggregate([
-          { $match: optMatch },
-          { $group: { _id: "$sevaName" } },
-          { $sort: { _id: 1 } },
-        ]),
-        donationModel.aggregate([
-          { $match: optMatch },
-          { $group: { _id: "$sourcePage" } },
-          { $sort: { _id: 1 } },
-        ]),
+        donations.count(filter),
+        donations.find(filter, { sort: BY_NEWEST, skip, limit, fields: PRASADAM_LIST_FIELDS }),
+        aggregate(optMatch, "prasadam_status AS k, COUNT(*) AS count", { groupBy: "k" }),
+        aggregate(optMatch, "seva_name AS k", { groupBy: "k", orderBy: `k COLLATE "C"` }),
+        aggregate(optMatch, "source_page AS k", { groupBy: "k", orderBy: `k COLLATE "C"` }),
       ]);
 
       const badgeCounts = { all: 0, pending: 0, dispatched: 0, delivered: 0, cancelled: 0 };
       for (const row of counts) {
-        const key = row._id || "pending"; // old records predate the field → treat as pending
+        const key = row.k || "pending";
         if (badgeCounts[key] !== undefined) badgeCounts[key] += row.count;
         badgeCounts.all += row.count;
       }
@@ -1387,8 +1184,8 @@ const donationController = {
         limit,
         badgeCounts,
         filterOptions: {
-          sevas: sevaAgg.map((r) => r._id).filter(Boolean),
-          pages: pageAgg.map((r) => r._id).filter(Boolean),
+          sevas: sevaAgg.map((r) => r.k).filter(Boolean),
+          pages: pageAgg.map((r) => r.k).filter(Boolean),
         },
       });
     } catch (err) {
@@ -1397,10 +1194,6 @@ const donationController = {
     }
   },
 
-  // PUT /donations/:id/prasadam-status
-  // Admin marks a request dispatched (with courier + tracking number) or
-  // delivered/cancelled. Timestamps are set server-side; rejected outright
-  // for non-prasadam donations so a misclick elsewhere can't forge a record.
   updatePrasadamStatus: async (req, res) => {
     try {
       const { id } = req.params;
@@ -1408,46 +1201,46 @@ const donationController = {
 
       const PRASADAM_STATUSES = ["pending", "dispatched", "delivered", "cancelled"];
       if (!PRASADAM_STATUSES.includes(prasadamStatus)) {
-        return res.status(400).json({ success: false, message: "prasadamStatus must be one of: pending, dispatched, delivered, cancelled" });
+        return res.status(400).json({
+          success: false,
+          message: "prasadamStatus must be one of: pending, dispatched, delivered, cancelled",
+        });
       }
 
-      const donation = await donationModel.findById(id);
+      const donation = await donations.findById(castId(id));
       if (!donation) return res.status(404).json({ success: false, message: "Donation not found" });
       if (!donation.wantPrasadam) {
-        return res.status(400).json({ success: false, message: "This donation has no Maha Prasadam request to track." });
+        return res
+          .status(400)
+          .json({ success: false, message: "This donation has no Maha Prasadam request to track." });
       }
 
-      donation.prasadamStatus = prasadamStatus;
-      if (prasadamCourier !== undefined) donation.prasadamCourier = String(prasadamCourier || "").trim();
-      if (prasadamTrackingNumber !== undefined) donation.prasadamTrackingNumber = String(prasadamTrackingNumber || "").trim();
-      if (prasadamNotes !== undefined) donation.prasadamNotes = String(prasadamNotes || "").trim();
+      const patch = { prasadamStatus };
+      if (prasadamCourier !== undefined) patch.prasadamCourier = String(prasadamCourier || "").trim();
+      if (prasadamTrackingNumber !== undefined)
+        patch.prasadamTrackingNumber = String(prasadamTrackingNumber || "").trim();
+      if (prasadamNotes !== undefined) patch.prasadamNotes = String(prasadamNotes || "").trim();
 
       const now = new Date();
       if (prasadamStatus === "dispatched") {
-        donation.prasadamDispatchedAt = now;
-        // Delivered timestamp can't survive a move back to dispatched.
-        donation.prasadamDeliveredAt = undefined;
+        patch.prasadamDispatchedAt = now;
+        patch.prasadamDeliveredAt = null;
       } else if (prasadamStatus === "delivered") {
-        // Allow marking delivered directly (courier confirmed verbally).
-        if (!donation.prasadamDispatchedAt) donation.prasadamDispatchedAt = now;
-        donation.prasadamDeliveredAt = now;
-      } else if (prasadamStatus === "pending" || prasadamStatus === "cancelled") {
-        donation.prasadamDispatchedAt = undefined;
-        donation.prasadamDeliveredAt = undefined;
+        if (!donation.prasadamDispatchedAt) patch.prasadamDispatchedAt = now;
+        patch.prasadamDeliveredAt = now;
+      } else {
+        patch.prasadamDispatchedAt = null;
+        patch.prasadamDeliveredAt = null;
       }
 
-      await donation.save();
-      res.status(200).json({ success: true, message: `Prasadam request marked ${prasadamStatus}`, donation });
+      const updated = await donations.updateById(donation._id, patch);
+      res.status(200).json({ success: true, message: `Prasadam request marked ${prasadamStatus}`, donation: updated });
     } catch (err) {
       console.error("donation.updatePrasadamStatus error:", err);
       res.status(500).json({ success: false, message: err.message || "Failed to update prasadam status" });
     }
   },
 
-  // GET /donations/prasadam-export — CSV for the courier dispatch run:
-  // one row per completed donation that opted for Maha Prasadam, honoring
-  // the same status/q/seva/sourcePage/date filters as the list endpoint
-  // (without pagination). /donations family excluded — same as the list.
   exportPrasadamCsv: async (req, res) => {
     try {
       const { status, q, seva, sourcePage } = req.query;
@@ -1460,13 +1253,7 @@ const donationController = {
 
       if (status && status !== "all") {
         if (status === "not_dispatched" || status === "pending") {
-          // Both filters mean "not sent yet" — old records pre-dating
-          // tracking have no prasadamStatus at all but ARE pending.
-          filter.$or = [
-            { prasadamStatus: "pending" },
-            { prasadamStatus: { $exists: false } },
-            { prasadamStatus: null },
-          ];
+          filter.$or = [{ prasadamStatus: "pending" }, { prasadamStatus: null }];
         } else {
           filter.prasadamStatus = status;
         }
@@ -1476,7 +1263,8 @@ const donationController = {
       if (sourcePage) filter.sourcePage = sourcePage;
 
       if (q) {
-        const re = new RegExp(String(q).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+        const re = new RegExp(escapeRegex(String(q)), "i");
+        // Deliberately replaces the status $or above (existing behaviour, kept for identical exports).
         filter.$or = [
           { donorName: re },
           { donorMobile: re },
@@ -1486,38 +1274,60 @@ const donationController = {
         ];
       }
 
-      const rows = await donationModel
-        .find(filter)
-        .sort({ createdAt: -1 })
-        .select(
-          "donorName donorEmail donorMobile amount sevaName type sourcePage prasadamAddress prasadamStatus prasadamCourier prasadamTrackingNumber prasadamDispatchedAt prasadamDeliveredAt prasadamNotes receiptNumber razorpayOrderId razorpayPaymentId createdAt"
-        )
-        .limit(5000)
-        .lean();
+      const rows = await donations.find(filter, {
+        sort: BY_NEWEST,
+        limit: 5000,
+        fields: [
+          "donorName",
+          "donorEmail",
+          "donorMobile",
+          "amount",
+          "sevaName",
+          "type",
+          "sourcePage",
+          "prasadamAddress",
+          "prasadamStatus",
+          "prasadamCourier",
+          "prasadamTrackingNumber",
+          "prasadamDispatchedAt",
+          "prasadamDeliveredAt",
+          "prasadamNotes",
+          "receiptNumber",
+          "razorpayOrderId",
+          "razorpayPaymentId",
+          "createdAt",
+        ],
+      });
 
       const csvEscape = (val) => {
-        const str = val === null || val === undefined ? "" : String(val);
-        return /[",\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+        const s = val === null || val === undefined ? "" : String(val);
+        return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
       };
 
       const formatAddress = (a) => {
         if (!a) return "";
-        return [a.doorNo, a.house, a.street, a.area, a.city, a.state, a.pincode, a.country]
-          .filter(Boolean)
-          .join(", ");
+        return [a.doorNo, a.house, a.street, a.area, a.city, a.state, a.pincode, a.country].filter(Boolean).join(", ");
       };
 
       const statusLabel = (r) => r.prasadamStatus || "pending";
 
-      // Column order mirrors the admin Prasadam tab table exactly (Donor →
-      // Amount → Address → Seva/Source → Status → Courier → Date), with
-      // internal ops fields (Notes/Receipt/Payment ID) trailing at the end.
-      // Every cell goes through csvEscape so commas in names/addresses
-      // can't shift the columns.
       const headers = [
-        "Donor Name", "Mobile", "Email", "Amount", "Delivery Address",
-        "Seva", "Source Page", "Prasadam Status", "Courier", "Tracking Number",
-        "Dispatched At", "Delivered At", "Donated On", "Notes", "Receipt Number", "Payment ID",
+        "Donor Name",
+        "Mobile",
+        "Email",
+        "Amount",
+        "Delivery Address",
+        "Seva",
+        "Source Page",
+        "Prasadam Status",
+        "Courier",
+        "Tracking Number",
+        "Dispatched At",
+        "Delivered At",
+        "Donated On",
+        "Notes",
+        "Receipt Number",
+        "Payment ID",
       ];
       const istTime = (d) => (d ? new Date(d).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) : "");
       const csv = [
@@ -1540,14 +1350,13 @@ const donationController = {
             r.prasadamNotes || "",
             r.receiptNumber || "",
             r.razorpayPaymentId || r.razorpayOrderId || "",
-          ].map(csvEscape).join(",")
+          ]
+            .map(csvEscape)
+            .join(",")
         ),
       ].join("\n");
 
       res.setHeader("Content-Type", "text/csv; charset=utf-8");
-      // toISOString() is always UTC, so the date stamped on the downloaded
-      // file used to disagree with the IST date the admin downloaded it on,
-      // for anything exported before 05:30. en-CA gives YYYY-MM-DD.
       const stamp = new Date().toLocaleDateString("en-CA", { timeZone: IST });
       res.setHeader("Content-Disposition", `attachment; filename="prasadam-dispatch-${stamp}.csv"`);
       res.status(200).send(csv);

@@ -1,6 +1,3 @@
-
-
-
 import express from "express";
 import rateLimit from "express-rate-limit";
 import { userController } from "../controllers/user.controller.js";
@@ -8,9 +5,6 @@ import { authMiddleware, adminMiddleware } from "../middlewares/auth.middleware.
 
 const userRouter = express.Router();
 
-// Brute-force protection: 10 attempts per 15 minutes per IP. Counts only
-// failed/all requests to this route — legitimate users log in once and
-// won't notice; credential-stuffing scripts get slowed to a crawl.
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 10,
@@ -19,9 +13,6 @@ const loginLimiter = rateLimit({
   message: { message: "Too many login attempts. Please try again in a few minutes." },
 });
 
-// Registration creates backoffice staff/admin accounts — this must never
-// be public on a live site. Only an already-authenticated admin can invite
-// a new user. (Public donor/campaigner flows are separate: /campaigners/register.)
 userRouter.post("/register", authMiddleware, adminMiddleware, userController.register);
 userRouter.post("/register-admin", authMiddleware, adminMiddleware, userController.registerAdmin);
 userRouter.post("/login", loginLimiter, userController.login);

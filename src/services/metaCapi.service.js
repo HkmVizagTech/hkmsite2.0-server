@@ -1,22 +1,5 @@
-// Meta (Facebook) Conversions API — server-side event sending.
-//
-// Fires a server-side "Purchase" event when a donation completes, mirroring
-// the browser-side Pixel event. Meta deduplicates the two using a shared
-// event_id + event_name, so a conversion is counted once even though it's
-// reported from both sides. Server-side CAPI is more reliable than the
-// browser pixel alone (survives ad-blockers, iOS ITP, and script failures),
-// which is why Meta recommends sending both.
-//
-// Config via env vars (set on Railway):
-//   META_PIXEL_ID           - the Pixel/dataset ID (same as the browser pixel)
-//   META_CAPI_ACCESS_TOKEN  - a Conversions API access token from Events Manager
-//   META_TEST_EVENT_CODE    - (optional) shows events in the Test Events tab
-//
-// If the token or pixel id isn't set, this is a no-op — donations still
-// complete normally, we just don't report to Meta.
-
 import crypto from "node:crypto";
-import { donationModel } from "../models/donation.model.js";
+import { donations } from "../db/tables.js";
 
 const GRAPH_VERSION = "v21.0";
 
@@ -46,12 +29,6 @@ const splitName = (fullName) => {
   return { fn: sha256(fn), ln: sha256(ln) };
 };
 
-/**
- * Send a Purchase event to Meta's Conversions API for a completed donation.
- * Best-effort: never throws, so it can't break payment completion.
- *
- * @param {object} donation - the completed donation mongoose doc
- */
 async function sendPurchaseEvent(donation) {
   try {
     const pixelId = process.env.META_PIXEL_ID;
@@ -126,8 +103,7 @@ async function sendPurchaseEvent(donation) {
 
     // Mark as sent so retries/webhooks don't double-report.
     try {
-
-      await donationModel.findByIdAndUpdate(donation._id, { metaPurchaseSentAt: new Date() });
+      await donations.updateById(donation._id, { metaPurchaseSentAt: new Date() });
     } catch (e) {
       // non-fatal
     }

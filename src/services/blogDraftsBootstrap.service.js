@@ -1,26 +1,10 @@
-/**
- * One-time import of the October 2026 batch of blog articles
- * (src/seed/blog-drafts: index.json + <slug>.html + covers/<slug>.webp).
- *
- * Runs at server boot like the other bootstrap seeders, but only ONCE per
- * database: after a successful run it records a marker in the
- * `bootstrap_runs` collection, so posts an admin later edits or deletes are
- * never re-created. Until then it is idempotent — slugs that already exist
- * are skipped, and the marker is only written when every article was either
- * created or already present (a failed one is retried on the next boot).
- *
- * Covers (from guptvrindavandham.org, used with HKM Jaipur's permission)
- * are uploaded to R2 the same way the admin editor uploads them.
- *
- * Set BLOG_DRAFTS_IMPORT=off to disable.
- */
-
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import path from "node:path";
-import mongoose from "mongoose";
-import { blogModel, BLOG_CATEGORIES } from "../models/blog.model.js";
+import { blogs } from "../db/tables.js";
+import { query } from "../db/pg.js";
+import { BLOG_CATEGORIES, computeReadTime } from "../domain/blog.js";
 import { uploadToR2 } from "../utils/r2.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -31,8 +15,8 @@ const AUTHOR = { name: "Hare Krishna Movement Vizag", avatar: "", bio: "", slug:
 async function ensureBlogDrafts() {
   if (String(process.env.BLOG_DRAFTS_IMPORT || "").toLowerCase() === "off") return;
 
-  const runs = mongoose.connection.collection("bootstrap_runs");
-  if (await runs.findOne({ key: RUN_KEY })) return;
+  const done = await query("SELECT 1 FROM bootstrap_runs WHERE name = $1", [RUN_KEY]);
+  if (done.rowCount) return;
 
   const indexPath = path.join(SEED_DIR, "index.json");
   if (!fs.existsSync(indexPath)) return;
@@ -45,7 +29,7 @@ async function ensureBlogDrafts() {
   for (const e of entries) {
     try {
       if (!e.slug || !e.title || !e.file) throw new Error("entry missing slug/title/file");
-      if (await blogModel.exists({ slug: e.slug })) {
+      if (await blogs.exists({ slug: e.slug })) {
         skipped++;
         continue;
       }
@@ -60,11 +44,13 @@ async function ensureBlogDrafts() {
         }
       }
 
-      await blogModel.create({
+      await blogs.insert({
         title: e.title,
         slug: e.slug,
         excerpt: e.excerpt || "",
         content,
+        readTime: computeReadTime(content),
+        publishedAt: new Date(),
         coverImage,
         category: BLOG_CATEGORIES.includes(e.category) ? e.category : "Spiritual Knowledge",
         tags: Array.isArray(e.tags) ? e.tags : [],
@@ -83,7 +69,7 @@ async function ensureBlogDrafts() {
 
   console.log(`[blogDrafts] import: ${created} created, ${skipped} already present, ${failed} failed`);
   if (failed === 0) {
-    await runs.insertOne({ key: RUN_KEY, created, skipped, at: new Date() });
+    await query("INSERT INTO bootstrap_runs (name) VALUES ($1) ON CONFLICT DO NOTHING", [RUN_KEY]);
   }
 }
 

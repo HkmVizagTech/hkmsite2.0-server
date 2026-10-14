@@ -7,10 +7,10 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-const uploadToCloudinary = async (filePath, folder = 'events') => {
+const uploadToCloudinary = async (filePath, folder = "events") => {
   return await cloudinary.uploader.upload(filePath, {
     folder,
-    resource_type: 'image',
+    resource_type: "image",
   });
 };
 

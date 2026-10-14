@@ -1,21 +1,20 @@
 import Razorpay from "razorpay";
 import crypto from "node:crypto";
-import { donationModel } from "../models/donation.model.js";
-import { planModel } from "../models/plan.model.js";
+import { donations, plans, shopOrders, festivalDonations, campaigners, templeDevotees } from "../db/tables.js";
+import { query as sql } from "../db/pg.js";
+import { claimUpdate } from "../domain/donationDb.js";
 import { sanitizeBannerImage } from "../services/pageBanner.service.js";
 import { recordPaymentFailure, recordDowntime } from "../services/paymentFailure.service.js";
 
-import { completeDonation, markDonationCompleted, runPostCompletionPipeline, handleSubscriptionCharged } from "../services/paymentCompletion.service.js";
+import {
+  completeDonation,
+  markDonationCompleted,
+  runPostCompletionPipeline,
+  handleSubscriptionCharged,
+} from "../services/paymentCompletion.service.js";
 import { confirmShopOrderPaid, sendOrderWhatsApp } from "./shopOrder.controller.js";
-import { shopOrderModel } from "../models/shopOrder.model.js";
-import { festivalDonationModel } from "../models/festivalDonation.model.js";
-import { campaignerModel } from "../models/campaigner.model.js";
 import { liveCheckDonationOrder } from "../services/liveOrderCheck.service.js";
 
-// Smallest donation we will take, in rupees. Anything under this costs
-// more in payment-gateway fees, receipt generation and DCC sync than it
-// brings in, and sub-rupee amounts were being used to probe the checkout.
-// Override with MIN_DONATION_AMOUNT if the temple ever changes the floor.
 const MIN_DONATION_AMOUNT = Math.max(1, Number(process.env.MIN_DONATION_AMOUNT) || 100);
 const belowMinimum = (amount) => !amount || !Number.isFinite(Number(amount)) || Number(amount) < MIN_DONATION_AMOUNT;
 const MIN_AMOUNT_MESSAGE = `The minimum donation is Rs. ${MIN_DONATION_AMOUNT}.`;
@@ -31,27 +30,11 @@ const RAZORPAY_ACCOUNTS = {
     key_secret: () => process.env.RAZORPAY_DONATIONS_KEY_SECRET,
     webhook_secret: () => process.env.RAZORPAY_DONATIONS_WEBHOOK_SECRET || process.env.RAZORPAY_WEBHOOK_SECRET,
   },
-  // Subhojanam donations belong to Touchstone Charities, a separate trust
-  // from the main HKM Vizag account -- needs its own Razorpay account so
-  // funds settle to the correct entity. NOT YET LIVE: waiting on real
-  // RAZORPAY_TOUCHSTONE_KEY_ID/KEY_SECRET (and optionally
-  // RAZORPAY_TOUCHSTONE_WEBHOOK_SECRET) from Mukunda. Until those are set,
-  // createRazorpayInstance('touchstone') returns null and callers should
-  // surface a clear "not configured yet" error rather than silently
-  // falling back to the default account (which would send Touchstone's
-  // donations to the wrong trust).
   touchstone: {
     key_id: () => process.env.RAZORPAY_TOUCHSTONE_KEY_ID,
     key_secret: () => process.env.RAZORPAY_TOUCHSTONE_KEY_SECRET,
     webhook_secret: () => process.env.RAZORPAY_TOUCHSTONE_WEBHOOK_SECRET,
   },
-  // Temple shop sales. Kept separate from donations so shop settlements
-  // and donation settlements land in distinct accounts. Set
-  // RAZORPAY_SHOP_KEY_ID/KEY_SECRET (and RAZORPAY_SHOP_WEBHOOK_SECRET once
-  // the account's webhook is created in its own Razorpay dashboard). Until
-  // the keys are present, createRazorpayInstance('shop') returns null and
-  // shopOrder.controller falls back to the donations account so the
-  // storefront keeps working.
   shop: {
     key_id: () => process.env.RAZORPAY_SHOP_KEY_ID,
     key_secret: () => process.env.RAZORPAY_SHOP_KEY_SECRET,
@@ -59,9 +42,7 @@ const RAZORPAY_ACCOUNTS = {
   },
 };
 
-const normalizeAccount = (account) => (
-  account && RAZORPAY_ACCOUNTS[account] ? account : 'default'
-);
+const normalizeAccount = (account) => (account && RAZORPAY_ACCOUNTS[account] ? account : "default");
 
 const resolveAccount = (accountName) => {
   const name = normalizeAccount(accountName);
@@ -79,169 +60,167 @@ const createRazorpayInstance = (accountName) => {
   const { key_id, key_secret } = account;
   if (!key_id || !key_secret) return null;
   try {
-    console.log('createRazorpayInstance:', account.name, key_id ? `${key_id.slice(0, 6)}...` : 'not-set');
+    console.log("createRazorpayInstance:", account.name, key_id ? `${key_id.slice(0, 6)}...` : "not-set");
   } catch (e) {}
   return { account, instance: new Razorpay({ key_id, key_secret }) };
 };
 
+const safeEqual = (a, b) => {
+  const x = Buffer.from(String(a ?? ""), "utf8");
+  const y = Buffer.from(String(b ?? ""), "utf8");
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+};
+
 const verifySignature = ({ orderId, paymentId, signature, keySecret }) => {
   const body = `${orderId}|${paymentId}`;
-  const expected = crypto.createHmac('sha256', keySecret).update(body).digest('hex');
-  return expected === signature;
+  const expected = crypto.createHmac("sha256", keySecret).update(body).digest("hex");
+  return safeEqual(expected, signature);
 };
+
+// Mongoose's Boolean cast, so form-ish values ("true", "1", "yes") store as before.
+const toBool = (v) => {
+  if (v === undefined || v === null) return v;
+  if (v === true || v === 1 || v === "1" || v === "true" || v === "yes") return true;
+  if (v === false || v === 0 || v === "0" || v === "false" || v === "no") return false;
+  throw new Error(`Cast to Boolean failed for value "${v}"`);
+};
+
+// A payment.failed for one attempt must never overwrite a donation another attempt completed.
+const markFailedIfPending = (donationId, paymentId) =>
+  claimUpdate({ _id: String(donationId), status: "pending" }, { status: "failed", razorpayPaymentId: paymentId });
 
 // Processes a verified Razorpay webhook event in-process (called right after
 // the 200 is sent to Razorpay).
 async function processWebhookEventInline(event) {
   switch (event.event) {
-    case 'payment.captured': {
+    case "payment.captured": {
       const payment = event.payload && event.payload.payment && event.payload.payment.entity;
       if (!payment) break;
       const orderId = payment.order_id;
-      // QR / direct-UPI payments (e.g. the website UPI QR) have no order.
-      // Looking one up by an empty order id would match ANY donation without
-      // an order and mark it paid; these are matched by an admin instead
-      // (Admin → Donations → UPI to match).
       if (!orderId) {
-        console.log('payment.captured without an order (QR/direct UPI):', payment.id, payment.amount / 100);
+        console.log("payment.captured without an order (QR/direct UPI):", payment.id, payment.amount / 100);
         break;
       }
       const completedDonation = await completeDonation({ orderId, paymentId: payment.id });
       if (completedDonation) {
-        console.log('Donation marked completed for order', orderId);
+        console.log("Donation marked completed for order", orderId);
         break;
       }
-      // Not a donation — the temple SHOP may sell through this same Razorpay
-      // account (its /payments/webhook/shop route posts to this same inline
-      // processor when it uses its own account). Without this fallback a shop
-      // payment would only be logged as "donation not found", and the order
-      // would sit unpaid forever whenever the devotee closed the tab before
-      // the browser's verify call ran (routine with UPI app switches).
-      // confirmShopOrderPaid is idempotent, so this is safe even when verify
-      // already confirmed the very same payment.
       {
-
         const shopResult = await confirmShopOrderPaid({ razorpayOrderId: orderId, paymentId: payment.id });
         if (shopResult.ok && shopResult.order) {
           if (shopResult.skipped) {
-            console.log('Shop order already confirmed for order', orderId);
+            console.log("Shop order already confirmed for order", orderId);
           } else {
-            console.log('Shop order marked paid:', shopResult.order.orderNumber);
+            console.log("Shop order marked paid:", shopResult.order.orderNumber);
             setImmediate(() => sendOrderWhatsApp(shopResult.order));
           }
         } else {
-          console.warn('No donation or shop order found for order:', orderId);
+          console.warn("No donation or shop order found for order:", orderId);
         }
       }
       break;
     }
-    case 'payment.failed': {
+    case "payment.failed": {
       const payment = event.payload && event.payload.payment && event.payload.payment.entity;
       if (!payment) break;
       const orderId = payment.order_id;
       if (!orderId) break;
-      // Shop orders can arrive here too (whichever Razorpay account they run
-      // through) — a failed attempt just marks the order failed so it stops
-      // showing as "awaiting payment". Stock was never decremented for an
-      // unpaid order, so nothing needs restoring.
       {
-
-        const shopOrder = await shopOrderModel.findOne({ razorpayOrderId: orderId });
+        const shopOrder = await shopOrders.findOne({ razorpayOrderId: orderId });
         if (shopOrder) {
-          if (shopOrder.paymentStatus === 'pending') {
-            shopOrder.paymentStatus = 'failed';
-            shopOrder.statusHistory.push({ status: 'payment_failed', note: 'Razorpay reported payment.failed', at: new Date() });
-            await shopOrder.save();
-            console.log('Shop order marked failed:', shopOrder.orderNumber);
+          if (shopOrder.paymentStatus === "pending") {
+            const entry = {
+              status: "payment_failed",
+              note: "Razorpay reported payment.failed",
+              at: new Date().toISOString(),
+            };
+            const r = await sql(
+              `UPDATE shop_orders SET payment_status = 'failed', status_history = status_history || $2::jsonb, updated_at = now()
+               WHERE id = $1 AND payment_status = 'pending'`,
+              [shopOrder._id, JSON.stringify([entry])]
+            );
+            if (r.rowCount) console.log("Shop order marked failed:", shopOrder.orderNumber);
           }
           break;
         }
       }
-      // Only mark as failed if there's no captured payment on this order
-      // (Razorpay can send payment.failed for one attempt while a retry
-      // succeeds — we don't want to overwrite a completed donation).
-      const donation = await donationModel.findOne({ razorpayOrderId: orderId });
+      const donation = await donations.findOne({ razorpayOrderId: orderId }, { sort: { createdAt: 1, _id: 1 } });
       // Keep Razorpay's reason for every failed attempt (bank declined, UPI
       // request expired, cancelled by the donor…), whatever happens next.
       if (donation) {
         try {
           await recordPaymentFailure(donation._id, payment);
         } catch (e) {
-          console.warn('recordPaymentFailure failed:', e && e.message ? e.message : e);
+          console.warn("recordPaymentFailure failed:", e && e.message ? e.message : e);
         }
       }
-      if (donation && donation.status === 'pending') {
+      if (donation && donation.status === "pending") {
         try {
           const created = createRazorpayInstance(donation.paymentAccount);
           if (created) {
             const payments = await created.instance.orders.fetchPayments(orderId);
-            const captured = (payments.items || []).find((p) => p.status === 'captured');
+            const captured = (payments.items || []).find((p) => p.status === "captured");
             if (captured) {
               await completeDonation({ orderId, paymentId: captured.id });
-              console.log('payment.failed webhook but found captured payment for order', orderId);
+              console.log("payment.failed webhook but found captured payment for order", orderId);
             } else {
-              await donationModel.findByIdAndUpdate(donation._id, {
-                status: 'failed',
-                razorpayPaymentId: payment.id,
-              });
-              console.log('Donation marked failed for order', orderId);
+              await markFailedIfPending(donation._id, payment.id);
+              console.log("Donation marked failed for order", orderId);
             }
           }
         } catch (rzpErr) {
           // If Razorpay check fails, still mark as failed based on the webhook event
-          await donationModel.findByIdAndUpdate(donation._id, {
-            status: 'failed',
-            razorpayPaymentId: payment.id,
-          });
-          console.log('Donation marked failed (Razorpay check failed) for order', orderId);
+          await markFailedIfPending(donation._id, payment.id);
+          console.log("Donation marked failed (Razorpay check failed) for order", orderId);
         }
       }
       break;
     }
-    case 'payment.downtime.started':
-    case 'payment.downtime.updated':
-    case 'payment.downtime.resolved': {
-      // A bank / UPI app / card network Razorpay routes through is down or
-      // degraded. Kept for 30 days so Admin → Payment failures can line
-      // failures up against outages.
+    case "payment.downtime.started":
+    case "payment.downtime.updated":
+    case "payment.downtime.resolved": {
       await recordDowntime(event.event, event.payload);
       break;
     }
-    case 'subscription.activated': {
+    case "subscription.activated": {
       const sub = event.payload && event.payload.subscription && event.payload.subscription.entity;
-      if (sub) await donationModel.findOneAndUpdate({ subscriptionId: sub.id }, { status: 'active' });
+      if (sub)
+        await donations.updateOne({ subscriptionId: sub.id }, { status: "active" }, { sort: { createdAt: 1, _id: 1 } });
       break;
     }
-    case 'subscription.charged': {
-      // Fires for EVERY charge on a subscription, including the very first
-      // one (also handled by verifyPayment via the frontend). For month 2
-      // onwards, this is the ONLY signal we ever get — Razorpay just
-      // auto-debits in the background with no frontend interaction at all.
-      // Shared logic (idempotent, handles the first-charge edge case,
-      // clones all relevant fields) lives in handleSubscriptionCharged so
-      // this inline path and the queued worker never drift apart.
+    case "subscription.charged": {
       const result = await handleSubscriptionCharged(event.payload);
       if (result.ok && !result.skipped) {
-        console.log('subscription.charged: recurring donation completed', result.donationId);
+        console.log("subscription.charged: recurring donation completed", result.donationId);
       } else if (result.skipped) {
-        console.log('subscription.charged: skipped —', result.reason);
+        console.log("subscription.charged: skipped —", result.reason);
       } else {
-        console.warn('subscription.charged: could not process —', result.reason);
+        console.warn("subscription.charged: could not process —", result.reason);
       }
       break;
     }
-    case 'subscription.cancelled': {
+    case "subscription.cancelled": {
       const sub = event.payload && event.payload.subscription && event.payload.subscription.entity;
-      if (sub) await donationModel.updateMany({ subscriptionId: sub.id, isRecurring: true, status: { $nin: ['completed', 'cancelled'] } }, { status: 'cancelled' });
+      if (sub)
+        await donations.updateMany(
+          { subscriptionId: sub.id, isRecurring: true, status: { $nin: ["completed", "cancelled"] } },
+          { status: "cancelled" }
+        );
       break;
     }
-    case 'subscription.completed': {
+    case "subscription.completed": {
       const sub = event.payload && event.payload.subscription && event.payload.subscription.entity;
-      if (sub) await donationModel.findOneAndUpdate({ subscriptionId: sub.id, isRecurring: true, status: 'active' }, { status: 'completed' });
+      if (sub)
+        await donations.updateOne(
+          { subscriptionId: sub.id, isRecurring: true, status: "active" },
+          { status: "completed" },
+          { sort: { createdAt: 1, _id: 1 } }
+        );
       break;
     }
     default:
-      console.log('Unhandled event:', event.event);
+      console.log("Unhandled event:", event.event);
   }
 }
 
@@ -271,20 +250,20 @@ const paymentController = {
       }
 
       const razorpay = createRazorpayInstance(req.body.account);
-      if (!razorpay) return res.status(500).json({ message: 'Razorpay keys not configured on server' });
+      if (!razorpay) return res.status(500).json({ message: "Razorpay keys not configured on server" });
       const { account, instance } = razorpay;
 
       const options = {
         amount: Math.round(Number(amount) * 100),
-        currency: 'INR',
+        currency: "INR",
         receipt: `receipt_${Date.now()}`,
         payment_capture: 1,
         notes: {
-          sourcePage: sourcePage || '',
-          festivalSlug: req.body.festivalSlug || '',
-          sevaName: sevaName || '',
-          legacySevaId: legacySevaId ? String(legacySevaId) : '',
-          campaignerSlug: req.body.campaignerSlug || '',
+          sourcePage: sourcePage || "",
+          festivalSlug: req.body.festivalSlug || "",
+          sevaName: sevaName || "",
+          legacySevaId: legacySevaId ? String(legacySevaId) : "",
+          campaignerSlug: req.body.campaignerSlug || "",
         },
       };
 
@@ -293,20 +272,19 @@ const paymentController = {
       let resolvedFestivalId = req.body.festivalId;
       if (!resolvedFestivalId && req.body.festivalSlug) {
         try {
-
-          const fest = await festivalDonationModel.findOne({ slug: req.body.festivalSlug }).select('_id');
+          const fest = await festivalDonations.findOne({ slug: String(req.body.festivalSlug) }, { fields: ["_id"] });
           if (fest) resolvedFestivalId = fest._id;
         } catch (err) {
-          console.warn('Could not resolve festivalSlug to festivalId', req.body.festivalSlug, err);
+          console.warn("Could not resolve festivalSlug to festivalId", req.body.festivalSlug, err);
         }
       }
 
-      const donation = await donationModel.create({
-        donorName: name || req.body.donorName || 'Anonymous',
+      const donation = await donations.insert({
+        donorName: name || req.body.donorName || "Anonymous",
         donorEmail: email || req.body.donorEmail,
         donorMobile: mobile || req.body.donorMobile,
         amount,
-        type: req.body.type || (sourcePage === 'donations' ? 'Donation' : undefined),
+        type: req.body.type || (sourcePage === "donations" ? "Donation" : undefined),
         sourcePage,
         sevaName,
         sevaSlug: req.body.sevaSlug ? String(req.body.sevaSlug).slice(0, 80) : undefined,
@@ -316,136 +294,123 @@ const paymentController = {
         message: message || undefined,
         paymentAccount: account.name,
         panNumber: panNumber || req.body.panNumber,
-        certificate: certificate || req.body.certificate,
+        certificate: toBool(certificate || req.body.certificate),
         sevakName: sevakName || req.body.sevakName || undefined,
         sevaDate: sevaDate || req.body.sevaDate || undefined,
         dob: dob || req.body.dob || undefined,
-        wantPrasadam: mahaprasadam || req.body.wantPrasadam,
+        wantPrasadam: toBool(mahaprasadam || req.body.wantPrasadam),
         prasadamAddress: prasadamAddress || req.body.prasadamAddress,
         festivalSlug: req.body.festivalSlug || undefined,
         campaignerSlug: req.body.campaignerSlug || undefined,
-        // Attribute the donation to the campaigner's selected temple devotee
-        // for DCC receipt purposes — snapshot the devotee's enrolledBy ID now
-        // so later devotee edits don't retroactively change attribution.
         dccEnrolledById: await (async () => {
           if (!req.body.campaignerSlug) return undefined;
           try {
-
-            const camp = await campaignerModel
-              .findOne({ slug: String(req.body.campaignerSlug), status: 'active' })
-              .populate('referredByDevotee', 'dccEnrolledById')
-              .lean();
-            const id = camp?.referredByDevotee?.dccEnrolledById;
+            const camp = await campaigners.findOne({ slug: String(req.body.campaignerSlug), status: "active" });
+            const devotee = camp?.referredByDevotee
+              ? await templeDevotees.findById(camp.referredByDevotee, { fields: ["dccEnrolledById"] })
+              : null;
+            const id = devotee?.dccEnrolledById;
             return Number.isFinite(Number(id)) && id != null ? Number(id) : undefined;
           } catch (e) {
-            console.warn('campaigner devotee lookup failed:', e.message);
+            console.warn("campaigner devotee lookup failed:", e.message);
             return undefined;
           }
         })(),
         festivalId: resolvedFestivalId,
         razorpayOrderId: order.id,
-        status: 'pending',
-        utm: req.body.utm && typeof req.body.utm === 'object' ? {
-          source: String(req.body.utm.source || '').slice(0, 100),
-          medium: String(req.body.utm.medium || '').slice(0, 100),
-          campaign: String(req.body.utm.campaign || '').slice(0, 100),
-          content: String(req.body.utm.content || '').slice(0, 100),
-          term: String(req.body.utm.term || '').slice(0, 100),
-        } : undefined,
-        // Meta Pixel/CAPI: browser sends a shared event_id (for dedup) plus
-        // the _fbp/_fbc cookies. We also capture the real client IP + UA
-        // server-side for better CAPI match quality.
+        status: "pending",
+        utm:
+          req.body.utm && typeof req.body.utm === "object"
+            ? {
+                source: String(req.body.utm.source || "").slice(0, 100),
+                medium: String(req.body.utm.medium || "").slice(0, 100),
+                campaign: String(req.body.utm.campaign || "").slice(0, 100),
+                content: String(req.body.utm.content || "").slice(0, 100),
+                term: String(req.body.utm.term || "").slice(0, 100),
+              }
+            : undefined,
         metaEventId: req.body.metaEventId ? String(req.body.metaEventId).slice(0, 100) : undefined,
         metaFbp: req.body.metaFbp ? String(req.body.metaFbp).slice(0, 200) : undefined,
         metaFbc: req.body.metaFbc ? String(req.body.metaFbc).slice(0, 200) : undefined,
-        metaClientIp: (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket?.remoteAddress || undefined,
-        metaUserAgent: req.headers['user-agent'] ? String(req.headers['user-agent']).slice(0, 400) : undefined,
+        metaClientIp:
+          (req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket?.remoteAddress || undefined,
+        metaUserAgent: req.headers["user-agent"] ? String(req.headers["user-agent"]).slice(0, 400) : undefined,
       });
 
       return res.status(200).json({ orderId: order.id, key: account.key_id, donationId: donation._id });
     } catch (err) {
       try {
         const serialized = JSON.stringify(err, Object.getOwnPropertyNames(err));
-        console.error('createOrder error', serialized);
+        console.error("createOrder error", serialized);
       } catch (e) {
-        console.error('createOrder error', err && err.stack ? err.stack : err);
+        console.error("createOrder error", err && err.stack ? err.stack : err);
       }
-  let errStr = '';
-  try { errStr = JSON.stringify(err, Object.getOwnPropertyNames(err)); } catch (e) { errStr = String(err); }
-  const razorpayStatus = err && err.statusCode ? err.statusCode : undefined;
-  const razorpayBody = err && err.error ? err.error : undefined;
-  return res.status(500).json({ message: 'Failed to create order', error: err && err.message ? err.message : errStr, razorpayStatus, razorpayBody });
+      let errStr = "";
+      try {
+        errStr = JSON.stringify(err, Object.getOwnPropertyNames(err));
+      } catch (e) {
+        errStr = String(err);
+      }
+      const razorpayStatus = err && err.statusCode ? err.statusCode : undefined;
+      const razorpayBody = err && err.error ? err.error : undefined;
+      return res.status(500).json({
+        message: "Failed to create order",
+        error: err && err.message ? err.message : errStr,
+        razorpayStatus,
+        razorpayBody,
+      });
     }
   },
 
-  // POST /payments/subscription — monthly autopay. Creates a Razorpay Plan
-  // for the chosen amount, then a Subscription the donor authorises once via
-  // checkout. Razorpay then auto-charges every month. The first charge is
-  // confirmed through verifyPayment (subscription-aware); subsequent monthly
-  // charges arrive as `subscription.charged` webhook events.
-  // NOTE: requires the Subscriptions feature to be enabled on the Razorpay
-  // account and API keys with subscription access.
   createSubscription: async (req, res) => {
     try {
-      const {
-        name, email, mobile, amount, certificate, panNumber,
-        sourcePage, sevaName, sevaUnitLabel,
-      } = req.body;
+      const { name, email, mobile, amount, certificate, panNumber, sourcePage, sevaName, sevaUnitLabel } = req.body;
 
       if (belowMinimum(amount)) {
         return res.status(400).send(MIN_AMOUNT_MESSAGE);
       }
 
       const razorpay = createRazorpayInstance(req.body.account);
-      if (!razorpay) return res.status(500).json({ message: 'Razorpay keys not configured on server' });
+      if (!razorpay) return res.status(500).json({ message: "Razorpay keys not configured on server" });
       const { account, instance } = razorpay;
 
       const amountPaise = Math.round(Number(amount) * 100);
-      // Number of monthly billing cycles. Razorpay requires a finite count;
-      // 120 (10 years) is effectively "until the donor cancels". Override via
-      // SUBSCRIPTION_TOTAL_COUNT if a different horizon is desired.
       const totalCount = Number(process.env.SUBSCRIPTION_TOTAL_COUNT || 120);
 
-      // 1) Reuse an existing Razorpay Plan for this amount+account, or create
-      // one. Creating a plan per subscription would accumulate thousands of
-      // duplicate plans on the Razorpay dashboard.
       let planId;
-      const existingPlan = await planModel.findOne({ amount: Number(amount), account: account.name });
+      const existingPlan = await plans.findOne({ amount: Number(amount), account: account.name });
       if (existingPlan) {
         planId = existingPlan.planId;
       } else {
         const newPlan = await instance.plans.create({
-          period: 'monthly',
+          period: "monthly",
           interval: 1,
           item: {
-            name: String(sevaName || 'Monthly Seva').slice(0, 250),
+            name: String(sevaName || "Monthly Seva").slice(0, 250),
             amount: amountPaise,
-            currency: 'INR',
+            currency: "INR",
           },
-          notes: { sevaName: sevaName || '', sourcePage: sourcePage || '' },
+          notes: { sevaName: sevaName || "", sourcePage: sourcePage || "" },
         });
         planId = newPlan.id;
-        await planModel.create({ amount: Number(amount), account: account.name, planId });
+        await plans.insert({ amount: Number(amount), account: account.name, planId });
       }
 
-      // 2) A subscription on that plan for the donor to authorise.
-      // customer_notify: 0 — we send our own WhatsApp receipt; Razorpay
-      // emails/SMS would double-notify the donor.
       const subscription = await instance.subscriptions.create({
         plan_id: planId,
         total_count: totalCount,
         quantity: 1,
         customer_notify: 0,
         notes: {
-          sourcePage: sourcePage || '',
-          sevaName: sevaName || '',
-          sevaUnitLabel: sevaUnitLabel || '',
+          sourcePage: sourcePage || "",
+          sevaName: sevaName || "",
+          sevaUnitLabel: sevaUnitLabel || "",
         },
       });
 
       // 3) A pending donation record for the first charge, flagged recurring.
-      const donation = await donationModel.create({
-        donorName: name || req.body.donorName || 'Anonymous',
+      const donation = await donations.insert({
+        donorName: name || req.body.donorName || "Anonymous",
         donorEmail: email || req.body.donorEmail,
         donorMobile: mobile || req.body.donorMobile,
         amount,
@@ -454,18 +419,21 @@ const paymentController = {
         sevaName,
         paymentAccount: account.name,
         panNumber: panNumber || req.body.panNumber,
-        certificate: certificate || req.body.certificate,
+        certificate: toBool(certificate || req.body.certificate),
         subscriptionId: subscription.id,
         isRecurring: true,
-        status: 'pending',
+        status: "pending",
         campaignerSlug: req.body.campaignerSlug || undefined,
-        utm: req.body.utm && typeof req.body.utm === 'object' ? {
-          source: String(req.body.utm.source || '').slice(0, 100),
-          medium: String(req.body.utm.medium || '').slice(0, 100),
-          campaign: String(req.body.utm.campaign || '').slice(0, 100),
-          content: String(req.body.utm.content || '').slice(0, 100),
-          term: String(req.body.utm.term || '').slice(0, 100),
-        } : undefined,
+        utm:
+          req.body.utm && typeof req.body.utm === "object"
+            ? {
+                source: String(req.body.utm.source || "").slice(0, 100),
+                medium: String(req.body.utm.medium || "").slice(0, 100),
+                campaign: String(req.body.utm.campaign || "").slice(0, 100),
+                content: String(req.body.utm.content || "").slice(0, 100),
+                term: String(req.body.utm.term || "").slice(0, 100),
+              }
+            : undefined,
       });
 
       return res.status(200).json({
@@ -474,48 +442,68 @@ const paymentController = {
         donationId: donation._id,
       });
     } catch (err) {
-      let errStr = '';
-      try { errStr = JSON.stringify(err, Object.getOwnPropertyNames(err)); } catch (e) { errStr = String(err); }
-      console.error('createSubscription error', errStr);
+      let errStr = "";
+      try {
+        errStr = JSON.stringify(err, Object.getOwnPropertyNames(err));
+      } catch (e) {
+        errStr = String(err);
+      }
+      console.error("createSubscription error", errStr);
       const razorpayStatus = err && err.statusCode ? err.statusCode : undefined;
       const razorpayBody = err && err.error ? err.error : undefined;
-      return res.status(500).json({ message: 'Failed to create subscription', error: err && err.message ? err.message : errStr, razorpayStatus, razorpayBody });
+      return res.status(500).json({
+        message: "Failed to create subscription",
+        error: err && err.message ? err.message : errStr,
+        razorpayStatus,
+        razorpayBody,
+      });
     }
   },
 
   verifyPayment: async (req, res) => {
     try {
-      const {
-        razorpay_order_id, razorpay_payment_id, razorpay_signature,
-        razorpay_subscription_id, donationId,
-      } = req.body;
+      const { razorpay_order_id, razorpay_payment_id, razorpay_signature, razorpay_subscription_id, donationId } =
+        req.body;
       if (!razorpay_payment_id || !razorpay_signature) {
-        return res.status(400).json({ message: 'Payment verification details missing' });
+        return res.status(400).json({ message: "Payment verification details missing" });
+      }
+      const fields = [razorpay_order_id, razorpay_payment_id, razorpay_signature, razorpay_subscription_id, donationId];
+      if (fields.some((v) => v !== undefined && v !== null && typeof v !== "string")) {
+        return res.status(400).json({ message: "Payment verification details missing" });
       }
       const isSubscription = !!razorpay_subscription_id;
       if (!isSubscription && !razorpay_order_id) {
-        return res.status(400).json({ message: 'Payment verification details missing' });
+        return res.status(400).json({ message: "Payment verification details missing" });
       }
 
       const query = donationId
-        ? { _id: donationId }
+        ? { _id: String(donationId) }
         : isSubscription
           ? { subscriptionId: razorpay_subscription_id }
           : { razorpayOrderId: razorpay_order_id };
-      const donation = await donationModel.findOne(query);
-      if (!donation) return res.status(404).json({ message: 'Donation not found' });
+      const donation = await donations.findOne(query, { sort: { createdAt: 1, _id: 1 } });
+      if (!donation) return res.status(404).json({ message: "Donation not found" });
+
+      // The signature only proves the signed order/subscription was paid; the donation being
+      // completed must be the one that order/subscription belongs to.
+      const belongsToPayment = isSubscription
+        ? donation.subscriptionId === razorpay_subscription_id
+        : donation.razorpayOrderId === razorpay_order_id;
+      if (!belongsToPayment) {
+        return res.status(400).json({ message: "Payment does not match this donation" });
+      }
 
       const account = resolveAccount(donation.paymentAccount);
-      if (!account.key_secret) return res.status(500).json({ message: 'Razorpay keys not configured on server' });
+      if (!account.key_secret) return res.status(500).json({ message: "Razorpay keys not configured on server" });
 
       // Subscriptions sign as payment_id|subscription_id; one-time orders as
       // order_id|payment_id.
       const signedBody = isSubscription
         ? `${razorpay_payment_id}|${razorpay_subscription_id}`
         : `${razorpay_order_id}|${razorpay_payment_id}`;
-      const expected = crypto.createHmac('sha256', account.key_secret).update(signedBody).digest('hex');
-      if (expected !== razorpay_signature) {
-        return res.status(400).json({ message: 'Invalid payment signature' });
+      const expected = crypto.createHmac("sha256", account.key_secret).update(signedBody).digest("hex");
+      if (!safeEqual(expected, razorpay_signature)) {
+        return res.status(400).json({ message: "Invalid payment signature" });
       }
 
       const updated = await markDonationCompleted({
@@ -524,34 +512,30 @@ const paymentController = {
         paymentId: razorpay_payment_id,
       });
 
-      res.status(200).json({ message: 'Payment verified', donation: updated });
+      res.status(200).json({ message: "Payment verified", donation: updated });
 
-      // DCC sync, WhatsApp receipt, and Meta CAPI run in the background
-      // so the donor sees the thank-you page immediately. Errors are
-      // recorded per-donation for admin visibility (Resend Receipt /
-      // Resend WhatsApp actions).
       if (updated) {
         setImmediate(() => {
           runPostCompletionPipeline(updated._id, razorpay_payment_id).catch((err) => {
-            console.error('Background pipeline error for donation', String(updated._id), err && err.message ? err.message : err);
+            console.error(
+              "Background pipeline error for donation",
+              String(updated._id),
+              err && err.message ? err.message : err
+            );
           });
         });
       }
       return;
     } catch (err) {
-      console.error('verifyPayment error', err && err.stack ? err.stack : err);
-      return res.status(500).json({ message: 'Failed to verify payment' });
+      console.error("verifyPayment error", err && err.stack ? err.stack : err);
+      return res.status(500).json({ message: "Failed to verify payment" });
     }
   },
 
-  // Separate, explicit webhook per Razorpay account (each account's own
-  // dashboard gets its own URL to paste in, tied to exactly one secret --
-  // no ambiguity about which secret belongs where, and no looping through
-  // every configured account trying to find a signature match).
   webhookFor: (accountName) => async (req, res) => {
     try {
-      const signature = req.headers['x-razorpay-signature'];
-      if (!signature) return res.status(400).send('Signature missing');
+      const signature = req.headers["x-razorpay-signature"];
+      if (!signature) return res.status(400).send("Signature missing");
 
       const account = resolveAccount(accountName);
       if (!account.webhook_secret) {
@@ -559,154 +543,133 @@ const paymentController = {
         return res.status(500).send(`No webhook secret configured for account "${accountName}"`);
       }
 
-      const body = (req.body && req.body.toString) ? req.body.toString() : JSON.stringify(req.body || {});
-      const expected = crypto.createHmac('sha256', account.webhook_secret).update(body).digest('hex');
-      if (expected !== signature) {
+      const body = req.body && req.body.toString ? req.body.toString() : JSON.stringify(req.body || {});
+      const expected = crypto.createHmac("sha256", account.webhook_secret).update(body).digest("hex");
+      if (!safeEqual(expected, signature)) {
         console.warn(`Invalid webhook signature for account "${accountName}"`);
-        return res.status(400).send('Invalid signature');
+        return res.status(400).send("Invalid signature");
       }
 
       const event = JSON.parse(body);
       console.log(`Webhook Event [${accountName}]:`, event.event);
 
-      // CRITICAL: respond to Razorpay IMMEDIATELY after signature
-      // verification. Razorpay's delivery timeout is short; any slow work
-      // here (e.g. a slow external call) reads as delivery
-      // failure and gets the webhook auto-disabled after 24h of retries —
-      // which has now happened twice. All processing happens after the
-      // response; failures there are logged and recoverable via the
-      // /donations/audit-pending reconciliation endpoint.
-      res.status(200).send('Webhook received');
+      res.status(200).send("Webhook received");
 
       setImmediate(async () => {
-        // Processed in-process right after the 200. (There used to be an
-        // optional Redis queue + worker here; it was never enabled in
-        // production and Redis has been removed.) Failures are logged and
-        // recoverable via the /donations/audit-pending reconciliation.
         try {
           await processWebhookEventInline(event);
         } catch (procErr) {
-          console.error('Inline webhook processing error:', procErr && procErr.stack ? procErr.stack : procErr);
+          console.error("Inline webhook processing error:", procErr && procErr.stack ? procErr.stack : procErr);
         }
       });
     } catch (error) {
-      console.error('webhook error', error && error.stack ? error.stack : error);
-      if (!res.headersSent) return res.status(500).send('Webhook error');
+      console.error("webhook error", error && error.stack ? error.stack : error);
+      if (!res.headersSent) return res.status(500).send("Webhook error");
     }
   },
-  // POST /payments/reconcile/:donationId — admin-only manual recovery for a
-  // donation stuck 'pending' when the payment actually succeeded on
-  // Razorpay's side (e.g. the browser closed before /verify ran, and the
-  // webhook either wasn't configured yet or also missed it). Queries
-  // Razorpay directly for the real payment status rather than guessing,
-  // and only marks it complete if Razorpay confirms a captured payment --
-  // runs through the exact same completeDonation() pipeline (DCC +
-  // WhatsApp) as a normal successful checkout.
   reconcile: async (req, res) => {
     try {
-      const donation = await donationModel.findById(req.params.donationId);
-      if (!donation) return res.status(404).json({ message: 'Donation not found' });
+      const donation = await donations.findById(req.params.donationId);
+      if (!donation) return res.status(404).json({ message: "Donation not found" });
       if (!donation.razorpayOrderId) {
-        return res.status(400).json({ message: 'This donation has no Razorpay order ID to check.' });
+        return res.status(400).json({ message: "This donation has no Razorpay order ID to check." });
       }
-      if (donation.status === 'completed') {
-        return res.status(200).json({ message: 'Already marked completed.', status: donation.status });
+      if (donation.status === "completed") {
+        return res.status(200).json({ message: "Already marked completed.", status: donation.status });
       }
 
       const created = createRazorpayInstance(donation.paymentAccount);
       if (!created) {
-        return res.status(500).json({ message: `Razorpay is not configured for account "${donation.paymentAccount || 'default'}".` });
+        return res
+          .status(500)
+          .json({ message: `Razorpay is not configured for account "${donation.paymentAccount || "default"}".` });
       }
 
       const payments = await created.instance.orders.fetchPayments(donation.razorpayOrderId);
-      const captured = (payments.items || []).find((p) => p.status === 'captured');
+      const captured = (payments.items || []).find((p) => p.status === "captured");
 
       if (!captured) {
         const statuses = (payments.items || []).map((p) => p.status);
         return res.status(200).json({
           message: statuses.length
-            ? `Razorpay shows no captured payment for this order (found: ${statuses.join(', ')}). Leaving as pending.`
-            : 'Razorpay has no payment attempts at all for this order — the donor likely never completed checkout. Leaving as pending.',
+            ? `Razorpay shows no captured payment for this order (found: ${statuses.join(", ")}). Leaving as pending.`
+            : "Razorpay has no payment attempts at all for this order — the donor likely never completed checkout. Leaving as pending.",
           razorpayPayments: payments.items,
         });
       }
 
       const completed = await completeDonation({ orderId: donation.razorpayOrderId, paymentId: captured.id });
       return res.status(200).json({
-        message: `Razorpay confirms this payment was captured (₹${(captured.amount / 100).toLocaleString('en-IN')}). Donation marked completed and DCC/WhatsApp pipeline triggered.`,
+        message: `Razorpay confirms this payment was captured (₹${(captured.amount / 100).toLocaleString("en-IN")}). Donation marked completed and DCC/WhatsApp pipeline triggered.`,
         razorpayPaymentId: captured.id,
         donation: completed,
       });
     } catch (error) {
-      console.error('reconcile error', error && error.stack ? error.stack : error);
-      res.status(500).json({ message: error.message || 'Reconcile failed' });
+      console.error("reconcile error", error && error.stack ? error.stack : error);
+      res.status(500).json({ message: error.message || "Reconcile failed" });
     }
   },
 
-  // GET /payments/status/:orderId — public, no auth required.
-  // Called by the frontend to check whether a payment completed on the
-  // backend (via webhook) after the donor navigated away from the
-  // Razorpay checkout widget before the success callback fired — e.g.
-  // a UPI payment in PhonePe/GPay where the donor switches apps and
-  // doesn't return to the browser. The orderId is used as the access
-  // key (long random Razorpay string, not guessable). Only safe
-  // non-sensitive fields are returned.
   checkStatus: async (req, res) => {
     try {
       const { orderId } = req.params;
-      if (!orderId) return res.status(400).json({ message: 'orderId is required' });
+      if (!orderId) return res.status(400).json({ message: "orderId is required" });
 
-      let donation = await donationModel
-        .findOne({ razorpayOrderId: orderId })
-        .select('status receiptNumber dccSyncStatus whatsappReceiptSentAt donorName amount sevaName type createdAt razorpayOrderId paymentAccount')
-        .lean();
+      let donation = await donations.findOne(
+        { razorpayOrderId: orderId },
+        {
+          sort: { createdAt: 1, _id: 1 },
+          fields: [
+            "status",
+            "receiptNumber",
+            "dccSyncStatus",
+            "whatsappReceiptSentAt",
+            "donorName",
+            "amount",
+            "sevaName",
+            "type",
+            "createdAt",
+            "razorpayOrderId",
+            "paymentAccount",
+          ],
+        }
+      );
 
       if (!donation) return res.status(404).json({ found: false });
 
-      // ?live=1 — also ask Razorpay (the webhook can lag a few seconds).
-      // Used before offering the PhonePe / UPI fallback, so a donor whose
-      // payment actually went through is never asked to pay again.
       let inProgress = false;
-      if (req.query.live === '1' && donation.status !== 'completed') {
+      if (req.query.live === "1" && donation.status !== "completed") {
         try {
-
           const live = await liveCheckDonationOrder(donation);
           inProgress = live.inProgress;
-          if (live.completed) donation = { ...donation, status: 'completed' };
+          if (live.completed) donation = { ...donation, status: "completed" };
         } catch (e) {
-          console.warn('checkStatus live check failed:', e && e.message ? e.message : e);
+          console.warn("checkStatus live check failed:", e && e.message ? e.message : e);
         }
       }
 
       res.status(200).json({
         found: true,
         status: donation.status,
-        completed: donation.status === 'completed',
+        completed: donation.status === "completed",
         inProgress,
-        receiptReady: !!(donation.receiptNumber),
-        whatsappSent: !!(donation.whatsappReceiptSentAt),
+        receiptReady: !!donation.receiptNumber,
+        whatsappSent: !!donation.whatsappReceiptSentAt,
         donorName: donation.donorName,
         amount: donation.amount,
         sevaName: donation.sevaName || donation.type,
         createdAt: donation.createdAt,
       });
     } catch (error) {
-      console.error('checkStatus error', error && error.message ? error.message : error);
-      res.status(500).json({ message: 'Status check failed' });
+      console.error("checkStatus error", error && error.message ? error.message : error);
+      res.status(500).json({ message: "Status check failed" });
     }
   },
 
-  // GET /payments/audit-subscriptions?account=default — ADMIN ONLY.
-  // Fetches real subscription records directly from Razorpay's API and
-  // cross-references each one against our own database (matched by
-  // subscriptionId). Surfaces exactly which real Razorpay subscriptions
-  // we have NO donation record for at all, and which charges Razorpay
-  // shows that our database doesn't — the ground truth check for
-  // "I see recurring payments in Razorpay that aren't showing up here".
   auditSubscriptions: async (req, res) => {
     try {
-      const accountName = req.query.account || 'default';
-      const deep = req.query.deep === 'true';
+      const accountName = req.query.account || "default";
+      const deep = req.query.deep === "true";
       const created = createRazorpayInstance(accountName);
       if (!created) {
         return res.status(500).json({ message: `Razorpay not configured for account "${accountName}"` });
@@ -716,11 +679,13 @@ const paymentController = {
       const results = [];
 
       for (const sub of razorpaySubscriptions.items || []) {
-        const ourDonations = await donationModel
-          .find({ subscriptionId: sub.id })
-          .sort({ createdAt: 1 })
-          .select('donorName amount status razorpayPaymentId createdAt lastPaymentDate')
-          .lean();
+        const ourDonations = await donations.find(
+          { subscriptionId: sub.id },
+          {
+            sort: { createdAt: 1, _id: 1 },
+            fields: ["donorName", "amount", "status", "razorpayPaymentId", "createdAt", "lastPaymentDate"],
+          }
+        );
 
         let razorpayPaymentCount = 0;
         try {
@@ -728,7 +693,7 @@ const paymentController = {
           razorpayPaymentCount = invoices.paid_count || 0;
         } catch {}
 
-        const ourCompletedCount = ourDonations.filter((d) => d.status === 'completed').length;
+        const ourCompletedCount = ourDonations.filter((d) => d.status === "completed").length;
         const gap = razorpayPaymentCount > ourCompletedCount;
 
         const entry = {
@@ -745,9 +710,6 @@ const paymentController = {
           gap,
         };
 
-        // deep=true fetches the actual linked payments for gap subscriptions,
-        // to recover donor identity (email/contact are on the Payment entity
-        // even when not in the subscription's own notes).
         if (deep && gap) {
           try {
             const payments = await created.instance.invoices.all({ subscription_id: sub.id, count: 20 });
@@ -780,30 +742,15 @@ const paymentController = {
         results,
       });
     } catch (error) {
-      console.error('auditSubscriptions error', error && error.message ? error.message : error);
-      res.status(500).json({ message: error.message || 'Audit failed' });
+      console.error("auditSubscriptions error", error && error.message ? error.message : error);
+      res.status(500).json({ message: error.message || "Audit failed" });
     }
   },
 
-  // POST /payments/backfill-subscription-gaps?account=default&execute=true
-  // ADMIN ONLY. Recovers donation records for REAL subscription charges
-  // that Razorpay processed but we have zero record of (found via
-  // audit-subscriptions). For each gap subscription, fetches the Plan
-  // (for the seva name) and every paid invoice (for the actual historical
-  // charge date/amount/donor email+phone), then creates the missing
-  // donation record(s) with the ORIGINAL charge date preserved (not
-  // today's date) and runs each through the full completion pipeline
-  // (DCC sync + WhatsApp receipt) so these donors finally get what
-  // they're owed.
-  //
-  // execute=true is required to actually create records and send
-  // WhatsApp messages — without it, this only returns a preview of
-  // exactly what would be created/sent, for review before any donor is
-  // contacted about a months-old transaction.
   backfillSubscriptionGaps: async (req, res) => {
     try {
-      const accountName = req.query.account || 'default';
-      const execute = req.query.execute === 'true';
+      const accountName = req.query.account || "default";
+      const execute = req.query.execute === "true";
       const created = createRazorpayInstance(accountName);
       if (!created) {
         return res.status(500).json({ message: `Razorpay not configured for account "${accountName}"` });
@@ -815,38 +762,45 @@ const paymentController = {
       let recordsCreated = 0;
 
       for (const sub of razorpaySubscriptions.items || []) {
-        const ourDonations = await donationModel.find({ subscriptionId: sub.id }).select('razorpayPaymentId status').lean();
-        const ourCompletedCount = ourDonations.filter((d) => d.status === 'completed').length;
+        const ourDonations = await donations.find(
+          { subscriptionId: sub.id },
+          { fields: ["razorpayPaymentId", "status"] }
+        );
+        const ourCompletedCount = ourDonations.filter((d) => d.status === "completed").length;
 
         let paidCount = 0;
         try {
           const subDetail = await created.instance.subscriptions.fetch(sub.id);
           paidCount = subDetail.paid_count || 0;
-        } catch { continue; }
+        } catch {
+          continue;
+        }
 
         if (paidCount <= ourCompletedCount) continue; // no gap for this subscription
 
         // Seva name from the Plan (cached to avoid refetching the same plan repeatedly).
-        let sevaName = 'Monthly Seva';
+        let sevaName = "Monthly Seva";
         if (!planCache.has(sub.plan_id)) {
           try {
             const plan = await created.instance.plans.fetch(sub.plan_id);
-            planCache.set(sub.plan_id, plan.item && plan.item.name ? plan.item.name : 'Monthly Seva');
-          } catch { planCache.set(sub.plan_id, 'Monthly Seva'); }
+            planCache.set(sub.plan_id, plan.item && plan.item.name ? plan.item.name : "Monthly Seva");
+          } catch {
+            planCache.set(sub.plan_id, "Monthly Seva");
+          }
         }
         sevaName = planCache.get(sub.plan_id);
 
         let invoices = [];
         try {
           const invoiceRes = await created.instance.invoices.all({ subscription_id: sub.id, count: 20 });
-          invoices = (invoiceRes.items || []).filter((inv) => inv.status === 'paid');
+          invoices = (invoiceRes.items || []).filter((inv) => inv.status === "paid");
         } catch (e) {
           preview.push({ subscriptionId: sub.id, error: `Could not fetch invoices: ${e.message || e}` });
           continue;
         }
 
         for (const inv of invoices) {
-          const alreadyRecorded = await donationModel.findOne({ razorpayPaymentId: inv.payment_id });
+          const alreadyRecorded = await donations.findOne({ razorpayPaymentId: inv.payment_id ?? null });
           if (alreadyRecorded) continue; // this specific charge already has a record
 
           const entry = {
@@ -854,33 +808,33 @@ const paymentController = {
             paymentId: inv.payment_id,
             amount: inv.amount ? inv.amount / 100 : null,
             chargeDate: inv.date ? new Date(inv.date * 1000) : null,
-            donorEmail: inv.customer_details && inv.customer_details.email || null,
-            donorMobile: inv.customer_details && inv.customer_details.contact || null,
+            donorEmail: (inv.customer_details && inv.customer_details.email) || null,
+            donorMobile: (inv.customer_details && inv.customer_details.contact) || null,
             sevaName,
           };
 
           if (execute) {
-            const newDonation = await donationModel.create({
-              donorName: entry.donorEmail ? entry.donorEmail.split('@')[0] : 'Devotee',
+            const newDonation = await donations.insert({
+              donorName: entry.donorEmail ? entry.donorEmail.split("@")[0] : "Devotee",
               donorEmail: entry.donorEmail || undefined,
-              donorMobile: entry.donorMobile ? entry.donorMobile.replace(/^\+91/, '') : undefined,
+              donorMobile: entry.donorMobile ? entry.donorMobile.replace(/^\+91/, "") : undefined,
               amount: entry.amount,
-              type: 'Monthly Seva',
-              sourcePage: 'recovered-subscription-backfill',
+              type: "Monthly Seva",
+              sourcePage: "recovered-subscription-backfill",
               sevaName,
               paymentAccount: accountName,
               subscriptionId: sub.id,
               isRecurring: true,
-              status: 'pending',
+              status: "pending",
               razorpayPaymentId: inv.payment_id,
               createdAt: entry.chargeDate || new Date(),
             });
             await completeDonation({ donationId: newDonation._id, paymentId: inv.payment_id });
-            entry.donationId = newDonation._id.toString();
-            entry.action = 'CREATED_AND_COMPLETED';
+            entry.donationId = String(newDonation._id);
+            entry.action = "CREATED_AND_COMPLETED";
             recordsCreated++;
           } else {
-            entry.action = 'WOULD_CREATE';
+            entry.action = "WOULD_CREATE";
           }
 
           preview.push(entry);
@@ -889,14 +843,14 @@ const paymentController = {
 
       res.status(200).json({
         success: true,
-        mode: execute ? 'EXECUTED — records created, DCC+WhatsApp triggered' : 'PREVIEW ONLY — nothing created or sent',
+        mode: execute ? "EXECUTED — records created, DCC+WhatsApp triggered" : "PREVIEW ONLY — nothing created or sent",
         recordsCreated,
         totalGapsFound: preview.length,
         preview,
       });
     } catch (error) {
-      console.error('backfillSubscriptionGaps error', error && error.message ? error.message : error);
-      res.status(500).json({ message: error.message || 'Backfill failed' });
+      console.error("backfillSubscriptionGaps error", error && error.message ? error.message : error);
+      res.status(500).json({ message: error.message || "Backfill failed" });
     }
   },
 };

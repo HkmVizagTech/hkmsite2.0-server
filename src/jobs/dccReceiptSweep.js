@@ -1,9 +1,5 @@
 import { sweepDccReceipts } from "../services/dccSweep.service.js";
 
-// Pushes every successful donation that still has no DCC receipt number, and
-// sends the WhatsApp receipt as soon as one comes back. See
-// services/dccSweep.service.js for which donations are pushed and when.
-// Disable with DCC_SWEEP_ENABLED=false.
 const INTERVAL_MS = Number(process.env.DCC_SWEEP_INTERVAL_MINUTES || 10) * 60 * 1000;
 
 async function runDccSweep() {
@@ -12,7 +8,7 @@ async function runDccSweep() {
     if (s.pushed > 0 || s.staleLocks > 0) {
       console.log(
         `[dcc-sweep] pushed ${s.pushed}, got ${s.receipts} receipt(s) (${s.recovered} already in DCC), ` +
-        `${s.whatsappSent} WhatsApp sent, ${s.failed} still failing, ${s.staleLocks} interrupted push(es) released`
+          `${s.whatsappSent} WhatsApp sent, ${s.failed} still failing, ${s.staleLocks} interrupted push(es) released`
       );
     }
   } catch (err) {

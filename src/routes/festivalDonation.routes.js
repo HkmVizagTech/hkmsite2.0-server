@@ -4,8 +4,8 @@ import { authMiddleware, adminMiddleware } from "../middlewares/auth.middleware.
 
 const festivalDonationRouter = express.Router();
 
-	festivalDonationRouter.get("/all", festivalDonationController.publicList);
-	festivalDonationRouter.get("/:slug", festivalDonationController.getBySlug);
+festivalDonationRouter.get("/all", festivalDonationController.publicList);
+festivalDonationRouter.get("/:slug", festivalDonationController.getBySlug);
 
 festivalDonationRouter.get("/", authMiddleware, adminMiddleware, festivalDonationController.list);
 festivalDonationRouter.post("/", authMiddleware, adminMiddleware, festivalDonationController.create);

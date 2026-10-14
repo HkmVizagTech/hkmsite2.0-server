@@ -12,9 +12,7 @@
 
 import "dotenv/config";
 
-import mongoose from "mongoose";
-import { connectDb } from "./src/config/db.js";
-import { donationModel } from "./src/models/donation.model.js";
+import { connectDb, closeDb, query, many } from "./src/db/pg.js";
 
 const MAX_AGE_HOURS = Number(process.env.PENDING_REMINDER_MAX_AGE_HOURS || 24);
 
@@ -24,20 +22,17 @@ async function main() {
 
   await connectDb();
 
-  const filter = {
-    status: { $in: ["pending", "failed"] },
-    createdAt: { $lt: floor },
-    whatsappPendingReminderSent: { $ne: true },
-  };
+  const where = "status = ANY($1) AND created_at < $2 AND whatsapp_pending_reminder_sent IS DISTINCT FROM true";
+  const params = [["pending", "failed"], floor];
 
-  const total = await donationModel.countDocuments(filter);
-  const byStatus = await donationModel.aggregate([
-    { $match: filter },
-    { $group: { _id: "$status", count: { $sum: 1 } } },
-  ]);
+  const byStatus = await many(
+    `SELECT status, count(*)::int AS count FROM donations WHERE ${where} GROUP BY status ORDER BY status`,
+    params
+  );
+  const total = byStatus.reduce((n, r) => n + r.count, 0);
 
   console.log(`Cutoff: donations created before ${floor.toISOString()} (older than ${MAX_AGE_HOURS}h)`);
-  for (const row of byStatus) console.log(`  ${row._id}: ${row.count}`);
+  for (const row of byStatus) console.log(`  ${row.status}: ${row.count}`);
   console.log(`  total: ${total}`);
 
   if (!total) {
@@ -45,17 +40,20 @@ async function main() {
   } else if (!apply) {
     console.log("\nDry run — nothing written. Re-run with --apply to mark these as already reminded.");
   } else {
-    const res = await donationModel.updateMany(filter, {
-      $set: { whatsappPendingReminderSent: true },
-    });
-    console.log(`\nMarked ${res.modifiedCount} donation(s) as already reminded. They will never be messaged.`);
+    const res = await query(
+      `UPDATE donations SET whatsapp_pending_reminder_sent = true, updated_at = now() WHERE ${where}`,
+      params
+    );
+    console.log(`\nMarked ${res.rowCount} donation(s) as already reminded. They will never be messaged.`);
   }
 
-  await mongoose.connection.close();
+  await closeDb();
 }
 
 main().catch(async (err) => {
   console.error("Backfill failed:", err.message);
-  try { await mongoose.connection.close(); } catch {}
+  try {
+    await closeDb();
+  } catch {}
   process.exit(1);
 });

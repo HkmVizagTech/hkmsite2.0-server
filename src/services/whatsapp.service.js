@@ -1,60 +1,3 @@
-// src/services/whatsapp.service.js
-//
-// Flaxxa WAPI client.
-//   Base URL: https://wapi.flaxxa.com
-//   Auth: `token` passed INSIDE the JSON body / form fields — not a header.
-//   POST /api/v1/sendtemplatemessage                 { token, phone, template_name, template_language, components }
-//   POST /api/v1/sendtemplatemessage_withattachment  multipart, same fields + header_attachment
-//   POST /api/v1/sendmessage                         { token, phone, message }  (24h window only)
-//
-// ---------------------------------------------------------------------------
-// HARD-WON FACTS ABOUT THIS API — verified against the live endpoint
-// (Aug 2026, token 9234…, test recipient 919951141915). Do not "simplify"
-// any of this away; every line below is the result of a failing send.
-//
-// 1. FAILURE LOOKS LIKE SUCCESS.
-//    Flaxxa answers HTTP 200 {"status":"success","message_wamid":null} when
-//    Meta REJECTED the message. Only a non-null message_wamid means it was
-//    actually delivered to WhatsApp. assertDelivered() turns the null case
-//    into a thrown error — without it, callers mark records as "sent" for
-//    messages that never left. This is why the pending reminder appeared to
-//    work while nothing arrived.
-//
-// 2. FLAXXA DOES NOT SUPPORT DYNAMIC URL BUTTONS.
-//    A template whose button URL ends in {{1}} can NEVER be sent through this
-//    API. Meta replies "(#131008) Required parameter is missing" because
-//    Flaxxa drops the button parameter on the way through. Verified against
-//    every shape: components [{type:"button",sub_type:"url",index:"0"|0,...}]
-//    (before and after the body component), sub_type "URL", parameter type
-//    "payload", and top-level button / buttons / button_1 / button_url /
-//    button_text_1 / button_url_1 / dynamic_url / button_value / button_parameters.
-//    All of them return message_wamid: null. A known-good template on the same
-//    account WITHOUT a dynamic button sends fine in the same run.
-//    => Template button URLs must be STATIC. Per-page links go in the body.
-//
-// 3. HEADER IMAGES CANNOT BE SENT AS A LINK.
-//    {type:"header", parameters:[{type:"image", image:{link}}]} on the JSON
-//    endpoint is ignored — Meta then reports the header parameter missing.
-//    Header media must be POSTed as binary on the _withattachment endpoint.
-//    (Confirmed working: bc_qr_pass_v4 + binary header_attachment.)
-//
-// 4. THE MULTIPART FIELD IS "components", NOT "components[]".
-//    "components[]" makes Flaxxa throw
-//    json_decode(): Argument #1 ($json) must be of type string, array given.
-//
-// 5. META ACCEPTS ONLY image/jpeg AND image/png FOR IMAGE HEADERS.
-//    The seva banners in R2 are .webp, so they are converted with sharp
-//    before being attached.
-//
-// 6. AUTHENTICATION (OTP) TEMPLATES: Meta rewrites the copy-code button
-//    into a URL button at APPROVAL time, so the send payload must be
-//    sub_type "url" with the SAME one-time code passed in both the body
-//    and the button parameters (see sendDonorOtp — verified live 2026-09).
-//    sub_type "COPY_CODE" is rejected (#132018), and omitting the button
-//    returns #131008 required-parameter-missing. This is the ONE case where
-//    a {{1}}-bearing button parameter DOES flow through Flaxxa fine.
-// ---------------------------------------------------------------------------
-
 const WAPI_BASE = "https://wapi.flaxxa.com";
 
 import { buildPendingFields } from "./pendingMessage.util.js";
@@ -65,9 +8,6 @@ import sharp from "sharp";
 
 const isWhatsAppConfigured = () => Boolean(process.env.WAPI_TOKEN);
 
-// Normalizes an Indian mobile number to E.164 without "+": strips
-// non-digits, and adds the "91" country code only if it looks like a bare
-// 10-digit number (avoids double-prefixing numbers already stored with 91).
 const normalizePhone = (raw) => {
   const digits = String(raw || "").replace(/\D/g, "");
   if (!digits) return null;
@@ -77,12 +17,6 @@ const normalizePhone = (raw) => {
   return digits; // already looks international, or too malformed to fix — pass through
 };
 
-/**
- * Flaxxa returns HTTP 200 for messages Meta refused. The only reliable
- * success signal is a non-null message_wamid. Throwing here is what lets
- * callers (pending reminders, receipts) record a real failure instead of
- * silently flagging the record as sent.
- */
 function assertDelivered(payload, context) {
   const wamid = payload && (payload.message_wamid || payload.wamid);
   if (wamid) return payload;
@@ -104,11 +38,6 @@ function assertDelivered(payload, context) {
   throw err;
 }
 
-// Nothing here may hang indefinitely. When Flaxxa's origin went down behind
-// Cloudflare (522), an un-timed-out fetch left OTP requests hanging for
-// MINUTES — the donor saw a dead spinner and the logs filled with nothing
-// until the socket finally gave up. A bounded wait turns a provider outage
-// into a fast, explainable error instead.
 const WAPI_TIMEOUT_MS = Number(process.env.WAPI_TIMEOUT_MS || 15000);
 
 async function callWapi(path, body) {
@@ -124,12 +53,8 @@ async function callWapi(path, body) {
       signal: AbortSignal.timeout(WAPI_TIMEOUT_MS),
     });
   } catch (err) {
-    // AbortError/TimeoutError and undici's bare "fetch failed" are both
-    // unreachable-provider cases; name them so callers and logs can tell
-    // them apart from a message Meta actually rejected.
-    const reason = err && err.name === "TimeoutError"
-      ? `timed out after ${WAPI_TIMEOUT_MS}ms`
-      : (err && err.message) || String(err);
+    const reason =
+      err && err.name === "TimeoutError" ? `timed out after ${WAPI_TIMEOUT_MS}ms` : (err && err.message) || String(err);
     const wrapped = new Error(`WhatsApp provider unreachable (${WAPI_BASE}): ${reason}`);
     wrapped.cause = err;
     wrapped.providerUnreachable = true;
@@ -145,11 +70,6 @@ async function callWapi(path, body) {
   }
 
   if (!res.ok) {
-    // When the provider is down its edge (Cloudflare) answers with a full
-    // HTML error page. Using that as the error message dumped a hundred lines
-    // of markup into the logs per failed send and buried everything else, so
-    // an HTML body is reported as what it actually is and the raw text is
-    // capped either way.
     const looksLikeHtml = /^\s*<(?:!doctype|html)/i.test(raw);
     const message = looksLikeHtml
       ? `WhatsApp provider returned an HTTP ${res.status} error page (provider outage, not a rejected message)`
@@ -167,20 +87,6 @@ async function callWapi(path, body) {
   return parsed;
 }
 
-/**
- * Sends an approved WhatsApp template message (works even for the very
- * first message to a donor — required for outbound receipts/confirmations,
- * unlike free-form sendMessage which only works inside a 24h reply window).
- *
- * NOTE: do not pass a {type:"button"} component — Flaxxa discards it (see
- * fact 2 at the top of this file). Keep template button URLs static.
- *
- * @param {string} phone - raw phone number (any common format, normalized here)
- * @param {string} templateName - exact name of an approved template
- * @param {Array}  components - Meta template components array, e.g.
- *   [{ type: "body", parameters: [{ type: "text", text: "Ramesh" }, ...] }]
- * @param {string} [language] - defaults to WAPI_TEMPLATE_LANG env var, then "en"
- */
 async function sendTemplateMessage(phone, templateName, components, language) {
   const normalizedPhone = normalizePhone(phone);
   if (!normalizedPhone) throw new Error("Invalid or missing phone number");
@@ -195,10 +101,6 @@ async function sendTemplateMessage(phone, templateName, components, language) {
   return assertDelivered(result, `template "${templateName}" -> ${normalizedPhone}`);
 }
 
-/**
- * Sends a free-form text message. Only actually reaches the recipient if
- * they messaged this WhatsApp Business number within the last 24 hours.
- */
 async function sendTextMessage(phone, message) {
   const normalizedPhone = normalizePhone(phone);
   if (!normalizedPhone) throw new Error("Invalid or missing phone number");
@@ -207,25 +109,17 @@ async function sendTextMessage(phone, message) {
   return assertDelivered(result, `text message -> ${normalizedPhone}`);
 }
 
-/**
- * Low-level multipart template send. Header media (PDF or image) goes up as
- * binary in `header_attachment`; this is the ONLY way header media reaches
- * Meta through Flaxxa.
- *
- * @param {string} normalizedPhone - already normalized E.164-without-plus
- * @param {string} templateName
- * @param {Array}  components - full components array (body only; no buttons)
- * @param {Buffer|import("stream").Readable} file
- * @param {string} filename
- * @param {string} contentType - "application/pdf" | "image/jpeg" | "image/png"
- * @param {string} [language]
- */
-async function postTemplateWithAttachment(normalizedPhone, templateName, components, file, filename, contentType, language) {
+async function postTemplateWithAttachment(
+  normalizedPhone,
+  templateName,
+  components,
+  file,
+  filename,
+  contentType,
+  language
+) {
   const token = process.env.WAPI_TOKEN;
   if (!token) throw new Error("WAPI_TOKEN is not set");
-
-
-
 
   const form = new FormData();
   form.append("token", token);
@@ -240,26 +134,15 @@ async function postTemplateWithAttachment(normalizedPhone, templateName, compone
     headers: form.getHeaders(),
     maxBodyLength: Infinity,
     maxContentLength: Infinity,
-    // Same reasoning as callWapi: an unreachable provider must fail fast
-    // rather than hold the request open. Longer than the JSON timeout because
-    // this one is uploading a PDF.
     timeout: Number(process.env.WAPI_UPLOAD_TIMEOUT_MS || 45000),
   });
 
   return assertDelivered(response.data, `template "${templateName}" (+${contentType}) -> ${normalizedPhone}`);
 }
 
-/**
- * Sends an approved template WITH a PDF attached as the template's header
- * media (e.g. the donation receipt).
- *
- * @param {Array} bodyParameters - just the body parameters array (not the
- *   full components wrapper — this function builds that)
- */
 async function sendTemplateMessageWithAttachment(phone, templateName, bodyParameters, filePath, filename, language) {
   const normalizedPhone = normalizePhone(phone);
   if (!normalizedPhone) throw new Error("Invalid or missing phone number");
-
 
   return postTemplateWithAttachment(
     normalizedPhone,
@@ -272,16 +155,6 @@ async function sendTemplateMessageWithAttachment(phone, templateName, bodyParame
   );
 }
 
-// ---------------------------------------------------------------------------
-// Header image handling
-//
-// Meta accepts only image/jpeg and image/png for image headers, and Flaxxa
-// will not fetch a header image from a link — so the banner is downloaded
-// here, converted to JPEG, and attached as binary. Converted buffers are
-// cached per URL for the process lifetime: the same handful of seva banners
-// are reused across every reminder run.
-// ---------------------------------------------------------------------------
-
 const headerImageCache = new Map();
 const MAX_HEADER_BYTES = 4.5 * 1024 * 1024; // Meta's limit is 5MB
 
@@ -292,7 +165,6 @@ async function fetchHeaderImageJpeg(url) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Header image download failed (HTTP ${res.status}): ${url}`);
   const input = Buffer.from(await res.arrayBuffer());
-
 
   let jpeg = await sharp(input)
     .rotate()
@@ -312,40 +184,8 @@ async function fetchHeaderImageJpeg(url) {
   return jpeg;
 }
 
-// ---------------------------------------------------------------------------
-// Pending-transaction ("donation recorded, payment not yet confirmed") reminder.
-//
-// Template shape this code expects (pending_seva_notice):
-//   header : IMAGE  — supplied per seva as a binary JPEG attachment
-//   body   : 4 variables
-//              {{1}} donor name
-//              {{2}} amount
-//              {{3}} seva name, with its campaign in brackets on festival
-//                    pages — "Abhisheka Seva (Sri Krishna Janmashtami)"
-//              {{4}} allocation sentence, WITH the seva's page link appended
-//   button : optional, and its URL MUST BE STATIC (no {{1}}). Flaxxa cannot
-//            supply a button variable, so a dynamic button URL makes every
-//            send fail with (#131008). The per-seva link lives in {{4}} instead.
-// ---------------------------------------------------------------------------
+const PENDING_TEMPLATE_NAME = process.env.WAPI_PENDING_TEMPLATE_NAME || "pending_seva_notice";
 
-const PENDING_TEMPLATE_NAME =
-  process.env.WAPI_PENDING_TEMPLATE_NAME || "pending_seva_notice";
-
-/**
- * Sends the approved "pending transaction" WhatsApp template to a donor
- * whose donation was recorded but whose payment is not yet confirmed.
- *
- * @param {string} phone - raw donor mobile (normalized here)
- * @param {string} donorName - {{1}}
- * @param {number|string} amount - {{2}}
- * @param {string} [sevaName] - {{3}}, also embedded in {{4}}
- * @param {object} [options]
- * @param {string} [options.linkSuffix] - seva page path, e.g. "brick-seva-campaign"
- * @param {string} [options.sourcePage] - fallback for linkSuffix
- * @param {string} [options.sevaImage] - header banner URL for this seva
- * @param {string} [options.campaignLabel] - festival the donation came from,
- *        e.g. "Sri Krishna Janmashtami"; shown in brackets after {{3}}
- */
 async function sendPendingWhatsapp(phone, donorName, amount, sevaName, options = {}) {
   const normalizedPhone = normalizePhone(phone);
   if (!normalizedPhone) throw new Error("Invalid or missing phone number");
@@ -393,29 +233,10 @@ async function sendPendingWhatsapp(phone, donorName, amount, sevaName, options =
   return sendTemplateMessage(normalizedPhone, PENDING_TEMPLATE_NAME, components);
 }
 
-// Common utility template — deliberately generic rather than a narrow
-// OTP-only Authentication-category template. Utility category is more
-// flexible (Meta allows real message text, not just a bare code + their
-// own boilerplate) and this ONE approved template can be reused for any
-// future one-off transactional message (OTP today, other account
-// notifications later) without needing a separate template submitted
-// and approved for each new use case.
-//
-// The template's body should be just "{{1}}" — a single free-text
-// variable — so the CALLER supplies the complete message, and this
-// function stays a thin, generic sender rather than being OTP-specific.
-// No buttons on this template — Flaxxa cannot deliver a dynamic button
-// URL (see fact 2 at the top of this file); a body-only template sidesteps
-// that whole class of failure entirely.
-// Template name is configurable via env since it doesn't exist yet — set
-// WAPI_UTILITY_TEMPLATE_NAME once Meta approves it; nothing else here
-// needs to change.
 const UTILITY_TEMPLATE_NAME = process.env.WAPI_UTILITY_TEMPLATE_NAME || "hkm_utility_notification";
 
 async function sendUtilityMessage(phone, messageText) {
-  const components = [
-    { type: "body", parameters: [{ type: "text", text: String(messageText) }] },
-  ];
+  const components = [{ type: "body", parameters: [{ type: "text", text: String(messageText) }] }];
   return sendTemplateMessage(phone, UTILITY_TEMPLATE_NAME, components);
 }
 
@@ -423,11 +244,6 @@ async function sendDonorOtp(phone, otpCode) {
   const OTP_TEMPLATE_NAME = process.env.WAPI_OTP_TEMPLATE_NAME || "otp";
   const components = [
     { type: "body", parameters: [{ type: "text", text: String(otpCode) }] },
-    // AUTHENTICATION templates: Meta rewrites the copy-code button to a URL
-    // button at approval time, so the send must use sub_type "url" with the
-    // SAME code in both the body and the button parameters. sub_type
-    // "COPY_CODE" only exists for marketing/utility coupon buttons and Meta
-    // rejects it here (#132018); omitting the button gives #131008.
     {
       type: "button",
       sub_type: "url",
@@ -438,4 +254,14 @@ async function sendDonorOtp(phone, otpCode) {
   return sendTemplateMessage(phone, OTP_TEMPLATE_NAME, components, "en");
 }
 
-export { isWhatsAppConfigured, sendTemplateMessage, sendTemplateMessageWithAttachment, sendTextMessage, sendPendingWhatsapp, sendDonorOtp, sendUtilityMessage, normalizePhone, fetchHeaderImageJpeg };
+export {
+  isWhatsAppConfigured,
+  sendTemplateMessage,
+  sendTemplateMessageWithAttachment,
+  sendTextMessage,
+  sendPendingWhatsapp,
+  sendDonorOtp,
+  sendUtilityMessage,
+  normalizePhone,
+  fetchHeaderImageJpeg,
+};

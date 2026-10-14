@@ -14,7 +14,7 @@
 // A worker is a separate process and does not inherit anything index.js did.
 import "../src/config/timezone.js";
 
-import { connectDb } from "../src/config/db.js";
+import { connectDb, closeDb } from "../src/db/pg.js";
 import { runPendingReminders } from "../src/services/pendingReminder.service.js";
 
 async function main() {
@@ -22,6 +22,7 @@ async function main() {
   const result = await runPendingReminders();
   console.log("Pending reminders pass complete:", result);
   await new Promise((r) => setTimeout(r, 500)); // let logs flush
+  await closeDb();
   process.exit(0);
 }
 

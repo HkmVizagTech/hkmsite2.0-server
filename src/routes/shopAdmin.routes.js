@@ -6,9 +6,6 @@ import upload from "../utils/multer.js";
 
 const shopAdminRouter = express.Router();
 
-// Every route here is staff-only: a valid login (authMiddleware) AND the
-// shop_admin or admin role (shopAdminMiddleware). Applied router-wide rather
-// than per-route so a future endpoint can't be added unprotected by mistake.
 shopAdminRouter.use(authMiddleware, shopAdminMiddleware);
 
 // ---- Products ----

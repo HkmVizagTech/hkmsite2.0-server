@@ -10,13 +10,13 @@ import path from "node:path";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const TEMPLATE = path.join(__dirname, "../receipt-template.pdf");
-const BACKUP   = path.join(__dirname, "../receipt-template.backup.pdf");
+const BACKUP = path.join(__dirname, "../receipt-template.backup.pdf");
 
 (async () => {
   // Always restore from backup so we start clean
   const bytes = fs.readFileSync(BACKUP);
 
-  const doc  = await PDFDocument.load(bytes);
+  const doc = await PDFDocument.load(bytes);
   const form = doc.getForm();
   const page = doc.getPages()[0];
 
@@ -30,8 +30,8 @@ const BACKUP   = path.join(__dirname, "../receipt-template.backup.pdf");
     width: 195,
     height: 12,
     borderWidth: 0,
-    borderColor: rgb(1, 1, 1),      // white — fully invisible
-    backgroundColor: rgb(1, 1, 1),  // white background, no black box
+    borderColor: rgb(1, 1, 1), // white — fully invisible
+    backgroundColor: rgb(1, 1, 1), // white background, no black box
   });
 
   const widget = field.acroField.getWidgets()[0];
@@ -43,6 +43,9 @@ const BACKUP   = path.join(__dirname, "../receipt-template.backup.pdf");
 
   // Verify
   const verify = await PDFDocument.load(updated);
-  const names  = verify.getForm().getFields().map(f => f.getName());
+  const names = verify
+    .getForm()
+    .getFields()
+    .map((f) => f.getName());
   console.log("Fields now in template:", names.join(", "));
 })();

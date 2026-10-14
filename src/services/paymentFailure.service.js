@@ -1,10 +1,5 @@
-// Why payments fail — keeps Razorpay's own explanation instead of a bare
-// "failed" status, so Admin → Donations → Payment failures can show the real
-// reasons (bank declined, UPI request expired, cancelled by the donor…) and the
-// bank / UPI-app / card-network downtimes Razorpay announced.
-
-import mongoose from "mongoose";
-import { donationModel } from "../models/donation.model.js";
+import { paymentDowntimes } from "../db/tables.js";
+import { claimUpdate, wholePaymentError } from "../domain/donationDb.js";
 
 /** The fields worth keeping from a failed Razorpay payment entity. */
 function paymentErrorFrom(p) {
@@ -29,29 +24,15 @@ function paymentErrorFrom(p) {
 async function recordPaymentFailure(donationId, payment) {
   const err = paymentErrorFrom(payment);
   if (!donationId || !err) return;
-  await donationModel.updateOne(
-    { _id: donationId, "paymentError.paymentId": { $ne: err.paymentId } }, // idempotent per payment
-    { $set: { paymentError: err }, $inc: { failedAttempts: 1 } }
+  await claimUpdate(
+    { _id: String(donationId), "paymentError.paymentId": { $ne: err.paymentId } }, // idempotent per payment
+    { $set: { paymentError: wholePaymentError(err) }, $inc: { failedAttempts: 1 } }
   );
 }
 
 // ── Razorpay downtime alerts (payment.downtime.started / updated / resolved) ──
-const downtimeSchema = new mongoose.Schema(
-  {
-    downtimeId: { type: String, index: true },
-    event: String, // started | updated | resolved
-    method: String, // upi | card | netbanking | wallet
-    instrument: mongoose.Schema.Types.Mixed, // { bank } | { psp } | { network } | { vpa_handle } …
-    severity: String, // high | medium | low
-    status: String,
-    begin: Date,
-    end: Date,
-    receivedAt: { type: Date, default: Date.now },
-  },
-  { versionKey: false }
-);
-downtimeSchema.index({ receivedAt: 1 }, { expireAfterSeconds: 30 * 24 * 60 * 60 }); // keep 30 days
-const paymentDowntimeModel = mongoose.models.paymentDowntime || mongoose.model("paymentDowntime", downtimeSchema);
+// Mongo expired these with a 30-day TTL index; Postgres has none, so old rows are pruned as new ones arrive.
+const paymentDowntimeModel = paymentDowntimes;
 
 async function recordDowntime(eventName, payload) {
   const d = payload && payload.payment && payload.payment.downtime && payload.payment.downtime.entity;
@@ -66,8 +47,14 @@ async function recordDowntime(eventName, payload) {
     begin: d.begin ? new Date(d.begin * 1000) : undefined,
     end: d.end ? new Date(d.end * 1000) : undefined,
   };
-  await paymentDowntimeModel.create(doc);
-  const what = Object.values(doc.instrument || {}).filter(Boolean).join("/") || "all";
+  await paymentDowntimes.insert(doc);
+  paymentDowntimes
+    .deleteMany({ $raw: ["received_at < now() - interval '30 days'", []] })
+    .catch((e) => console.warn("[downtime] cleanup failed:", e && e.message ? e.message : e));
+  const what =
+    Object.values(doc.instrument || {})
+      .filter(Boolean)
+      .join("/") || "all";
   console.log(`[downtime] ${doc.event} · ${doc.method || "?"} · ${what} · severity ${doc.severity || "?"}`);
 }
 

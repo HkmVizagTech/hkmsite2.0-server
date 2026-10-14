@@ -1,74 +1,53 @@
-import { donationModel } from "../models/donation.model.js";
+import { many } from "../db/pg.js";
 
+// A devotee is a donor identity aggregated from completed donations.
 const devoteeController = {
-  // ADMIN - real devotee list, aggregated from completed donations
-  // (there is no separate "devotee" collection; a devotee IS a donor)
   list: async (req, res) => {
     try {
       const { q, status, page = 1, limit = 50 } = req.query;
+      const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
-      const pipeline = [
-        { $match: { status: "completed" } },
-        {
-          $group: {
-            _id: { $ifNull: ["$donorEmail", "$donorMobile"] },
-            name: { $last: "$donorName" },
-            email: { $last: "$donorEmail" },
-            phone: { $last: "$donorMobile" },
-            city: { $last: "$prasadamAddress.city" },
-            donations: { $sum: 1 },
-            totalAmount: { $sum: "$amount" },
-            firstDonation: { $min: "$date" },
-            lastDonation: { $max: "$date" },
-          },
-        },
-        {
-          $addFields: {
-            status: {
-              $switch: {
-                branches: [
-                  { case: { $gte: ["$totalAmount", 100000] }, then: "patron" },
-                  {
-                    case: {
-                      $gte: [
-                        "$firstDonation",
-                        new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
-                      ],
-                    },
-                    then: "new",
-                  },
-                ],
-                default: "active",
-              },
-            },
-          },
-        },
-        { $sort: { totalAmount: -1 } },
-      ];
-
+      const params = [thirtyDaysAgo];
+      const bind = (v) => {
+        params.push(v);
+        return `$${params.length}`;
+      };
+      const outer = [];
       if (q) {
-        pipeline.push({
-          $match: {
-            $or: [
-              { name: { $regex: q, $options: "i" } },
-              { email: { $regex: q, $options: "i" } },
-              { phone: { $regex: q, $options: "i" } },
-            ],
-          },
-        });
+        const p = bind(String(q));
+        outer.push(`(name ~* ${p} OR email ~* ${p} OR phone ~* ${p})`);
       }
-      if (status && status !== "all") {
-        pipeline.push({ $match: { status } });
-      }
+      if (status && status !== "all") outer.push(`status = ${bind(String(status))}`);
 
-      const allResults = await donationModel.aggregate(pipeline);
+      const sql = `
+        SELECT * FROM (
+          SELECT
+            COALESCE(donor_email, donor_mobile) AS "_id",
+            (array_agg(donor_name ORDER BY id DESC))[1] AS name,
+            (array_agg(donor_email ORDER BY id DESC))[1] AS email,
+            (array_agg(donor_mobile ORDER BY id DESC))[1] AS phone,
+            (array_agg(prasadam_city ORDER BY id DESC))[1] AS city,
+            count(*)::int AS donations,
+            SUM(amount) AS "totalAmount",
+            MIN(date) AS "firstDonation",
+            MAX(date) AS "lastDonation",
+            CASE WHEN SUM(amount) >= 100000 THEN 'patron'
+                 WHEN MIN(date) >= $1 THEN 'new'
+                 ELSE 'active' END AS status
+          FROM donations
+          WHERE status = 'completed'
+          GROUP BY COALESCE(donor_email, donor_mobile)
+        ) devotees
+        ${outer.length ? `WHERE ${outer.join(" AND ")}` : ""}
+        ORDER BY "totalAmount" DESC, "_id"`;
+
+      const allResults = await many(sql, params);
       const pageNum = Math.max(1, parseInt(page, 10) || 1);
       const lim = Math.min(200, Math.max(1, parseInt(limit, 10) || 50));
       const start = (pageNum - 1) * lim;
-      const devotees = allResults.slice(start, start + lim);
 
       res.status(200).json({
-        devotees,
+        devotees: allResults.slice(start, start + lim),
         total: allResults.length,
         page: pageNum,
         totalPages: Math.ceil(allResults.length / lim),

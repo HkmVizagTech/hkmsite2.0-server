@@ -1,55 +1,45 @@
-/**
- * Seed script — ensures the canonical festival-donation campaigns
- * (Radhashtami, Govardhan Puja, Ekadashi) exist and deactivates test/junk
- * records so the home/donations "Festival Donations" section shows real
- * campaigns. Idempotent; safe to run again.
- *
- *   npm run seed:festival-donations            # default: also hides the navbar highlight
- *   npm run seed:festival-donations -- --keep-navbar   # don't touch site-content/navbar
- *
- * Requires MONGO_URI / MONGODB_URI in env (or .env), falls back to
- * localhost:27017/hkmvizag.
- */
+// Ensures the canonical festival-donation campaigns exist and deactivates test records.
+// Idempotent.
+//   npm run seed:festival-donations                    also sets the navbar highlight to "none"
+//   npm run seed:festival-donations -- --keep-navbar   leave site-content/navbar alone
+// Reads DATABASE_URL.
 
 import "dotenv/config";
 
-import mongoose from "mongoose";
+import { query, closeDb } from "../src/db/pg.js";
+import { siteContent } from "../src/db/tables.js";
+import { siteContentDefaults } from "../src/domain/siteContent.js";
 import { ensureDefaultFestivalDonations } from "../src/services/festivalDonationBootstrap.service.js";
-import { siteContentModel } from "../src/models/siteContent.model.js";
-
-const MONGO_URI = (process.env.MONGO_URI || process.env.MONGODB_URI || "mongodb://localhost:27017/hkmvizag").replace(
-  /\/+$/,
-  ""
-);
 
 async function seed() {
-  console.log(`Connecting to ${MONGO_URI}…`);
-  await mongoose.connect(MONGO_URI);
-  console.log("Connected.");
+  if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is not set.");
 
   const { created, skipped, deactivated } = await ensureDefaultFestivalDonations();
   created.forEach((s) => console.log(`  + created ${s}`));
   skipped.forEach((s) => console.log(`  = kept existing ${s}`));
   deactivated.forEach((t) => console.log(`  - deactivated test record: ${t}`));
 
-  const keepNavbar = process.argv.includes("--keep-navbar");
-  if (keepNavbar) {
+  if (process.argv.includes("--keep-navbar")) {
     console.log("Skipping navbar highlight update (--keep-navbar).");
   } else {
-    const content = await siteContentModel.findOneAndUpdate(
-      { key: "main" },
-      { $set: { "navbar.majorFestival": "none" } },
-      { new: true, upsert: true }
+    const defaults = siteContentDefaults();
+    await siteContent.insert({ key: "main", ...defaults }, { onConflictDoNothing: true });
+    const { rows } = await query(
+      `UPDATE site_content
+          SET navbar = jsonb_set(COALESCE(navbar, '{}'::jsonb), '{majorFestival}', '"none"'), updated_at = now()
+        WHERE key = 'main' RETURNING navbar`
     );
-    console.log(`Navbar highlight set to "none" (was auto-picking e.g. Radhashtami around its date).`);
-    console.log(`  current value: navbar.majorFestival = ${content.navbar && content.navbar.majorFestival}`);
+    console.log(
+      `Navbar highlight set to "none". current value: navbar.majorFestival = ${rows[0]?.navbar?.majorFestival}`
+    );
   }
 
   console.log(`\nDone. Created ${created.length}, skipped ${skipped.length}, deactivated ${deactivated.length}.`);
-  await mongoose.connection.close();
 }
 
-seed().catch((err) => {
-  console.error("Seed failed:", err);
-  process.exit(1);
-});
+seed()
+  .catch((err) => {
+    console.error("Seed failed:", err);
+    process.exitCode = 1;
+  })
+  .finally(closeDb);

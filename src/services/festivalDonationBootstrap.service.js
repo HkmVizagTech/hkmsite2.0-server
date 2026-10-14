@@ -1,24 +1,5 @@
-/**
- * Shared source of truth for the "current festival" donation campaigns
- * shown on the home page and /donations (served by /festival-donations/all).
- *
- * Consumed at server boot (ensureDefaultFestivalDonations) so production
- * always ships with the canonical campaigns (Radhashtami, Govardhan Puja,
- * Ekadashi), and by the standalone seed script
- * (scripts/seed-festival-donations.js) for on-demand runs. Always
- * idempotent:
- *
- *   - canonical slugs are upserted by slug (existing ones keep the admin's
- *     edits — only missing fields are filled in),
- *   - clearly-test junk records (titles like "Testing…", "fsdfsd…") are
- *     deactivated (active: false, never deleted) so they drop off the
- *     public section immediately but stay visible in the admin DB.
- *
- * Images below are the same campaign posters used by the existing
- * /radhashtami, /govardhan-puja and /ekadashi pages.
- */
-
-import { festivalDonationModel } from "../models/festivalDonation.model.js";
+import { festivalDonations } from "../db/tables.js";
+import { newId } from "../db/pg.js";
 
 const CANONICAL_SLUGS = ["radhashtami", "govardhan-puja", "ekadashi"];
 
@@ -32,7 +13,11 @@ const DEFAULT_FESTIVAL_DONATIONS = [
       "https://pub-32ade8e1209149f980ffe2aa4ddc6c99.r2.dev/media-library/1788946765218-1788946764659-Radhashtamidesk.webp",
     ],
     donationOptions: [
-      { label: "Special Puja Seva", amount: 5555, description: "Sponsor special puja arrangements for Sri Radhashtami." },
+      {
+        label: "Special Puja Seva",
+        amount: 5555,
+        description: "Sponsor special puja arrangements for Sri Radhashtami.",
+      },
       { label: "Bhog Seva", amount: 2100, description: "Offer sanctified bhog to the Lordships on Radhashtami." },
       { label: "General Donation", amount: 1100, description: "Support Radhashtami celebrations at the temple." },
     ],
@@ -89,9 +74,6 @@ const slugify = (s) =>
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
 
-// Records that clearly came from clicking around while building this
-// feature ("Testing on the server", "Testing festival locally",
-// "fsdfsddfdfsdf"…) — deactivate them so they stop appearing publicly.
 const isJunk = (doc) => {
   const haystack = `${doc.title || ""} ${doc.slug || ""} ${doc.description || ""}`.toLowerCase();
   return /test/i.test(haystack) || /fsdfsd/i.test(haystack);
@@ -104,29 +86,29 @@ async function ensureDefaultFestivalDonations() {
 
   for (const d of DEFAULT_FESTIVAL_DONATIONS) {
     const slug = slugify(d.slug);
-    const existing = await festivalDonationModel.findOne({ slug }).lean();
+    const existing = await festivalDonations.findOne({ slug }, { fields: ["slug"] });
     if (existing) {
       skipped.push(slug);
       continue;
     }
-    await festivalDonationModel.create({
+    await festivalDonations.insert({
       ...d,
+      donationOptions: d.donationOptions.map((o) => ({ _id: newId(), ...o })),
       slug,
       active: true,
-      createdBy: undefined,
     });
     created.push(slug);
   }
 
   // Deactivate (never delete) obvious test records so the public
   // festival-donation section stops showing junk — reversible in the DB.
-  const junk = await festivalDonationModel.find({
+  const junk = await festivalDonations.find({
     active: true,
     slug: { $nin: CANONICAL_SLUGS },
   });
   for (const doc of junk) {
     if (!isJunk(doc)) continue;
-    await festivalDonationModel.updateOne({ _id: doc._id }, { $set: { active: false } });
+    await festivalDonations.updateById(doc._id, { active: false });
     deactivated.push(doc.title || doc.slug);
   }
 

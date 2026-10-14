@@ -1,9 +1,10 @@
 import fs from "node:fs";
-import { mediaModel } from "../models/media.model.js";
+import { media } from "../db/tables.js";
 import { uploadToR2, deleteFromR2 } from "../utils/r2.js";
 
+const escapeLike = (s) => s.replace(/[\\%_]/g, "\\$&");
+
 const mediaController = {
-  // ADMIN — upload one or more images to the media library.
   upload: async (req, res) => {
     try {
       const files = req.files || [];
@@ -12,22 +13,26 @@ const mediaController = {
       const items = [];
       for (const file of files) {
         const up = await uploadToR2(file.path, "media-library");
-        try { fs.unlinkSync(file.path); } catch {}
-        const doc = await mediaModel.create({
-          name: (req.body.name || file.originalname || "Untitled").trim(),
-          url: up.secure_url,
-          publicId: up.public_id,
-          format: up.format,
-          width: up.width,
-          height: up.height,
-          bytes: up.bytes,
-          folder: "media-library",
-          tags: (req.body.tags || "").trim(),
-          uploadedBy: req.user?._id,
-        });
-        items.push(doc);
+        try {
+          fs.unlinkSync(file.path);
+        } catch (_) {
+          /* temp file already gone */
+        }
+        items.push(
+          await media.insert({
+            name: (req.body.name || file.originalname || "Untitled").trim(),
+            url: up.secure_url,
+            publicId: up.public_id,
+            format: up.format,
+            width: up.width,
+            height: up.height,
+            bytes: up.bytes,
+            folder: "media-library",
+            tags: (req.body.tags || "").trim(),
+            uploadedBy: req.user?._id,
+          })
+        );
       }
-
       res.status(201).json({ items });
     } catch (err) {
       console.error("media.upload error:", err);
@@ -35,7 +40,6 @@ const mediaController = {
     }
   },
 
-  // ADMIN — list with optional text search + pagination.
   list: async (req, res) => {
     try {
       const q = String(req.query.q || "").trim();
@@ -43,14 +47,12 @@ const mediaController = {
       const limit = Math.min(60, Math.max(1, parseInt(req.query.limit, 10) || 30));
 
       const filter = q
-        ? { $or: [{ name: { $regex: q, $options: "i" } }, { tags: { $regex: q, $options: "i" } }] }
+        ? { $raw: ["(name ILIKE ? OR tags ILIKE ?)", [`%${escapeLike(q)}%`, `%${escapeLike(q)}%`]] }
         : {};
-
       const [items, total] = await Promise.all([
-        mediaModel.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
-        mediaModel.countDocuments(filter),
+        media.find(filter, { sort: { createdAt: -1, _id: -1 }, skip: (page - 1) * limit, limit }),
+        media.count(filter),
       ]);
-
       res.status(200).json({ items, total, page, pages: Math.ceil(total / limit) });
     } catch (err) {
       console.error("media.list error:", err);
@@ -58,13 +60,12 @@ const mediaController = {
     }
   },
 
-  // ADMIN — rename / retag.
   update: async (req, res) => {
     try {
       const updates = {};
       if (typeof req.body.name === "string") updates.name = req.body.name.trim();
       if (typeof req.body.tags === "string") updates.tags = req.body.tags.trim();
-      const item = await mediaModel.findByIdAndUpdate(req.params.id, updates, { new: true });
+      const item = await media.updateById(req.params.id, updates);
       if (!item) return res.status(404).json({ message: "Media not found" });
       res.status(200).json({ item });
     } catch (err) {
@@ -73,17 +74,16 @@ const mediaController = {
     }
   },
 
-  // ADMIN — delete from Cloudinary and the library.
   delete: async (req, res) => {
     try {
-      const item = await mediaModel.findById(req.params.id);
+      const item = await media.findById(req.params.id);
       if (!item) return res.status(404).json({ message: "Media not found" });
       try {
         await deleteFromR2(item.publicId);
       } catch (e) {
         console.warn("media.delete R2 destroy failed:", item.publicId, e?.message);
       }
-      await item.deleteOne();
+      await media.deleteById(item._id);
       res.status(200).json({ message: "Deleted" });
     } catch (err) {
       console.error("media.delete error:", err);

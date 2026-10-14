@@ -25,8 +25,13 @@ async function main() {
   const entries = Object.entries(SEVA_IMAGES);
   entries.push(["(default / unmapped pages)", DEFAULT_SEVA_IMAGE]);
 
-  const missing = ["R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET_NAME", "R2_PUBLIC_URL"]
-    .filter((k) => !process.env[k]);
+  const missing = [
+    "R2_ACCOUNT_ID",
+    "R2_ACCESS_KEY_ID",
+    "R2_SECRET_ACCESS_KEY",
+    "R2_BUCKET_NAME",
+    "R2_PUBLIC_URL",
+  ].filter((k) => !process.env[k]);
   if (missing.length) {
     console.warn("R2 is not fully configured — missing:", missing.join(", "));
     console.warn("Every banner below will fall back to the generic approval image.\n");

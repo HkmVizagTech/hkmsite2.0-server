@@ -1,18 +1,3 @@
-// In-process read-through cache for the public totals (seva stats, donor
-// walls, campaigner pages). Replaces the former Redis cache: the API runs as a
-// single Railway instance, so a process-local map gives the same hit rate
-// without a separate Redis service to pay for and keep reachable.
-//
-// Same contract as before:
-//   - values are stored as JSON, so every reader gets its own copy (callers may
-//     slice or mutate what they get back without affecting the cache);
-//   - entries expire after their TTL;
-//   - empty results (null/undefined) are never cached;
-//   - a producer that throws propagates and nothing is cached;
-//   - cacheDel() is called when a donation completes, so totals refresh at once.
-// If the API is ever scaled to several instances, each keeps its own copy and
-// may serve totals up to one TTL old — acceptable for these public counters.
-
 const MAX_ENTRIES = 1000; // keys are bounded (one per seva/category/campaigner); this is a safety cap
 
 const store = new Map(); // key -> { json, expiresAt }
@@ -67,10 +52,6 @@ async function cacheDel(...keys) {
   return removed;
 }
 
-/**
- * Read-through cache: the cached value when present, otherwise runs
- * `producer()`, caches a non-empty result and returns it.
- */
 async function cacheWrap(key, ttlSeconds, producer) {
   const cached = await cacheGet(key);
   if (cached !== null && cached !== undefined) {

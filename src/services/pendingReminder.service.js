@@ -1,43 +1,9 @@
-// src/services/pendingReminder.service.js
-//
-// Pending-transaction WhatsApp reminder — mirrors the flow already running
-// on the Annadana/Subhojanam site (sendPendingWhatsappReminders script +
-// /api/internal/send-pending-reminders endpoint), adapted for this site's
-// donation model and many sevas.
-//
-// Two kinds of donation get the nudge, both with the identical "pending"
-// wording (donors don't need the distinction, and it keeps one approved
-// template covering everything):
-//   "pending" — the Razorpay order was created but never captured: an
-//               abandoned checkout, or a payment still in progress.
-//   "failed"  — Razorpay sent payment.failed for the order and no capture was
-//               found (see payment.controller.js). The donor tried and the
-//               payment did not go through, so the nudge is if anything more
-//               useful here than for an abandoned checkout.
-// Once such a donation is older than the cutoff (default 3 minutes, like
-// Annadan; DRM asks a caller to ring at 5 if it is still not paid) and we haven't already messaged the donor, we send the approved
-// "pending transaction" WhatsApp template with that donation's own seva name.
-//
-// The whatsappPendingReminderSent flag makes this idempotent: it is set only
-// after a successful send, so overlapping runs (in-process scheduler + an
-// external cron hitting the internal endpoint) can never double-message.
-
-import { donationModel } from "../models/donation.model.js";
+import { getPool } from "../db/pg.js";
+import { donations, claimUpdate } from "../domain/donationDb.js";
 import { isWhatsAppConfigured, sendPendingWhatsapp } from "./whatsapp.service.js";
 import { isGupshupConfigured, sendPendingWhatsappViaGupshup, FALLBACK_HEADER_IMAGE } from "./gupshup.service.js";
 import { sanitizeBannerImage, fetchPageOgImage, absolutize } from "./pageBanner.service.js";
 
-// Which BSP sends the pending reminder.
-//
-//   "flaxxa"  (default) — the main +91… business number. Its template button
-//              URL has to be static because Flaxxa cannot fill a {{1}} in a
-//              button link, so the seva link is written into the body text.
-//   "gupshup"          — the 917075176108 number. Gupshup DOES fill dynamic
-//              URL buttons, so the reminder keeps its per-seva
-//              "Transaction Link" button. Needs GUPSHUP_API_KEY,
-//              GUPSHUP_APP_NAME and GUPSHUP_PENDING_TEMPLATE_ID.
-//
-// Switch with PENDING_WHATSAPP_PROVIDER once the Gupshup template is approved.
 const PROVIDER = String(process.env.PENDING_WHATSAPP_PROVIDER || "flaxxa").toLowerCase();
 
 function resolveProvider() {
@@ -57,28 +23,14 @@ function resolveProvider() {
   };
 }
 
-// How old a pending donation must be before we nudge the donor (3 minutes —
-// enough for UPI/auto-debit flows to settle or fail visibly, and for the
-// donor to have genuinely abandoned an in-progress checkout).
 const CUTOFF_MINUTES = Number(process.env.PENDING_REMINDER_CUTOFF_MINUTES || 3);
 
-// ...and how old is TOO old. Without this floor, the very first run after
-// deploy would sweep up every pending/failed donation ever recorded and
-// message donors about attempts they abandoned months ago. It also keeps the
-// job sane in steady state: a nudge about a checkout from last week is noise,
-// not a reminder. Anything older than this is ignored permanently — it never
-// becomes eligible again, so nothing accumulates waiting to be released.
 const MAX_AGE_HOURS = Number(process.env.PENDING_REMINDER_MAX_AGE_HOURS || 24);
 
 // Batch size per run — keeps each pass short and lets the schedule loop
 // around to remaining records on later runs.
 const BATCH_SIZE = Number(process.env.PENDING_REMINDER_BATCH_SIZE || 100);
 
-// How many failed sends before a donation is left alone. The job marks a
-// donation reminded only on a real success, so a permanently unsendable record
-// would otherwise be retried every pass forever — and since the batch is
-// ordered oldest-first with a fixed limit, a pile of them would crowd newer
-// donations out of the batch. Their last error is kept on the record.
 const MAX_ATTEMPTS = Number(process.env.PENDING_REMINDER_MAX_ATTEMPTS || 3);
 
 // Donation statuses that earn a reminder. Both get the same message.
@@ -88,32 +40,11 @@ const REMINDER_STATUSES = String(process.env.PENDING_REMINDER_STATUSES || "pendi
   .map((s) => s.trim())
   .filter(Boolean);
 
-// A donor whose payment fails or stalls usually retries straight away, and
-// each attempt creates its OWN donation record — so the failed record lingers
-// while the retry succeeds. Telling someone "your transaction of Rs.2100 is
-// pending" minutes after their money actually went through is worse than
-// saying nothing: it reads as "your payment did not work", and some donors
-// will pay a second time.
-//
-// So immediately before each send we re-check the database: has this mobile
-// number completed a donation since it made this attempt? If yes, stay quiet.
-//
-// The lookback grace covers the case where the successful payment is recorded
-// a little BEFORE the stalled record's own timestamp (clock skew, or a webhook
-// landing out of order). It is deliberately small: a wide window would
-// suppress legitimate reminders for regular donors, who by definition have
-// completed donations in their history. Set to 0 to disable the check.
-const RETRY_GRACE_MINUTES = Number(
-  process.env.PENDING_REMINDER_SKIP_IF_COMPLETED_WITHIN_MINUTES || 15
-);
+const RETRY_GRACE_MINUTES = Number(process.env.PENDING_REMINDER_SKIP_IF_COMPLETED_WITHIN_MINUTES || 15);
 
 // Mirrors SUCCESS_STATUSES in donationAdmin.controller.js.
 const SUCCESS_STATUSES = ["completed"];
 
-// donorMobile is stored as the donor typed it, so the same person can appear
-// as "9951141915", "919951141915" or "+91 99511 41915" across attempts.
-// Match on the common variants of the last 10 digits — exact values rather
-// than a suffix regex, so the donorMobile index is still usable.
 function mobileVariants(raw) {
   const digits = String(raw || "").replace(/\D/g, "");
   if (digits.length < 10) return digits ? [String(raw), digits] : [];
@@ -121,50 +52,27 @@ function mobileVariants(raw) {
   return [last10, `91${last10}`, `+91${last10}`, `0${last10}`, String(raw)];
 }
 
-/**
- * True when this donor has already completed a donation since making this
- * attempt — i.e. the pending/failed record is a superseded retry and the
- * money is in.
- */
 async function donorAlreadyCompleted(donation) {
   if (!RETRY_GRACE_MINUTES || !donation.donorMobile) return false;
 
   const variants = mobileVariants(donation.donorMobile);
   if (!variants.length) return false;
 
-  const since = new Date(
-    new Date(donation.createdAt).getTime() - RETRY_GRACE_MINUTES * 60 * 1000
-  );
+  const since = new Date(new Date(donation.createdAt).getTime() - RETRY_GRACE_MINUTES * 60 * 1000);
 
-  const completed = await donationModel
-    .findOne({
+  const completed = await donations.findOne(
+    {
       _id: { $ne: donation._id },
       donorMobile: { $in: variants },
       status: { $in: SUCCESS_STATUSES },
       createdAt: { $gte: since },
-    })
-    .select("_id amount sevaName createdAt")
-    .lean();
+    },
+    { sort: { createdAt: 1, _id: 1 }, fields: ["amount", "sevaName", "createdAt"] }
+  );
 
   return completed || false;
 }
 
-// ---------------------------------------------------------------------------
-// Header image — the hero banner of the page the donation came from.
-//
-// Resolved in this order (see resolveSevaImage):
-//   1. donation.bannerImage — the page's own desktop hero banner, sent by the
-//      page with its order. This is what keeps FUTURE pages correct without a
-//      server change: a new page only has to pass its banner when it creates
-//      the order (every current page does).
-//   2. SEVA_IMAGES below — for donations created before pages sent their
-//      banner, and for pages that don't send one (Subhojanam).
-//   3. The og:image of the live page — on the festival pages this is the
-//      desktop hero banner, so even a brand-new page that forgot step 1 gets
-//      its own banner rather than another campaign's.
-//   4. DEFAULT_SEVA_IMAGE — a neutral image. Never another campaign's banner:
-//      that was the bug where a Pitru Paksha donor got the Brick Seva banner.
-// ---------------------------------------------------------------------------
 const R2 = "https://pub-32ade8e1209149f980ffe2aa4ddc6c99.r2.dev/media-library/";
 
 const SEVA_IMAGES = {
@@ -175,19 +83,19 @@ const SEVA_IMAGES = {
   "gita-daan-seva": R2 + "1786195248602-1786195247509-gita-hero-desk.webp",
   "alankara-vastra-seva": R2 + "1785573838202-1785573837372-ChatGPTImageAug12026021301PM.webp",
   // Subhojanam reuses the Annadana banner, per requirement.
-  "subhojanam": R2 + "1785586501452-1785586500800-annadan-banner-desk.webp",
+  subhojanam: R2 + "1785586501452-1785586500800-annadan-banner-desk.webp",
   // All Janmashtami pages share the same banner.
-  "janmashtami": R2 + "1787055655171-1787055654678-janmashtami2banner.webp",
-  "janmashtami3": R2 + "1787055655171-1787055654678-janmashtami2banner.webp",
+  janmashtami: R2 + "1787055655171-1787055654678-janmashtami2banner.webp",
+  janmashtami3: R2 + "1787055655171-1787055654678-janmashtami2banner.webp",
   "donations/janmashtami2": R2 + "1787055655171-1787055654678-janmashtami2banner.webp",
   // Festival pages — desktop hero banners, same as each page's DESKTOP_BANNER.
   "pitru-paksha": R2 + "1790235076658-1790235074922-pitru-paksha-desk.webp",
-  "radhashtami": R2 + "1788946765218-1788946764659-Radhashtamidesk.webp",
+  radhashtami: R2 + "1788946765218-1788946764659-Radhashtamidesk.webp",
   "govardhan-puja": R2 + "1789476038584-1789476037499-govardhan-desk.webp",
-  "ekadashi": R2 + "1790154963930-1790154963675-ekadashidesk.webp",
+  ekadashi: R2 + "1790154963930-1790154963675-ekadashidesk.webp",
   "shayani-ekadashi": R2 + "1790154963930-1790154963675-ekadashidesk.webp",
-  "chaturmas": R2 + "1786539472426-1786539471654-Chaturmasbanner.webp",
-  "vijayadashami": R2 + "1791881259236-1791881258272-Dussehradesk.webp",
+  chaturmas: R2 + "1786539472426-1786539471654-Chaturmasbanner.webp",
+  vijayadashami: R2 + "1791881259236-1791881258272-Dussehradesk.webp",
   "special-occasion": R2 + "1784005845291-1784005844212-ChatGPTImageJul142026104033AM.png",
   // /donate/<seva> pages share the banner of the matching campaign page.
   "donate/square-foot-seva": R2 + "1786528614525-1786528613759-ChatGPTImageAug122026022735PM.webp",
@@ -198,25 +106,14 @@ const SEVA_IMAGES = {
   "donate/vastra-seva": R2 + "1785573838202-1785573837372-ChatGPTImageAug12026021301PM.webp",
 };
 
-// Neutral fallback header image, used only when nothing above finds a banner.
-//
-// This must NOT be empty: the template has an IMAGE header, and Meta rejects
-// the entire send with "(#131008) Required parameter is missing" when no
-// header media is supplied. It must also NOT be a campaign banner — this used
-// to be the Brick Seva banner, which is how unmapped pages (Pitru Paksha,
-// Radhashtami, Govardhan Puja…) ended up advertising Brick Seva. Default is
-// a neutral deity photo (JPEG, so Meta accepts it as-is); override with
-// WAPI_PENDING_IMAGE, and the template's approved sample is the last resort.
 const DEFAULT_SEVA_IMAGE =
-  process.env.WAPI_PENDING_IMAGE ||
-  R2 + "1783677419371-1783677418690-DietyPhotos.jpeg" ||
-  FALLBACK_HEADER_IMAGE;
+  process.env.WAPI_PENDING_IMAGE || R2 + "1783677419371-1783677418690-DietyPhotos.jpeg" || FALLBACK_HEADER_IMAGE;
 
-// Reduces a sourcePage to its base page so campaigner/deep-link variants map
-// to the same banner as their parent page, e.g. "/janmashtami/c/xyz" ->
-// "janmashtami", "/sqft-seva-campaign/c/xyz" -> "sqft-seva-campaign".
 function baseSourcePage(sourcePage) {
-  return String(sourcePage || "").replace(/^\/+/, "").replace(/\/c\/[^/]+$/, "").replace(/\/+$/, "");
+  return String(sourcePage || "")
+    .replace(/^\/+/, "")
+    .replace(/\/c\/[^/]+$/, "")
+    .replace(/\/+$/, "");
 }
 
 /** Static lookup only (steps 2 and 4) — kept for callers that can't await. */
@@ -225,16 +122,7 @@ function getSevaImage(donation) {
   return SEVA_IMAGES[sourcePage] || DEFAULT_SEVA_IMAGE;
 }
 
-/**
- * The hero banner of the page this donation came from (steps 1–4 above).
- * Never throws; always returns a URL.
- *
- * @returns {Promise<{url: string, source: "donation"|"map"|"live-page"|"default"}>}
- */
 async function resolveSevaImage(donation) {
-  // 1. Banner the page sent with the order. Re-checked here as well as at
-  //    order time, so records written before the allowlist existed can't
-  //    smuggle anything through.
   const stored = sanitizeBannerImage(donation.bannerImage);
   if (stored) return { url: absolutize(stored), source: "donation" };
 
@@ -265,39 +153,29 @@ async function resolveSevaImage(donation) {
 // sourcePage values that are markers, not pages on the site.
 const NON_PAGE_SOURCES = new Set(["admin-manual", "recovered-subscription-backfill", "unknown"]);
 
-// The 6 core sevas map their donation category and seva-name keywords to the
-// seva's dedicated campaign page. We use this for the footer button so a
-// pending donation for (say) Brick Seva points at /brick-seva-campaign
-// instead of a generic page.
 const SEVA_LINK_SUFFIXES = [
   { types: ["SQFT"], keys: ["square foot", "square feet", "sq ft", "sqft"], path: "sqft-seva-campaign" },
   { types: ["BRICK"], keys: ["brick"], path: "brick-seva-campaign" },
-  { types: ["ANNADAAN", "ANN", "ANNADANA"], keys: ["anna daan", "anna-daan", "annadaan", "annadana", "annadan"], path: "anna-daan-seva" },
+  {
+    types: ["ANNADAAN", "ANN", "ANNADANA"],
+    keys: ["anna daan", "anna-daan", "annadaan", "annadana", "annadan"],
+    path: "anna-daan-seva",
+  },
   { types: ["GO SEVA", "GOSEVA"], keys: ["gau seva", "gau-seva", "go seva", "cow", "goshala"], path: "gau-seva" },
-  { types: ["BD", "GITA"], keys: ["gita daan", "gita-daan", "gita dan", "gita", "bhagavad gita"], path: "gita-daan-seva" },
+  {
+    types: ["BD", "GITA"],
+    keys: ["gita daan", "gita-daan", "gita dan", "gita", "bhagavad gita"],
+    path: "gita-daan-seva",
+  },
   { types: ["GDGD", "VASTRA"], keys: ["vastra", "alankara", "alankar"], path: "alankara-vastra-seva" },
 ];
 
-// Source pages that are festival / standalone campaign pages. These keep their
-// own link in the reminder even when the seva name resembles a core seva, so a
-// Janmashtami "Vastrabharana" donation returns to Janmashtami, not the
-// standalone Vastra campaign.
 const FESTIVAL_PAGES = new Set([
   "janmashtami",
   "janmashtami3",
   "donations/janmashtami2",
-  // /ekadashi is the reusable Ekadashi campaign page; "shayani-ekadashi" is
-  // its pre-rename slug, kept so pending records from the old page still link
-  // back correctly.
   "ekadashi",
   "shayani-ekadashi",
-  // The standalone /donations page is a multi-seva page in its own right, not
-  // a route into the individual seva campaigns. Without this entry it fell
-  // through to the seva matcher below: every donation from it carries
-  // type "ANNADAAN" or "GO SEVA", so every pending/failed reminder sent the
-  // donor to /anna-daan-seva or /gau-seva instead of back to /donations —
-  // a different page, with different tiers and different wording from the one
-  // they had actually been using.
   "donations",
   "special-occasion",
   "subhojanam",
@@ -310,29 +188,17 @@ const FESTIVAL_PAGES = new Set([
   "chaturmas",
 ]);
 
-// Human-readable campaign name for the festival pages, keyed by base
-// sourcePage. This is what turns a bare "Abhisheka Seva" in the reminder into
-// "Abhisheka Seva (Sri Krishna Janmashtami)" — festival seva names are generic
-// enough that a donor who abandoned a checkout during a festival will not
-// place them without the occasion.
-//
-// Only festival pages belong here. On the 6 core seva pages the seva name IS
-// the campaign ("Brick Seva" on /brick-seva-campaign), so a label there would
-// only repeat itself — and buildPendingFields would drop it anyway.
 const CAMPAIGN_LABELS = {
   janmashtami: "Sri Krishna Janmashtami",
   janmashtami3: "Sri Krishna Janmashtami",
   "donations/janmashtami2": "Sri Krishna Janmashtami",
-  "ekadashi": "Ekadashi",
+  ekadashi: "Ekadashi",
   "shayani-ekadashi": "Shayani Ekadashi", // legacy pending records only
   chaturmas: "Chaturmas",
   vijayadashami: "Vijayadashami",
   "special-occasion": "Special Occasion Seva",
 };
 
-// "sri-krishna-janmashtami" -> "Sri Krishna Janmashtami". Used for the
-// festivalSlug fallback below, so the label is presentable even when nobody
-// remembered to add the page to CAMPAIGN_LABELS.
 function prettifySlug(slug) {
   return String(slug || "")
     .split(/[-_/\s]+/)
@@ -341,40 +207,26 @@ function prettifySlug(slug) {
     .join(" ");
 }
 
-/**
- * The festival/campaign to name in the reminder, or "" for pages that don't
- * need one.
- *
- * Falls back to the donation's own festivalSlug so a festival page added after
- * this file was last edited still gets context automatically. That fallback is
- * self-limiting in exactly the right way: only the festival pages send
- * festivalSlug with their order (janmashtami x3 and chaturmas today), so the
- * core seva pages stay unlabelled without needing an exclusion list.
- */
 function resolveCampaignLabel(donation) {
   const basePage = baseSourcePage(donation.sourcePage);
   if (CAMPAIGN_LABELS[basePage]) return CAMPAIGN_LABELS[basePage];
 
-  const slug = String(donation.festivalSlug || "").trim().replace(/^\/+|\/+$/g, "");
+  const slug = String(donation.festivalSlug || "")
+    .trim()
+    .replace(/^\/+|\/+$/g, "");
   return slug ? prettifySlug(slug) : "";
 }
 
-// Resolves the footer button path for a donation. Festival/campaign pages keep
-// their own link (so a Janmashtami donation returns to Janmashtami, not a
-// standalone seva). Otherwise, a match on one of the 6 core sevas maps to that
-// seva's campaign page; anything unknown falls back to the sourcePage.
 function resolveLinkSuffix(donation) {
   const basePage = baseSourcePage(donation.sourcePage);
 
-  // Festival / standalone campaign pages — always keep their own link so the
-  // donor returns to the page they originated from. Any donation carrying a
-  // festivalSlug counts too, so a festival page added later isn't redirected
-  // to a core seva page just because its seva is called "Annadana Seva".
   if (basePage && (FESTIVAL_PAGES.has(basePage) || String(donation.festivalSlug || "").trim())) {
     return basePage;
   }
 
-  const typeStr = String(donation.type || "").trim().toUpperCase();
+  const typeStr = String(donation.type || "")
+    .trim()
+    .toUpperCase();
   const nameStr = String(donation.sevaName || "").toLowerCase();
 
   for (const mapping of SEVA_LINK_SUFFIXES) {
@@ -388,19 +240,8 @@ function resolveLinkSuffix(donation) {
   return basePage || "donate";
 }
 
-// Pages whose checkout understands ?seva=<slug>&amount=<rupees> and will open
-// pre-filled. Keyed by the resolved link path (what the donor is actually sent
-// to), not the sourcePage. A page missing from this set still gets a working
-// bare link — the deep link is an enhancement, never a requirement.
 const DEEP_LINK_PAGES = new Set(["janmashtami", "janmashtami3", "donations/janmashtami2"]);
 
-// Fallback title -> slug map for the Janmashtami sevas, used only for
-// donations created BEFORE the pages started sending sevaSlug with the order.
-// New donations carry their own slug and never reach this table, so it does
-// not need maintaining as sevas change year to year — it only has to keep
-// matching the backlog of pending records still inside the 24h window.
-//
-// Keys are normalized (lowercase, punctuation collapsed to single spaces).
 const LEGACY_SEVA_SLUGS = {
   "annadana seva": "annadana",
   "gau seva": "gau-seva",
@@ -422,13 +263,6 @@ function normalizeSevaName(value) {
     .trim();
 }
 
-/**
- * The seva's slug on its page, or "" when we can't establish one.
- *
- * Prefers the slug stored on the donation at order time — that is the exact
- * value the page matches on, and survives a seva being renamed. Falls back to
- * the title map above for records created before that field existed.
- */
 function resolveSevaSlug(donation) {
   const stored = String(donation.sevaSlug || "").trim();
   if (stored) return stored;
@@ -436,11 +270,6 @@ function resolveSevaSlug(donation) {
   return LEGACY_SEVA_SLUGS[normalizeSevaName(donation.sevaName)] || "";
 }
 
-/**
- * Deep-link params for the reminder's link, or null when this donation's page
- * can't use them. Returning null (rather than a partial query) is what keeps
- * every other page's link exactly as it is today.
- */
 function resolveLinkQuery(donation, linkSuffix) {
   if (!DEEP_LINK_PAGES.has(linkSuffix)) return null;
 
@@ -449,59 +278,66 @@ function resolveLinkQuery(donation, linkSuffix) {
 
   const query = { seva };
 
-  // Restore the amount too, so the donor's only remaining step is to pay. 100
-  // is the page's own minimum — below it the page would reject the value, so
-  // it is better to let the donor pick again than to pre-fill something the
-  // form refuses.
   const amount = Math.round(Number(donation.amount));
   if (Number.isFinite(amount) && amount >= 100) query.amount = String(amount);
 
   return query;
 }
 
-/**
- * Finds pending donations that are old enough and un-reminded, sends each one
- * the pending-transaction WhatsApp message, and marks whatsappPendingReminderSent.
- *
- * Never throws for individual failures — a bad phone number or a Flaxxa error
- * on one donation must not stop the rest of the batch (same as Annadan).
- *
- * @returns {Promise<{skipped?: boolean, reason?: string, checked: number, sent: number, failed: number}>}
- */
 async function runPendingReminders() {
   const provider = resolveProvider();
   if (!provider.configured) {
     return { skipped: true, reason: provider.reason, provider: provider.name, checked: 0, sent: 0, failed: 0 };
   }
 
+  const lockClient = await getPool().connect();
+  try {
+    const { rows } = await lockClient.query("SELECT pg_try_advisory_lock(hashtext('pending-reminders')) AS ok");
+    if (!rows[0].ok) {
+      return { skipped: true, reason: "already_running", provider: provider.name, checked: 0, sent: 0, failed: 0 };
+    }
+    try {
+      return await runPass(provider);
+    } finally {
+      await lockClient.query("SELECT pg_advisory_unlock(hashtext('pending-reminders'))").catch(() => {});
+    }
+  } finally {
+    lockClient.release();
+  }
+}
+
+const markReminded = (donation) =>
+  claimUpdate(
+    { _id: String(donation._id), whatsappPendingReminderSent: { $ne: true } },
+    { whatsappPendingReminderSent: true }
+  );
+
+/** Donations due a reminder right now, oldest first. */
+async function findReminderCandidates(cutoff, floor) {
+  return donations.find(
+    {
+      status: { $in: REMINDER_STATUSES },
+      createdAt: { $lte: cutoff, $gte: floor },
+      whatsappPendingReminderSent: { $ne: true },
+      // Give up on records that have already failed MAX_ATTEMPTS times.
+      whatsappPendingReminderAttempts: { $lt: MAX_ATTEMPTS },
+      // Recurring first-charges stay "pending" until the subscription activates.
+      isRecurring: { $ne: true },
+      // PhonePe / UPI fallback opened or claimed: an admin is matching it.
+      "upiFallback.status": { $nin: ["opened", "claimed", "matched"] },
+    },
+    { sort: { createdAt: 1, _id: 1 }, limit: BATCH_SIZE }
+  );
+}
+
+async function runPass(provider) {
   const now = Date.now();
   // Old enough to have genuinely stalled...
   const cutoff = new Date(now - CUTOFF_MINUTES * 60 * 1000);
   // ...but recent enough that the donor still remembers making the attempt.
   const floor = new Date(now - MAX_AGE_HOURS * 60 * 60 * 1000);
 
-  const pendingDonations = await donationModel
-    .find({
-      status: { $in: REMINDER_STATUSES },
-      createdAt: { $lte: cutoff, $gte: floor },
-      whatsappPendingReminderSent: { $ne: true },
-      // Give up on records that have already failed MAX_ATTEMPTS times.
-      // ($lt alone would not match documents predating this field.)
-      $or: [
-        { whatsappPendingReminderAttempts: { $exists: false } },
-        { whatsappPendingReminderAttempts: { $lt: MAX_ATTEMPTS } },
-      ],
-      // Skip recurring/subscription first-charges — those stay "pending"
-      // until the subscription activates, and the donor already authorised
-      // autopay, so a "donation not confirmed" nudge would be wrong here.
-      isRecurring: { $ne: true },
-      // The donor opened PhonePe / a UPI app from the fallback (and may have
-      // paid there) or told us they paid; an admin is matching it, so a
-      // "payment pending" nudge would be wrong.
-      "upiFallback.status": { $nin: ["opened", "claimed", "matched"] },
-    })
-    .sort({ createdAt: 1 })
-    .limit(BATCH_SIZE);
+  const pendingDonations = await findReminderCandidates(cutoff, floor);
 
   let sent = 0;
   let failed = 0;
@@ -509,23 +345,19 @@ async function runPendingReminders() {
 
   for (const donation of pendingDonations) {
     if (!donation.donorMobile) {
-      // No phone on record — nothing to message; mark it so we don't re-check
-      // this record forever on every pass.
-      donation.whatsappPendingReminderSent = true;
-      await donation.save();
+      // No phone on record — mark it so we don't re-check this record forever.
+      await markReminded(donation);
       continue;
     }
 
-    // Superseded retry — this donor's money already went through, so a
-    // "still pending" message would only confuse them into paying twice.
+    // Superseded retry — this donor's money already went through.
     const completedInstead = await donorAlreadyCompleted(donation);
     if (completedInstead) {
-      donation.whatsappPendingReminderSent = true;
-      await donation.save();
+      await markReminded(donation);
       skipped += 1;
       console.log(
         `Pending reminder skipped for ${donation.status} donation ${String(donation._id)} —`,
-        `donor completed donation ${String(completedInstead._id)} instead`,
+        `donor completed donation ${String(completedInstead._id)} instead`
       );
       continue;
     }
@@ -545,25 +377,25 @@ async function runPendingReminders() {
           sourcePage: donation.sourcePage,
           sevaImage: banner.url,
           campaignLabel: resolveCampaignLabel(donation),
-        },
+        }
       );
-      donation.whatsappPendingReminderSent = true;
-      await donation.save();
+      await markReminded(donation);
       sent += 1;
       console.log(
         `Pending reminder sent via ${provider.name} for ${donation.status} donation`,
         String(donation._id),
         "->",
         donation.donorMobile,
-        `(banner: ${banner.source})`,
+        `(banner: ${banner.source})`
       );
     } catch (err) {
       failed += 1;
       const message = err && err.message ? err.message : String(err);
-      donation.whatsappPendingReminderAttempts = (donation.whatsappPendingReminderAttempts || 0) + 1;
-      donation.whatsappPendingReminderError = message.slice(0, 500);
       try {
-        await donation.save();
+        await donations.updateById(donation._id, {
+          $inc: { whatsappPendingReminderAttempts: 1 },
+          whatsappPendingReminderError: message.slice(0, 500),
+        });
       } catch (saveErr) {
         console.error("Could not record reminder failure for donation", String(donation._id), saveErr.message);
       }
@@ -572,7 +404,9 @@ async function runPendingReminders() {
         String(donation._id),
         err && err.response && err.response.data
           ? JSON.stringify(err.response.data)
-          : (err && err.message ? err.message : err),
+          : err && err.message
+            ? err.message
+            : err
       );
     }
   }
@@ -592,6 +426,7 @@ async function runPendingReminders() {
 
 export {
   runPendingReminders,
+  findReminderCandidates,
   SEVA_IMAGES,
   DEFAULT_SEVA_IMAGE,
   getSevaImage,

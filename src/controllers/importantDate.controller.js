@@ -1,9 +1,13 @@
-import { importantDateModel } from "../models/importantDate.model.js";
+import { importantDates } from "../db/tables.js";
+import { validateDoc, pick, toDate } from "../domain/validate.js";
+
+const TYPES = ["Ekadashi", "Festival", "Other"];
+const EDITABLE = ["title", "date", "description", "type"];
 
 const importantDateController = {
   list: async (req, res) => {
     try {
-      const dates = await importantDateModel.find().sort({ date: 1 });
+      const dates = await importantDates.find({}, { sort: { date: 1, _id: 1 } });
       res.status(200).json({ dates });
     } catch (err) {
       res.status(500).json({ message: "Server error", error: err.message });
@@ -12,7 +16,7 @@ const importantDateController = {
 
   get: async (req, res) => {
     try {
-      const date = await importantDateModel.findById(req.params.id);
+      const date = await importantDates.findById(req.params.id);
       if (!date) return res.status(404).json({ message: "Not found" });
       res.status(200).json({ date });
     } catch (err) {
@@ -23,12 +27,13 @@ const importantDateController = {
   create: async (req, res) => {
     try {
       const { title, date, description, type } = req.body;
-      const newDate = await importantDateModel.create({
+      validateDoc("importantDate", { title, date, type }, { required: ["title", "date"], enums: { type: TYPES } });
+      const newDate = await importantDates.insert({
         title,
-        date,
+        date: toDate(date),
         description,
         type,
-        createdBy: req.user.userId
+        createdBy: req.user.userId,
       });
       res.status(201).json({ message: "Created", date: newDate });
     } catch (err) {
@@ -38,11 +43,10 @@ const importantDateController = {
 
   update: async (req, res) => {
     try {
-      const updated = await importantDateModel.findByIdAndUpdate(
-        req.params.id,
-        req.body,
-        { new: true }
-      );
+      const patch = pick(req.body || {}, EDITABLE);
+      validateDoc("importantDate", patch, { enums: { type: TYPES } });
+      if (patch.date !== undefined) patch.date = toDate(patch.date);
+      const updated = await importantDates.updateById(req.params.id, patch);
       if (!updated) return res.status(404).json({ message: "Not found" });
       res.json({ message: "Updated", date: updated });
     } catch (err) {
@@ -52,7 +56,7 @@ const importantDateController = {
 
   delete: async (req, res) => {
     try {
-      const deleted = await importantDateModel.findByIdAndDelete(req.params.id);
+      const deleted = await importantDates.deleteById(req.params.id);
       if (!deleted) return res.status(404).json({ message: "Not found" });
       res.json({ message: "Deleted" });
     } catch (err) {

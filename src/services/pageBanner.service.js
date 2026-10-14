@@ -1,30 +1,5 @@
-// src/services/pageBanner.service.js
-//
-// Works out which hero banner belongs to the page a donation came from, so the
-// pending-payment WhatsApp reminder shows THAT page's banner as its header —
-// a Pitru Paksha donor sees the Pitru Paksha banner, not Brick Seva.
-//
-// Two helpers live here:
-//
-//   sanitizeBannerImage(url) — used by createOrder to decide whether the
-//       `bannerImage` a page sent with its order may be stored. Only images on
-//       our own hosts are accepted (see ALLOWED_BANNER_SOURCES): the donor's
-//       mobile number on an order is whatever was typed into the form, so an
-//       open field would let anyone make our business number send an
-//       arbitrary picture to an arbitrary phone.
-//
-//   fetchPageOgImage(page) — fallback for donations that carry no
-//       bannerImage (records created before pages started sending it, or a
-//       page that forgot to). Reads the og:image of the live page, which on
-//       the festival pages is the desktop hero banner. Cached per page.
-
 import { SITE_URL } from "./pendingMessage.util.js";
 
-// Hosts (and optional path prefixes) a stored banner may point at. Everything
-// the media library uploads lives on the R2 public bucket; a few older pages
-// still use the Cloudinary account; relative "/assets/…" paths are served by
-// the site itself. Extend with PENDING_BANNER_ALLOWED_SOURCES (comma-separated
-// "host" or "host/path-prefix" entries) without a code change.
 const ALLOWED_BANNER_SOURCES = [
   "pub-32ade8e1209149f980ffe2aa4ddc6c99.r2.dev",
   "res.cloudinary.com/ddmzeqpkc/",
@@ -57,10 +32,6 @@ function absolutize(url) {
   return `${SITE_URL}${value.startsWith("/") ? "" : "/"}${value}`;
 }
 
-/**
- * The banner URL to store on a donation, or undefined when the value is
- * missing, malformed, or points anywhere other than our own image hosts.
- */
 function sanitizeBannerImage(raw) {
   const value = String(raw || "").trim();
   if (!value || value.length > MAX_BANNER_URL_LENGTH) return undefined;
@@ -82,10 +53,6 @@ function sanitizeBannerImage(raw) {
   );
   return allowed ? value : undefined;
 }
-
-// ---------------------------------------------------------------------------
-// og:image lookup
-// ---------------------------------------------------------------------------
 
 // Set PENDING_BANNER_LIVE_LOOKUP=false to stop the reminder job requesting
 // pages from the live site.
@@ -124,12 +91,6 @@ function extractOgImage(html) {
   return null;
 }
 
-/**
- * og:image of https://<site>/<page>, absolute, or null when the page can't be
- * read. Never throws.
- *
- * @param {string} page - base page path without leading slash, e.g. "pitru-paksha"
- */
 async function fetchPageOgImage(page) {
   const path = String(page || "").replace(/^\/+|\/+$/g, "");
   // Only plain page paths — never anything that could steer the request

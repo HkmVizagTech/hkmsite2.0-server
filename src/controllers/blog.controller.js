@@ -1,6 +1,9 @@
-import { blogModel, BLOG_CATEGORIES } from "../models/blog.model.js";
-import { uploadToR2 } from "../utils/r2.js";
 import fs from "node:fs";
+import { blogs } from "../db/tables.js";
+import { query, many } from "../db/pg.js";
+import { uploadToR2 } from "../utils/r2.js";
+import { BLOG_CATEGORIES, sanitizeBlogHtml, computeReadTime } from "../domain/blog.js";
+import { validateDoc, toBool } from "../domain/validate.js";
 
 const slugify = (s) =>
   String(s || "")
@@ -15,10 +18,9 @@ const ensureUniqueSlug = async (base, excludeId) => {
   let slug = base || `post-${Date.now()}`;
   let n = 1;
   while (true) {
-    const query = { slug };
-    if (excludeId) query._id = { $ne: excludeId };
-    const exists = await blogModel.findOne(query).lean();
-    if (!exists) return slug;
+    const filter = { slug };
+    if (excludeId) filter._id = { $ne: excludeId };
+    if (!(await blogs.findOne(filter, { fields: ["slug"] }))) return slug;
     n += 1;
     slug = `${base}-${n}`;
   }
@@ -29,17 +31,28 @@ const parseTags = (raw) => {
   if (Array.isArray(raw)) return raw.map((t) => String(t).trim()).filter(Boolean);
   const s = String(raw).trim();
   if (s.startsWith("[")) {
-    try { return JSON.parse(s).map((t) => String(t).trim()).filter(Boolean); } catch (_) {}
+    try {
+      return JSON.parse(s)
+        .map((t) => String(t).trim())
+        .filter(Boolean);
+    } catch (_) {
+      /* fall through to CSV */
+    }
   }
-  return s.split(",").map((t) => t.trim()).filter(Boolean);
+  return s
+    .split(",")
+    .map((t) => t.trim())
+    .filter(Boolean);
 };
 
-// Build author object from form fields
 const buildAuthor = (body, req) => {
-  // Support both flat fields and a JSON author object
   let author = {};
   if (body.author && typeof body.author === "string" && body.author.startsWith("{")) {
-    try { author = JSON.parse(body.author); } catch (_) {}
+    try {
+      author = JSON.parse(body.author);
+    } catch (_) {
+      /* ignore malformed author JSON */
+    }
   }
   return {
     name: body.authorName || author.name || body.author || (req.user && req.user.name) || "Admin",
@@ -49,8 +62,83 @@ const buildAuthor = (body, req) => {
   };
 };
 
+const LIST_COLUMNS = [
+  "id",
+  "title",
+  "slug",
+  "excerpt",
+  "cover_image",
+  "images",
+  "category",
+  "tags",
+  "author_name",
+  "author_avatar",
+  "author_bio",
+  "author_slug",
+  "status",
+  "published_at",
+  "read_time",
+  "views",
+  "featured",
+  "deletion_requested",
+  "deletion_requested_by",
+  "deletion_requested_at",
+  "meta_title",
+  "meta_description",
+  "created_by",
+  "created_at",
+  "updated_at",
+].join(", ");
+
+const NEWEST_FIRST = `published_at DESC NULLS LAST, created_at DESC, id`;
+const POPULAR = `views DESC, published_at DESC NULLS LAST, id`;
+
+const listBlogs = async (filter, { order = NEWEST_FIRST, limit, skip = 0 } = {}) => {
+  const params = [];
+  const w = blogs.buildWhere(filter, params);
+  let sql = `SELECT ${LIST_COLUMNS} FROM blogs${w.sql ? ` WHERE ${w.sql}` : ""} ORDER BY ${order}`;
+  if (limit != null) {
+    params.push(limit);
+    sql += ` LIMIT $${params.length}`;
+  }
+  if (skip) {
+    params.push(skip);
+    sql += ` OFFSET $${params.length}`;
+  }
+  return (await many(sql, params)).map(blogs.fromRow);
+};
+
+const publishedCategoryCounts = async () => {
+  const rows = await many(
+    `SELECT category, count(*)::int AS count FROM blogs WHERE status = 'published' GROUP BY category`
+  );
+  const countMap = Object.fromEntries(rows.map((r) => [r.category, r.count]));
+  return BLOG_CATEGORIES.map((name) => ({ name, slug: slugify(name), count: countMap[name] || 0 }));
+};
+
+const textSearchFilter = (q) => {
+  const terms = (String(q).match(/[\p{L}\p{N}]+/gu) || []).slice(0, 20);
+  if (!terms.length) return { $raw: ["FALSE", []] };
+  return { $raw: ["search @@ to_tsquery('simple', ?)", [terms.map((t) => `${t.toLowerCase()}:*`).join(" | ")]] };
+};
+
+const uploadBlogFiles = async (req, { coverImage, authorAvatar }) => {
+  const extras = [];
+  for (const file of req.files || []) {
+    const result = await uploadToR2(file.path, "blogs");
+    if (file.fieldname === "coverImage") coverImage = result.secure_url;
+    else if (file.fieldname === "authorAvatar") authorAvatar = result.secure_url;
+    else extras.push(result.secure_url);
+    try {
+      fs.unlinkSync(file.path);
+    } catch (_) {
+      /* temp file already gone */
+    }
+  }
+  return { coverImage, authorAvatar, extras };
+};
+
 const blogController = {
-  // PUBLIC - list (published only by default)
   list: async (req, res) => {
     try {
       const { status, category, tag, q, featured, page = 1, limit = 12 } = req.query;
@@ -58,158 +146,74 @@ const blogController = {
       if (status && status !== "all") filter.status = status;
       else if (!status) filter.status = "published";
       if (category) filter.category = category;
-      if (tag) filter.tags = tag;
+      const and = [];
+      if (tag) and.push({ $raw: ["? = ANY(tags)", [String(tag)]] });
       if (featured === "true") filter.featured = true;
-      if (q) filter.$text = { $search: q };
+      if (q) and.push(textSearchFilter(q));
+      if (and.length) filter.$and = and;
 
       const pageNum = Math.max(1, parseInt(page, 10) || 1);
       const lim = Math.min(50, Math.max(1, parseInt(limit, 10) || 12));
       const skip = (pageNum - 1) * lim;
 
-      const [blogs, total] = await Promise.all([
-        blogModel
-          .find(filter)
-          .sort({ publishedAt: -1, createdAt: -1 })
-          .skip(skip)
-          .limit(lim)
-          .select("-content")
-          .lean(),
-        blogModel.countDocuments(filter),
-      ]);
+      const [items, total] = await Promise.all([listBlogs(filter, { limit: lim, skip }), blogs.count(filter)]);
 
-      res.status(200).json({
-        blogs,
-        page: pageNum,
-        limit: lim,
-        total,
-        totalPages: Math.ceil(total / lim),
-      });
+      res.status(200).json({ blogs: items, page: pageNum, limit: lim, total, totalPages: Math.ceil(total / lim) });
     } catch (err) {
       console.error("Blog list error:", err);
       res.status(500).json({ message: "Server error", error: err.message });
     }
   },
 
-  // PUBLIC - landing data for /blogs (GVD-style multi-section page)
-  // Returns: recents, devotionalWisdom, byCategory[], popular, recent
-  // Saves the client from making 8 separate requests.
   landing: async (req, res) => {
     try {
       const base = { status: "published" };
+      const recents = await listBlogs(base, { limit: 5 });
+      const devotional = await listBlogs(base, { limit: 5 });
 
-      // Recent posts (top 5) for hero strip
-      const recents = await blogModel
-        .find(base)
-        .sort({ publishedAt: -1 })
-        .limit(5)
-        .select("-content")
-        .lean();
-
-      // Devotional Wisdom carousel - latest one per several categories
-      const devotional = await blogModel
-        .find(base)
-        .sort({ publishedAt: -1 })
-        .limit(5)
-        .select("-content")
-        .lean();
-
-      // Category counts for the "Get Started Here" 13-tile grid
-      const counts = await blogModel.aggregate([
-        { $match: base },
-        { $group: { _id: "$category", count: { $sum: 1 } } },
-      ]);
-      const countMap = Object.fromEntries(counts.map((c) => [c._id, c.count]));
-      const categories = BLOG_CATEGORIES.map((name) => ({
-        name,
-        slug: slugify(name),
-        count: countMap[name] || 0,
-      }));
-
-      // Per-category latest 6 - GVD shows a section for each populated category
+      const categories = await publishedCategoryCounts();
       const populatedCategories = categories.filter((c) => c.count > 0).slice(0, 6);
       const byCategory = await Promise.all(
-        populatedCategories.map(async (cat) => {
-          const items = await blogModel
-            .find({ ...base, category: cat.name })
-            .sort({ publishedAt: -1 })
-            .limit(6)
-            .select("-content")
-            .lean();
-          return { ...cat, items };
-        })
+        populatedCategories.map(async (cat) => ({
+          ...cat,
+          items: await listBlogs({ ...base, category: cat.name }, { limit: 6 }),
+        }))
       );
 
-      // Popular - featured flag, fallback to most-viewed
-      let popular = await blogModel
-        .find({ ...base, featured: true })
-        .sort({ publishedAt: -1 })
-        .limit(6)
-        .select("-content")
-        .lean();
+      let popular = await listBlogs({ ...base, featured: true }, { limit: 6 });
       if (popular.length < 6) {
-        const fill = await blogModel
-          .find(base)
-          .sort({ views: -1, publishedAt: -1 })
-          .limit(6 - popular.length)
-          .select("-content")
-          .lean();
+        const fill = await listBlogs(base, { order: POPULAR, limit: 6 - popular.length });
         const have = new Set(popular.map((p) => String(p._id)));
         popular = [...popular, ...fill.filter((f) => !have.has(String(f._id)))];
       }
 
-      // Most recent 7 - rich detailed cards near the bottom of the page
-      const recent = await blogModel
-        .find(base)
-        .sort({ publishedAt: -1 })
-        .limit(7)
-        .select("-content")
-        .lean();
+      const recent = await listBlogs(base, { limit: 7 });
 
-      res.status(200).json({
-        recents,
-        devotional,
-        categories,
-        byCategory,
-        popular,
-        recent,
-      });
+      res.status(200).json({ recents, devotional, categories, byCategory, popular, recent });
     } catch (err) {
       console.error("Blog landing error:", err);
       res.status(500).json({ message: "Server error", error: err.message });
     }
   },
 
-  // PUBLIC - list of categories with counts (for category navigation)
   categories: async (req, res) => {
     try {
-      const counts = await blogModel.aggregate([
-        { $match: { status: "published" } },
-        { $group: { _id: "$category", count: { $sum: 1 } } },
-      ]);
-      const countMap = Object.fromEntries(counts.map((c) => [c._id, c.count]));
-      const categories = BLOG_CATEGORIES.map((name) => ({
-        name,
-        slug: slugify(name),
-        count: countMap[name] || 0,
-      }));
-      res.status(200).json({ categories });
+      res.status(200).json({ categories: await publishedCategoryCounts() });
     } catch (err) {
       res.status(500).json({ message: "Server error" });
     }
   },
 
-  // PUBLIC - get one by slug or id
   get: async (req, res) => {
     try {
       const { idOrSlug } = req.params;
       const isObjectId = /^[a-f\d]{24}$/i.test(idOrSlug);
-      const query = isObjectId ? { _id: idOrSlug } : { slug: idOrSlug };
-      const blog = await blogModel.findOne(query);
+      const blog = await blogs.findOne(isObjectId ? { _id: idOrSlug } : { slug: idOrSlug });
       if (!blog) return res.status(404).json({ message: "Blog not found" });
       if (blog.status !== "published" && req.query.preview !== "1") {
         return res.status(404).json({ message: "Blog not found" });
       }
-      blogModel.updateOne({ _id: blog._id }, { $inc: { views: 1 } }).catch(() => {});
+      blogs.updateOne({ _id: blog._id }, { $inc: { views: 1 } }).catch(() => {});
       res.status(200).json({ blog });
     } catch (err) {
       console.error("Blog get error:", err);
@@ -217,62 +221,57 @@ const blogController = {
     }
   },
 
-  // PUBLIC - related blogs (same category, exclude self)
   related: async (req, res) => {
     try {
       const { id } = req.params;
-      const current = await blogModel.findById(id).select("category").lean();
+      const current = await blogs.findById(id, { fields: ["category"] });
       if (!current) return res.status(404).json({ message: "Blog not found" });
-      const items = await blogModel
-        .find({ _id: { $ne: id }, status: "published", category: current.category })
-        .sort({ publishedAt: -1 })
-        .limit(5)
-        .select("-content")
-        .lean();
+      const items = await listBlogs(
+        { _id: { $ne: id }, status: "published", category: current.category },
+        { limit: 5 }
+      );
       res.status(200).json({ items });
     } catch (err) {
       res.status(500).json({ message: "Server error" });
     }
   },
 
-  // ADMIN - create
   create: async (req, res) => {
     try {
       const { title, excerpt, content, category, status, slug, metaTitle, metaDescription, featured } = req.body;
+      validateDoc("blog", { title, content }, { required: ["title", "content"] });
+      validateDoc(
+        "blog",
+        { category, status },
+        { enums: { category: BLOG_CATEGORIES, status: ["draft", "published"] } }
+      );
 
-      let coverImage = req.body.coverImage || "";
-      let authorAvatar = req.body.authorAvatar || "";
-      let extraImages = [];
+      const { coverImage, authorAvatar, extras } = await uploadBlogFiles(req, {
+        coverImage: req.body.coverImage || "",
+        authorAvatar: req.body.authorAvatar || "",
+      });
 
-      if (req.files && req.files.length > 0) {
-        for (const file of req.files) {
-          const result = await uploadToR2(file.path, "blogs");
-          if (file.fieldname === "coverImage") coverImage = result.secure_url;
-          else if (file.fieldname === "authorAvatar") authorAvatar = result.secure_url;
-          else extraImages.push(result.secure_url);
-          try { fs.unlinkSync(file.path); } catch (_) {}
-        }
-      }
-
-      const baseSlug = slugify(slug || title);
-      const uniqueSlug = await ensureUniqueSlug(baseSlug);
-
+      const uniqueSlug = await ensureUniqueSlug(slugify(slug || title));
       const author = buildAuthor({ ...req.body, authorAvatar }, req);
+      const cleanContent = sanitizeBlogHtml(content);
+      const finalStatus = status || "draft";
 
-      const blog = await blogModel.create({
-        title,
-        slug: uniqueSlug,
+      const blog = await blogs.insert({
+        title: String(title).trim(),
+        slug: uniqueSlug.toLowerCase().trim(),
         excerpt: excerpt || "",
-        content,
+        content: cleanContent,
         coverImage,
-        images: extraImages,
+        images: extras,
         category: category || "Spiritual Knowledge",
         tags: parseTags(req.body.tags),
         author,
-        status: status || "draft",
-        featured: featured === "true" || featured === true,
+        status: finalStatus,
+        featured: toBool(featured),
         metaTitle: metaTitle || "",
         metaDescription: metaDescription || excerpt || "",
+        readTime: computeReadTime(cleanContent),
+        publishedAt: finalStatus === "published" ? new Date() : undefined,
         createdBy: req.user ? req.user.userId : undefined,
       });
       res.status(201).json({ message: "Blog created", blog });
@@ -282,77 +281,72 @@ const blogController = {
     }
   },
 
-  // ADMIN - update
   update: async (req, res) => {
     try {
       const { id } = req.params;
-      const existing = await blogModel.findById(id);
+      const existing = await blogs.findById(id);
       if (!existing) return res.status(404).json({ message: "Blog not found" });
 
-      let coverImage = req.body.coverImage !== undefined ? req.body.coverImage : existing.coverImage;
-      let authorAvatar = req.body.authorAvatar !== undefined ? req.body.authorAvatar : (existing.author && existing.author.avatar) || "";
-      let newExtras = [];
-      if (req.files && req.files.length > 0) {
-        for (const file of req.files) {
-          const result = await uploadToR2(file.path, "blogs");
-          if (file.fieldname === "coverImage") coverImage = result.secure_url;
-          else if (file.fieldname === "authorAvatar") authorAvatar = result.secure_url;
-          else newExtras.push(result.secure_url);
-          try { fs.unlinkSync(file.path); } catch (_) {}
-        }
-      }
+      const { coverImage, authorAvatar, extras } = await uploadBlogFiles(req, {
+        coverImage: req.body.coverImage !== undefined ? req.body.coverImage : existing.coverImage || "",
+        authorAvatar: req.body.authorAvatar !== undefined ? req.body.authorAvatar : existing.author?.avatar || "",
+      });
 
       const author = buildAuthor({ ...req.body, authorAvatar }, req);
+      const nextStatus = req.body.status ?? existing.status;
+      const nextCategory = req.body.category ?? existing.category;
+      validateDoc(
+        "blog",
+        { category: nextCategory, status: nextStatus },
+        { enums: { category: BLOG_CATEGORIES, status: ["draft", "published"] } }
+      );
 
       const patch = {
-        title: req.body.title ?? existing.title,
+        title: String(req.body.title ?? existing.title).trim(),
         excerpt: req.body.excerpt ?? existing.excerpt,
-        content: req.body.content ?? existing.content,
-        category: req.body.category ?? existing.category,
+        category: nextCategory,
         author,
-        status: req.body.status ?? existing.status,
+        status: nextStatus,
         metaTitle: req.body.metaTitle ?? existing.metaTitle,
         metaDescription: req.body.metaDescription ?? existing.metaDescription,
         coverImage,
-        images: newExtras.length ? [...(existing.images || []), ...newExtras] : existing.images,
+        images: extras.length ? [...(existing.images || []), ...extras] : existing.images || [],
       };
+
+      if (req.body.content !== undefined) {
+        const cleanContent = sanitizeBlogHtml(req.body.content);
+        validateDoc("blog", { content: cleanContent }, { required: ["content"] });
+        patch.content = cleanContent;
+        if (cleanContent !== existing.content) patch.readTime = computeReadTime(cleanContent);
+      }
+      if (nextStatus !== existing.status && nextStatus === "published" && !existing.publishedAt) {
+        patch.publishedAt = new Date();
+      }
       if (req.body.tags !== undefined) patch.tags = parseTags(req.body.tags);
-      if (req.body.featured !== undefined) {
-        patch.featured = req.body.featured === "true" || req.body.featured === true;
-      }
-
+      if (req.body.featured !== undefined) patch.featured = toBool(req.body.featured);
       if (req.body.slug !== undefined && req.body.slug !== existing.slug) {
-        const base = slugify(req.body.slug);
-        patch.slug = await ensureUniqueSlug(base, id);
+        patch.slug = (await ensureUniqueSlug(slugify(req.body.slug), id)).toLowerCase().trim();
       }
 
-      Object.assign(existing, patch);
-      await existing.save();
-
-      res.status(200).json({ message: "Blog updated", blog: existing });
+      const blog = await blogs.updateById(id, patch);
+      res.status(200).json({ message: "Blog updated", blog });
     } catch (err) {
       console.error("Blog update error:", err);
       res.status(500).json({ message: "Server error", error: err.message });
     }
   },
 
-  // A full admin deletes immediately, as before. A blogs_admin's call here
-  // instead files a pending deletion request - the post stays live and
-  // untouched until an admin approves or rejects it via the endpoints below.
+  // A blogs_admin's delete files a pending request instead of deleting.
   delete: async (req, res) => {
     try {
       const { id } = req.params;
 
       if (req.user.role === "blogs_admin") {
-        const blog = await blogModel.findByIdAndUpdate(
-          id,
-          {
-            deletionRequested: true,
-            deletionRequestedBy: req.user.userId,
-            deletionRequestedAt: new Date(),
-          },
-          { new: true }
-        );
+        const blog = await blogs.updateById(id, {
+          deletionRequested: true,
+          deletionRequestedBy: req.user.userId,
+          deletionRequestedAt: new Date(),
+        });
         if (!blog) return res.status(404).json({ message: "Blog not found" });
         return res.status(200).json({
           message: "Deletion requested — an admin needs to approve this before it's removed.",
@@ -360,7 +354,7 @@ const blogController = {
         });
       }
 
-      const blog = await blogModel.findByIdAndDelete(id);
+      const blog = await blogs.deleteById(id);
       if (!blog) return res.status(404).json({ message: "Blog not found" });
       res.status(200).json({ message: "Blog deleted" });
     } catch (err) {
@@ -368,42 +362,53 @@ const blogController = {
     }
   },
 
-  // ADMIN ONLY - list posts with a pending deletion request
   deletionRequests: async (req, res) => {
     try {
-      const blogs = await blogModel
-        .find({ deletionRequested: true })
-        .sort({ deletionRequestedAt: -1 })
-        .populate("deletionRequestedBy", "name email")
-        .select("title slug category coverImage deletionRequestedBy deletionRequestedAt");
-      res.status(200).json({ blogs });
+      const { rows } = await query(
+        `SELECT b.id, b.title, b.slug, b.category, b.cover_image, b.deletion_requested_at,
+                u.id AS u_id, u.name AS u_name, u.email AS u_email
+           FROM blogs b LEFT JOIN users u ON u.id = b.deletion_requested_by
+          WHERE b.deletion_requested = true
+          ORDER BY b.deletion_requested_at DESC NULLS LAST, b.id`
+      );
+      const items = rows.map((r) => {
+        const doc = blogs.fromRow({
+          id: r.id,
+          title: r.title,
+          slug: r.slug,
+          category: r.category,
+          cover_image: r.cover_image,
+          deletion_requested_at: r.deletion_requested_at,
+        });
+        if (r.u_id) doc.deletionRequestedBy = { _id: r.u_id, name: r.u_name, email: r.u_email };
+        return doc;
+      });
+      res.status(200).json({ blogs: items });
     } catch (err) {
       res.status(500).json({ message: "Server error", error: err.message });
     }
   },
 
-  // ADMIN ONLY - approve a pending deletion request: actually deletes the post
   approveDeletion: async (req, res) => {
     try {
       const { id } = req.params;
-      const blog = await blogModel.findOne({ _id: id, deletionRequested: true });
+      const blog = await blogs.findOne({ _id: id, deletionRequested: true }, { fields: ["slug"] });
       if (!blog) return res.status(404).json({ message: "No pending deletion request for this post" });
-      await blogModel.findByIdAndDelete(id);
+      await blogs.deleteById(id);
       res.status(200).json({ message: "Deletion approved — post removed" });
     } catch (err) {
       res.status(500).json({ message: "Server error", error: err.message });
     }
   },
 
-  // ADMIN ONLY - reject a pending deletion request: post stays, flag cleared
   rejectDeletion: async (req, res) => {
     try {
       const { id } = req.params;
-      const blog = await blogModel.findByIdAndUpdate(
-        id,
-        { deletionRequested: false, deletionRequestedBy: null, deletionRequestedAt: null },
-        { new: true }
-      );
+      const blog = await blogs.updateById(id, {
+        deletionRequested: false,
+        deletionRequestedBy: null,
+        deletionRequestedAt: null,
+      });
       if (!blog) return res.status(404).json({ message: "Blog not found" });
       res.status(200).json({ message: "Deletion request rejected — post kept", blog });
     } catch (err) {
@@ -411,12 +416,15 @@ const blogController = {
     }
   },
 
-  // CKEditor inline image upload
   uploadInline: async (req, res) => {
     try {
       if (!req.file) return res.status(400).json({ error: { message: "No file uploaded" } });
       const result = await uploadToR2(req.file.path, "blogs/inline");
-      try { fs.unlinkSync(req.file.path); } catch (_) {}
+      try {
+        fs.unlinkSync(req.file.path);
+      } catch (_) {
+        /* temp file already gone */
+      }
       return res.status(200).json({ url: result.secure_url });
     } catch (err) {
       console.error("Blog inline upload error:", err);

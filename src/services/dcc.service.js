@@ -1,18 +1,11 @@
-import { donationModel } from "../models/donation.model.js";
+import { donations, claimUpdate } from "../domain/donationDb.js";
+import { donors } from "../db/tables.js";
 import { IST } from "../config/timezone.js";
 import { toEnglish } from "../utils/toEnglish.js";
-import { donorModel } from "../models/donor.model.js";
 import { notifyDrmOfDonation } from "./drmNotify.service.js";
 
 const DCC_API_URL = process.env.DCC_API_URL || "https://vhkmsurabhi.com/api/socialmedia/addDonation";
 
-// DCC strictly requires a bare 10-digit Indian mobile number and rejects
-// anything else with "Donor phone must be a valid 10-digit number." —
-// confirmed live: donors entering a leading 0 (e.g. "09989482904", 11
-// digits) or a +91/91 country code prefix were causing every one of their
-// syncs to fail silently (donation still completes fine, just no DCC
-// receipt or WhatsApp PDF for them). Strip those prefixes down to the
-// last 10 digits before sending.
 const normalizeDccPhone = (raw) => {
   const digits = String(raw || "").replace(/\D/g, "");
   if (digits.length <= 10) return digits;
@@ -45,39 +38,7 @@ const parseJsonEnv = (name, fallback) => {
 };
 
 const DCC_SEVA_MAPPINGS = parseJsonEnv("DCC_SEVA_MAPPINGS", []);
-// NOTE: intentionally no `sourcePage` restriction on these — sevaNameIncludes
-// alone is specific enough to identify the seva correctly, and a sourcePage
-// allowlist silently breaks every time a new donation entry point is added
-// (this bit us: /donate/[seva] and /sqft-seva-campaign donations were falling
-// through to the generic Annadana default because their sourcePage wasn't in
-// the original ["donations","janmashtami"] list).
-//
-// DCC subcategory codes for Brick/Gita Daan/Vastra/Mandir Nirman below are
-// best-guess placeholders following the existing MNSO-* numbering pattern
-// (118-120) — verify against the real DCC configuration and override via the
-// DCC_SEVA_MAPPINGS env var if they differ, no code deploy needed to fix.
-// Annadana and Gau Seva codes below are confirmed real DCC values. The
-// others (Square Foot/Brick/Gita Daan/Vastra) are still best-guess
-// placeholders following the old MNSO-* numbering pattern — verify against
-// the real DCC configuration and override via DCC_SEVA_MAPPINGS if they
-// differ, no code deploy needed to fix.
 const DEFAULT_NAME_BASED_SEVA_MAPPINGS = [
-  // ---- Sri Radhashtami festival sevas (FIRST — must match before
-  // Janmashtami/generic, since several seva names overlap) ----
-  // Real DCC codes from the temple's SevaCodes sheet (uploaded 2026-09-13).
-  // Cultural Program (3) → Sri Radhastami (12). Only the 4 sevas actually
-  // live on /radhashtami are mapped — Mandapa Seva, Special Cake Offering
-  // Seva, and Yajamana Seva have real DCC codes too (38, 103, 40) but
-  // aren't offered as donation options on the page yet, so left out here
-  // by explicit choice until they're added.
-  //
-  // NAIVEDYA GAP: /radhashtami's 5th seva ("Naivedya Seva") has NO DCC
-  // code in the provided sheet at all - not mapped here. Until a real
-  // code is provided, it falls through to the Janmashtami "naivedhya"
-  // entry below (sevaSubCategoryCode 74) via that entry's own
-  // festivalSlug scoping - WRONG for a Radhashtami donation, but at
-  // least no longer silently cross-matching an unrelated festival's
-  // code by accident like the others were.
   {
     sevaNameIncludes: ["annadana", "anna daan", "anna-daan", "annadaan"],
     festivalSlug: "radhashtami",
@@ -107,18 +68,6 @@ const DEFAULT_NAME_BASED_SEVA_MAPPINGS = [
     sevaSubCategoryCode: 50,
   },
 
-  // ---- Janmashtami festival sevas (must match before generic) ----
-  // Real DCC codes from SevaList2026.pdf. All SKJ sevas use
-  // Cultural Program (3) → Sri Krishna Janmashtami (10).
-  // EVERY entry below now has festivalSlug:"janmashtami" explicitly -
-  // most of them (all but annadana/gau seva) were missing this scoping
-  // until now, meaning they were silently matching ANY donation with a
-  // similarly-named seva regardless of which festival it came from
-  // (found while adding Radhashtami mappings above: Radhashtami's
-  // Abhishekam/Pushpalankara sevas share enough of the same substring
-  // text that they were very likely already getting Janmashtami's DCC
-  // codes instead of a correct one - worth checking already-processed
-  // Radhashtami donations against DCC for this).
   {
     sevaNameIncludes: ["annadana", "anna daan", "anna-daan", "annadaan"],
     festivalSlug: "janmashtami",
@@ -198,14 +147,6 @@ const DEFAULT_NAME_BASED_SEVA_MAPPINGS = [
     sevaSubCategory: 10,
     sevaSubCategoryCode: 27,
   },
-  // ---- Govardhan Puja festival sevas ----
-  // /govardhan-puja (component GovardhanPujaClient) sends
-  // festivalSlug:"govardhan-puja" + sevaName = the seva title. Codes below are
-  // the real DCC sub-category codes from SevaList2026 ("Govardhan Puja",
-  // SevaCategoryId 3 / SevaSubCategoryId 6) — scoped so they apply only to
-  // Govardhan Puja donations.
-  // NOTE: "Govardhan Seva" (the main worship sponsor) has no literal DCC
-  // entry — mapped to Yajamana Seva (9); swap if the temple prefers another.
   {
     sevaNameIncludes: ["govardhan seva"],
     festivalSlug: "govardhan-puja",
@@ -249,11 +190,6 @@ const DEFAULT_NAME_BASED_SEVA_MAPPINGS = [
     // Feeding devotees → Annadana Seva (no separate Vaishnav Bhojan entry)
     sevaSubCategoryCode: 6,
   },
-  // ---- Pitru Paksha festival sevas ----
-  // /pitru-paksha now sends the SAME `type` code as the standalone seva
-  // pages, so these match the regular seva DCC codes (ANGE / GOSE / MNSO-S /
-  // MNSO-B). Scoped to festivalSlug:"pitru-paksha" so no other page's
-  // donation can cross-match these entries (both conditions must hold).
   {
     festivalSlug: "pitru-paksha",
     type: ["ANNADAAN"],
@@ -291,17 +227,6 @@ const DEFAULT_NAME_BASED_SEVA_MAPPINGS = [
     sevaSubCategory: 118,
     sevaSubCategoryCode: "MNSO-B",
   },
-  // ---- Vijayadashami festival sevas ----
-  // Real DCC codes from the temple's SevaList2026 sheet (provided
-  // 2026-10-13): Cultural Program (3) -> Vijayadashami (106). The
-  // /vijayadashami page sends festivalSlug "vijayadashami" plus sevaName =
-  // the seva title, so BOTH conditions must hold and no other festival's
-  // donation can cross-match these entries.
-  //
-  // The sevaNameIncludes needles below must stay in step with the seva
-  // titles in app/vijayadashami/VijayadashamiClient.tsx - rename a seva
-  // there without changing it here and the donation falls through to the
-  // generic Annadana code.
   {
     sevaNameIncludes: ["yajamana"],
     festivalSlug: "vijayadashami",
@@ -359,10 +284,6 @@ const DEFAULT_NAME_BASED_SEVA_MAPPINGS = [
     sevaSubCategory: 1,
     sevaSubCategoryCode: "ANGE",
   },
-  // The standalone /donations page sets type:"ANNADAAN" exactly but never a
-  // matching sevaName (its sevaName is the specific tier text, e.g. "Feed
-  // 50 people") -- without this, those donations silently fell through to
-  // the generic DEFAULT_SEVA_MAPPING instead of the real Annadana code.
   {
     type: ["ANNADAAN"],
     sevaCategory: 1,
@@ -423,20 +344,6 @@ const DEFAULT_NAME_BASED_SEVA_MAPPINGS = [
   },
 ];
 
-// DCC expects the transaction date as DD/MM/YYYY, and it is the date DCC
-// files the donation under — which decides both its financial year and the
-// receipt-number series it is issued from.
-//
-// This used to use getDate()/getMonth()/getFullYear(), which read the
-// process's local zone. The process ran in UTC, so every donation taken
-// between midnight and 05:30 IST was sent to DCC as the previous calendar
-// day. On 1 April that put the donation in the previous financial year and
-// gave it a receipt number from the wrong series — on a document the
-// temple has to stand behind to the income-tax department.
-//
-// The zone is named here rather than left to follow process.env.TZ on
-// purpose: this function produces a number on a legal document, and it must
-// not change meaning because somebody later edits a deployment variable.
 const formatDateForDcc = (value) => {
   const date = value ? new Date(value) : new Date();
   // en-GB gives DD/MM/YYYY with 2-digit day and month and a 4-digit year,
@@ -451,22 +358,19 @@ const formatDateForDcc = (value) => {
 
 const compact = (parts) => parts.map((part) => String(part || "").trim()).filter(Boolean);
 
-const normalizeString = (value) => String(value || "").trim().toLowerCase();
+const normalizeString = (value) =>
+  String(value || "")
+    .trim()
+    .toLowerCase();
 
 const toNumberArray = (value) => {
   if (Array.isArray(value)) {
-    return value
-      .map((item) => Number(item))
-      .filter((item) => Number.isFinite(item));
+    return value.map((item) => Number(item)).filter((item) => Number.isFinite(item));
   }
   const single = Number(value);
   return Number.isFinite(single) ? [single] : [];
 };
 
-// DCC receipts are printed in English, so donor details typed in Telugu,
-// Hindi or any other Indian script are converted to English letters before
-// they are sent (రమేష్ కుమార్ → Ramesh Kumar). English text passes through
-// unchanged; the donation itself keeps what the donor typed.
 const buildFullAddress = (prasadamAddress) => {
   if (!prasadamAddress) return null;
   const value = compact([
@@ -482,19 +386,10 @@ const buildFullAddress = (prasadamAddress) => {
   return value || null;
 };
 
-// Matches "donations" exactly or "donations/<anything>" — same pattern
-// as EXCLUDE_DONATIONS_PAGE/DONATIONS_PAGE_FILTER elsewhere, so a future
-// page added under /donations/... automatically gets the same enrolledBy
-// treatment without needing this updated by hand each time.
 const DONATIONS_DOMAIN_PATTERN = /^donations(\/|$)/;
-const isSpecialEnrolledByDonation = (donation) => (
-  DONATIONS_DOMAIN_PATTERN.test(normalizeString(donation.sourcePage))
-);
+const isSpecialEnrolledByDonation = (donation) => DONATIONS_DOMAIN_PATTERN.test(normalizeString(donation.sourcePage));
 
 const resolveEnrolledBy = (donation) => {
-  // Campaigner-attributed donations carry a snapshot of the referring
-  // temple devotee's DCC ID — that wins over all env-based defaults so
-  // the receipt is raised under that devotee.
   if (donation && Number.isFinite(Number(donation.dccEnrolledById)) && donation.dccEnrolledById != null) {
     return Number(donation.dccEnrolledById);
   }
@@ -502,17 +397,14 @@ const resolveEnrolledBy = (donation) => {
   if (isSpecialEnrolledByDonation(donation)) {
     return Number(
       process.env.DCC_ENROLLED_BY_DONATIONS_AND_JANMASHTAMI ||
-      process.env.DCC_ENROLLED_BY_SPECIAL ||
-      process.env.DCC_ENROLLED_BY ||
-      25
+        process.env.DCC_ENROLLED_BY_SPECIAL ||
+        process.env.DCC_ENROLLED_BY ||
+        25
     );
   }
 
   return Number(
-    process.env.DCC_ENROLLED_BY_REST ||
-    process.env.DCC_ENROLLED_BY_DEFAULT ||
-    process.env.DCC_ENROLLED_BY ||
-      36
+    process.env.DCC_ENROLLED_BY_REST || process.env.DCC_ENROLLED_BY_DEFAULT || process.env.DCC_ENROLLED_BY || 36
   );
 };
 
@@ -520,10 +412,7 @@ const mappingMatchesDonation = (mapping, donation) => {
   if (!mapping || typeof mapping !== "object") return false;
 
   if (mapping.legacySevaId != null || mapping.legacySevaIds != null) {
-    const allowedLegacyIds = [
-      ...toNumberArray(mapping.legacySevaId),
-      ...toNumberArray(mapping.legacySevaIds),
-    ];
+    const allowedLegacyIds = [...toNumberArray(mapping.legacySevaId), ...toNumberArray(mapping.legacySevaIds)];
     if (!allowedLegacyIds.includes(Number(donation.legacySevaId))) return false;
   }
 
@@ -562,8 +451,9 @@ const mappingMatchesDonation = (mapping, donation) => {
 };
 
 const resolveSevaMapping = (donation) => {
-  const matched = DCC_SEVA_MAPPINGS.find((mapping) => mappingMatchesDonation(mapping, donation))
-    || DEFAULT_NAME_BASED_SEVA_MAPPINGS.find((mapping) => mappingMatchesDonation(mapping, donation));
+  const matched =
+    DCC_SEVA_MAPPINGS.find((mapping) => mappingMatchesDonation(mapping, donation)) ||
+    DEFAULT_NAME_BASED_SEVA_MAPPINGS.find((mapping) => mappingMatchesDonation(mapping, donation));
   if (!matched) return DEFAULT_SEVA_MAPPING;
 
   return {
@@ -626,26 +516,18 @@ async function postToDcc(payload) {
     parsed = { raw };
   }
 
-  // DCC answers a repeat push of a transaction it already has with the
-  // receipt it issued the first time ("Transaction already exists —
-  // returning existing donation and donor details."). A receipt number in
-  // the reply is the answer we want, whatever the status code.
   if (parsed && typeof parsed === "object" && parsed.ReceiptNumber) return parsed;
 
   if (!response.ok) {
-    const message = parsed && typeof parsed === "object" && parsed.Message
-      ? parsed.Message
-      : raw || `DCC request failed with status ${response.status}`;
+    const message =
+      parsed && typeof parsed === "object" && parsed.Message
+        ? parsed.Message
+        : raw || `DCC request failed with status ${response.status}`;
 
-    // DCC returns this when the transaction is already in their system
-    // (from a prior sync attempt) but we don't have the receipt number.
-    // It's not a true error — DCC has the donation — but we can't
-    // auto-fetch the receipt from this endpoint. Surface a clear message
-    // so admin knows to check DCC directly and enter the receipt manually.
     if (typeof message === "string" && message.toLowerCase().includes("transaction details exist")) {
       const err = new Error(
         "DCC already has this donation on record but did not return its receipt number. " +
-        "Find the transaction in DCC (vhkmsurabhi.com) by donor name/amount/date and enter the receipt number here."
+          "Find the transaction in DCC (vhkmsurabhi.com) by donor name/amount/date and enter the receipt number here."
       );
       err.status = response.status;
       err.response = parsed;
@@ -663,26 +545,21 @@ async function postToDcc(payload) {
 }
 
 async function syncDonationToDcc(donationOrId, gatewayPaymentId) {
-  const donation = typeof donationOrId === "object" && donationOrId !== null
-    ? donationOrId
-    : await donationModel.findById(donationOrId);
+  const donation =
+    typeof donationOrId === "object" && donationOrId !== null ? donationOrId : await donations.findById(donationOrId);
 
   if (!donation) return { ok: false, skipped: true, reason: "donation_not_found" };
   if (!isDccConfigured()) return { ok: false, skipped: true, reason: "dcc_not_configured" };
   if (donation.receiptNumber) {
     return { ok: true, skipped: true, reason: "already_synced" };
   }
-  // "synced" without a receipt number: DCC took it but the number never came
-  // back. Pushing again is safe only when DCC can recognise the transaction
-  // (it de-duplicates on the payment id / UTR and replies with the receipt it
-  // already issued); without one, a second push would raise a second receipt.
   if (donation.dccSyncStatus === "synced" && !dccTransactionId(donation, gatewayPaymentId)) {
     return { ok: true, skipped: true, reason: "already_synced" };
   }
 
-  const lock = await donationModel.findOneAndUpdate(
+  const lock = await claimUpdate(
     {
-      _id: donation._id,
+      _id: String(donation._id),
       receiptNumber: { $in: [null, ""] },
       dccSyncStatus: { $ne: "syncing" },
     },
@@ -690,12 +567,11 @@ async function syncDonationToDcc(donationOrId, gatewayPaymentId) {
       dccSyncStatus: "syncing",
       dccLastAttemptAt: new Date(),
       $inc: { dccAttempts: 1 },
-    },
-    { new: true }
+    }
   );
 
   if (!lock) {
-    const latest = await donationModel.findById(donation._id);
+    const latest = await donations.findById(donation._id);
     if (latest?.receiptNumber) {
       return { ok: true, skipped: true, reason: "already_synced" };
     }
@@ -709,7 +585,7 @@ async function syncDonationToDcc(donationOrId, gatewayPaymentId) {
     const receiptNumber = dccResponse?.ReceiptNumber || null;
     const recovered = /already exists/i.test(String(dccResponse?.Message || ""));
 
-    await donationModel.findByIdAndUpdate(lock._id, {
+    await donations.updateById(lock._id, {
       ...(recovered ? { dccRecoveredAt: new Date() } : {}),
       dccSyncStatus: "synced",
       dccSyncedAt: new Date(),
@@ -724,35 +600,24 @@ async function syncDonationToDcc(donationOrId, gatewayPaymentId) {
         : {}),
     });
 
-    // DCC's own response is the AUTHORITATIVE donor identifier — DonorNumber
-    // (e.g. "D49822") is DCC's real, official ID for this donor in their
-    // CRM, completely separate from the sequential HKM-YYYY-NNNNN ID we
-    // generate ourselves as a fallback before DCC has ever seen this donor.
-    // Once we have DCC's real number, it should be preferred everywhere a
-    // donor's ID is shown (dashboard, receipts, admin/preacher search).
     const dccDonorNumber = dccResponse?.DonorNumber || null;
     if (dccDonorNumber && lock.donorRecordId) {
       try {
-
-        await donorModel.findByIdAndUpdate(lock.donorRecordId, { dccDonorNumber });
+        await donors.updateById(lock.donorRecordId, { dccDonorNumber });
       } catch (e) {
         console.error("Could not save dccDonorNumber to Donor record (non-fatal):", lock.donorRecordId, e.message);
       }
     }
 
-    // A hand-entered donation whose receipt number arrived on a retry, after
-    // the entry itself: DRM is told now, or it keeps showing no receipt.
-    // Online donations push from their own pipeline once this returns.
     if (lock.manualEntry && receiptNumber) {
       try {
-
         notifyDrmOfDonation(lock._id, { reason: "receipt_issued" }).catch(() => undefined);
       } catch {}
     }
 
     return { ok: true, dccResponse, receiptNumber };
   } catch (error) {
-    await donationModel.findByIdAndUpdate(lock._id, {
+    await donations.updateById(lock._id, {
       dccSyncStatus: "failed",
       dccSyncError: error && error.message ? error.message : String(error),
       dccPayload: payload,
@@ -764,4 +629,12 @@ async function syncDonationToDcc(donationOrId, gatewayPaymentId) {
   }
 }
 
-export { DCC_PAYMENT_MODES, buildDccPayload, dccTransactionId, isDccConfigured, resolveEnrolledBy, resolveSevaMapping, syncDonationToDcc };
+export {
+  DCC_PAYMENT_MODES,
+  buildDccPayload,
+  dccTransactionId,
+  isDccConfigured,
+  resolveEnrolledBy,
+  resolveSevaMapping,
+  syncDonationToDcc,
+};

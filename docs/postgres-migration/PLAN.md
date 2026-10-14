@@ -77,3 +77,9 @@ Complex ones (date bucketing, conditional sums) still need line-by-line review; 
   1. Two receipt numbers are shared by two donations each (`HKMI|2026|D/VSP|10374`, `…|10267`). The planned unique index on `receipt_number` cannot be enabled until these are resolved by the temple.
   2. Two donations reference festival records that no longer exist → `festival_id` set NULL (the `festival_slug` text is kept).
 - **Not done yet:** Phase 2/5 — the application code still talks to Mongo. Next: port the app's queries to `pg` behind `DB_BACKEND=mongo|pg`, domain by domain, then compare API responses between the two backends.
+
+## Status: application port complete (local)
+- The server runs on Postgres only (no Mongoose in `src/`). ES modules, Prettier-formatted, comments trimmed.
+- Verification on a copy of production data, Mongo build vs Postgres build: ~214 read endpoints compared (remaining diffs are legacy-default fields and Mongo tie-order), write replays for content, shop, donations and payments (hundreds of steps, resulting table state compared), concurrency tests for payment completion, and 42/43 client pages identical (the 43rd differs only by a view-count timestamp).
+- Intentional behavior changes: see the agent reports summarized in the final hand-off; main ones: payment verify now binds the signed order to the donation, public `POST /donations` is admin-only, admin updates whitelist fields, blog HTML is sanitized on write, OTP uses `crypto.randomInt`, internal secrets compared in constant time, shop stock/order and webhook paths use atomic conditional updates.
+- Next: staging rehearsal and the production cutover in `CUTOVER.md`.

@@ -34,10 +34,15 @@ export async function discover(mongoUri) {
     volunteerEvent: await first("volunteerevents", {}),
     preacherDonor: undefined,
   };
-  const donorWithDonations = await db.collection("donations").aggregate([
-    { $match: { donorRecordId: { $ne: null }, status: "completed" } },
-    { $group: { _id: "$donorRecordId", n: { $sum: 1 } } }, { $sort: { n: -1 } }, { $limit: 1 },
-  ]).next();
+  const donorWithDonations = await db
+    .collection("donations")
+    .aggregate([
+      { $match: { donorRecordId: { $ne: null }, status: "completed" } },
+      { $group: { _id: "$donorRecordId", n: { $sum: 1 } } },
+      { $sort: { n: -1 } },
+      { $limit: 1 },
+    ])
+    .next();
   ctx.donorWithDonations = donorWithDonations ? String(donorWithDonations._id) : id(ctx.donor);
   ctx.donorMobile = (await db.collection("donors").findOne({ _id: donorWithDonations?._id }))?.mobile;
   await client.close();
@@ -67,25 +72,44 @@ export async function call(base, { method = "GET", path, body, token, headers = 
   const h = { ...headers };
   if (token) h.authorization = `Bearer ${token}`;
   let payload;
-  if (body !== undefined) { h["content-type"] = "application/json"; payload = typeof body === "string" ? body : JSON.stringify(body); }
+  if (body !== undefined) {
+    h["content-type"] = "application/json";
+    payload = typeof body === "string" ? body : JSON.stringify(body);
+  }
   const res = await fetch(base + path, { method, headers: h, body: payload, redirect: "manual" });
   const type = res.headers.get("content-type") || "";
   let data;
   if (type.includes("json")) data = await res.json().catch(() => null);
-  else if (type.includes("pdf") || type.includes("octet")) data = `[binary ${(await res.arrayBuffer()).byteLength} bytes]`;
+  else if (type.includes("pdf") || type.includes("octet"))
+    data = `[binary ${(await res.arrayBuffer()).byteLength} bytes]`;
   else data = await res.text();
   return { status: res.status, data };
 }
 
-const canon = (v) => JSON.stringify(v, (k, x) => (x && typeof x === "object" && !Array.isArray(x) ? Object.fromEntries(Object.keys(x).sort().map((kk) => [kk, x[kk]])) : x));
+const canon = (v) =>
+  JSON.stringify(v, (k, x) =>
+    x && typeof x === "object" && !Array.isArray(x)
+      ? Object.fromEntries(
+          Object.keys(x)
+            .sort()
+            .map((kk) => [kk, x[kk]])
+        )
+      : x
+  );
 export const orderOnly = [];
 
 export function diff(a, b, path = "$", out = []) {
   if (out.length > 12) return out;
   if (Array.isArray(a) && Array.isArray(b) && a.length === b.length && canon(a) !== canon(b)) {
-    if (canon([...a].map(canon).sort()) === canon([...b].map(canon).sort())) { orderOnly.push(path); return out; }
+    if (canon([...a].map(canon).sort()) === canon([...b].map(canon).sort())) {
+      orderOnly.push(path);
+      return out;
+    }
   }
-  if (typeof a !== typeof b || Array.isArray(a) !== Array.isArray(b)) { out.push(`${path}: ${JSON.stringify(a)?.slice(0, 80)} != ${JSON.stringify(b)?.slice(0, 80)}`); return out; }
+  if (typeof a !== typeof b || Array.isArray(a) !== Array.isArray(b)) {
+    out.push(`${path}: ${JSON.stringify(a)?.slice(0, 80)} != ${JSON.stringify(b)?.slice(0, 80)}`);
+    return out;
+  }
   if (Array.isArray(a)) {
     if (a.length !== b.length) out.push(`${path}: length ${a.length} != ${b.length}`);
     for (let i = 0; i < Math.min(a.length, b.length) && out.length < 12; i++) diff(a[i], b[i], `${path}[${i}]`, out);

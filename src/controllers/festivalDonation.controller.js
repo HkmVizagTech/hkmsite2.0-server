@@ -1,141 +1,140 @@
-import { festivalDonationModel } from "../models/festivalDonation.model.js";
-import * as donationModule from "../models/donation.model.js";
-import { donationModel } from "../models/donation.model.js";
+import { festivalDonations, donations, events } from "../db/tables.js";
+import { many, newId, isId } from "../db/pg.js";
+import { splitUser, toBool, toStringArray } from "../domain/validate.js";
+
+const PUBLIC_FIELDS = ["title", "slug", "description", "images", "active", "donationOptions", "meta", "createdAt"];
+
+const normalizeOptions = (list) =>
+  (Array.isArray(list) ? list : []).map((o) => {
+    const out = { _id: isId(o?._id) ? o._id : newId() };
+    if (o?.label !== undefined) out.label = String(o.label);
+    if (o?.amount !== undefined && o.amount !== null && o.amount !== "") out.amount = Number(o.amount);
+    if (o?.description !== undefined) out.description = String(o.description);
+    return out;
+  });
+
+// Only fields the admin form can set; never _id, createdAt, createdBy.
+const writableFields = (body) => {
+  const out = {};
+  if (body.title !== undefined) out.title = String(body.title);
+  if (body.description !== undefined) out.description = body.description === null ? null : String(body.description);
+  if (body.images !== undefined) out.images = toStringArray(body.images) || [];
+  if (body.active !== undefined) out.active = toBool(body.active);
+  if (body.donationOptions !== undefined) out.donationOptions = normalizeOptions(body.donationOptions);
+  if (body.eventId !== undefined) out.eventId = body.eventId || null;
+  if (body.meta !== undefined) out.meta = body.meta && typeof body.meta === "object" ? body.meta : null;
+  return out;
+};
+
+const loadPopulated = async (where, params) => {
+  const rows = await many(
+    `SELECT f.*, u.id AS u_id, u.name AS u_name, u.email AS u_email
+       FROM festival_donations f LEFT JOIN users u ON u.id = f.created_by
+      ${where} ORDER BY f.created_at, f.id`,
+    params
+  );
+  const eventIds = [...new Set(rows.map((r) => r.event_id).filter(Boolean))];
+  const eventDocs = eventIds.length ? await events.find({ _id: { $in: eventIds } }) : [];
+  const eventMap = new Map(eventDocs.map((e) => [e._id, e]));
+  return rows.map((row) => {
+    const [rest, user] = splitUser(row);
+    const doc = festivalDonations.fromRow(rest);
+    if (user) doc.createdBy = user;
+    if (rest.event_id) doc.eventId = eventMap.get(rest.event_id) || null;
+    return doc;
+  });
+};
 
 const festivalDonationController = {
   publicList: async (req, res) => {
     try {
-      // Only active campaigns appear on the public home/donations sections;
-      // test/inactive records are kept in the DB but excluded. Titles/slugs
-      // are trimmed so hand-typed trailing space ("Testing on the server ")
-      // can never surface as a blank-ish card title.
-      const festivals = await festivalDonationModel.find(
+      const festivals = await festivalDonations.find(
         { active: true, slug: { $ne: "" }, title: { $ne: "" } },
-        'title slug description images active donationOptions meta createdAt'
-      ).sort({ createdAt: 1 });
-      const clean = festivals.map((f) => {
-        const doc = f.toObject();
+        { fields: PUBLIC_FIELDS, sort: { createdAt: 1, _id: 1 } }
+      );
+      const clean = festivals.map((doc) => {
         if (doc.title) doc.title = String(doc.title).trim();
         if (doc.slug) doc.slug = String(doc.slug).trim();
         return doc;
       });
-      if (!clean || clean.length === 0) {
-        return res.json({ message: "Currently there are no festivals" });
-      }
+      if (!clean.length) return res.json({ message: "Currently there are no festivals" });
       res.json(clean);
     } catch (err) {
-      console.error('festivalDonationController.publicList error:', err);
+      console.error("festivalDonationController.publicList error:", err);
       res.status(500).json({ message: "Server error" });
     }
   },
+
   list: async (req, res) => {
     try {
-      const festivals = await festivalDonationModel.find()
-        .populate('createdBy', 'name email')
-        .populate('eventId');
-
-      console.log('DEBUG donationModule keys:', Object.keys(donationModule));
-      console.log('DEBUG donationModule content:', donationModule);
-      const { donationModel } = donationModule;
-      console.log('DEBUG donationModel type:', typeof donationModel);
-      if (donationModel) {
-        try {
-          console.log('DEBUG donationModel.modelName:', donationModel.modelName);
-          console.log('DEBUG donationModel.countDocuments type:', typeof donationModel.countDocuments);
-        } catch (err) {
-          console.error('DEBUG reading donationModel properties failed:', err);
-        }
-      }
-      const festivalsWithDonationCount = await Promise.all(festivals.map(async (festival) => {
-        let donationCount = 0;
-        try {
-          if (donationModel && typeof donationModel.countDocuments === 'function') {
-            donationCount = await donationModel.countDocuments({ festivalId: festival._id });
-          } else {
-            console.warn('donationModel.countDocuments not available, defaulting donationCount to 0');
-          }
-        } catch (err) {
-          console.error('Error counting donations for festival', festival._id, err);
-        }
-        return {
-          ...festival.toObject(),
-          event: festival.eventId,
-          donationCount
-        };
-      }));
-      res.json(festivalsWithDonationCount);
+      const festivals = await loadPopulated("", []);
+      const counts = await many(
+        `SELECT festival_id, count(*)::int AS n FROM donations WHERE festival_id IS NOT NULL GROUP BY festival_id`
+      );
+      const countMap = new Map(counts.map((c) => [c.festival_id, c.n]));
+      res.json(festivals.map((f) => ({ ...f, event: f.eventId, donationCount: countMap.get(f._id) || 0 })));
     } catch (err) {
-      console.error('festivalDonationController.list error:', err);
+      console.error("festivalDonationController.list error:", err);
       res.status(500).json({ message: "Server error" });
     }
   },
 
   getBySlug: async (req, res) => {
     try {
-      const rawSlug = req.params.slug || '';
-      const slug = String(rawSlug).trim();
-      const festival = await festivalDonationModel.findOne({ slug })
-        .populate('createdBy', 'name email')
-        .populate('eventId');
-      if (!festival) {
-        return res.status(404).json({ message: "Festival donation page not found" });
-      }
+      const slug = String(req.params.slug || "").trim();
+      const [festival] = await loadPopulated("WHERE f.slug = $1", [slug]);
+      if (!festival) return res.status(404).json({ message: "Festival donation page not found" });
 
-  const donations = await donationModel.find({ $or: [{ festivalId: festival._id }, { festivalSlug: slug }] })
-        .sort({ createdAt: -1 })
-        .limit(10);
-      res.json({
-        ...festival.toObject(),
-        event: festival.eventId,
-        donations
-      });
+      const recent = await donations.find(
+        { $or: [{ festivalId: festival._id }, { festivalSlug: slug }] },
+        { sort: { createdAt: -1, _id: -1 }, limit: 10 }
+      );
+      res.json({ ...festival, event: festival.eventId, donations: recent });
     } catch (err) {
-      console.error('festivalDonationController.getBySlug error:', err);
+      console.error("festivalDonationController.getBySlug error:", err);
       res.status(500).json({ message: "Server error" });
     }
   },
 
   create: async (req, res) => {
     try {
-  let { title, slug, description, images, donationOptions, meta } = req.body;
-  if (slug) slug = String(slug).trim();
-      if (!title || !slug) return res.status(400).json({ message: "Title and slug are required" });
-      const exists = await festivalDonationModel.findOne({ slug });
-      if (exists) return res.status(409).json({ message: "Slug already exists" });
-      const page = await festivalDonationModel.create({
-        title, slug, description, images, donationOptions, meta,
-        createdBy: req.user.userId
-      });
+      let { slug } = req.body;
+      if (slug) slug = String(slug).trim();
+      if (!req.body.title || !slug) return res.status(400).json({ message: "Title and slug are required" });
+      if (await festivalDonations.findOne({ slug }, { fields: ["slug"] })) {
+        return res.status(409).json({ message: "Slug already exists" });
+      }
+      const { eventId, ...fields } = writableFields(req.body); // create has never accepted eventId
+      const page = await festivalDonations.insert({ ...fields, slug, createdBy: req.user.userId });
       res.status(201).json({ message: "Festival donation page created", page });
     } catch (err) {
-      console.error('festivalDonationController.create error:', err);
+      console.error("festivalDonationController.create error:", err);
       res.status(500).json({ message: "Server error" });
     }
   },
 
   update: async (req, res) => {
     try {
-      const { id } = req.params;
-  if (req.body.slug) req.body.slug = String(req.body.slug).trim();
-  const page = await festivalDonationModel.findByIdAndUpdate(id, req.body, { new: true });
+      const patch = writableFields(req.body);
+      if (req.body.slug) patch.slug = String(req.body.slug).trim();
+      const page = await festivalDonations.updateById(req.params.id, patch);
       if (!page) return res.status(404).json({ message: "Festival page not found" });
       res.status(200).json({ message: "Festival donation page updated", page });
     } catch (err) {
-      console.error('festivalDonationController.update error:', err);
+      console.error("festivalDonationController.update error:", err);
       res.status(500).json({ message: "Server error" });
     }
   },
 
   delete: async (req, res) => {
     try {
-      const { id } = req.params;
-      await festivalDonationModel.findByIdAndDelete(id);
+      await festivalDonations.deleteById(req.params.id);
       res.status(200).json({ message: "Festival donation page deleted" });
     } catch (err) {
-      console.error('festivalDonationController.delete error:', err);
+      console.error("festivalDonationController.delete error:", err);
       res.status(500).json({ message: "Server error" });
     }
-  }
+  },
 };
 
 export { festivalDonationController };

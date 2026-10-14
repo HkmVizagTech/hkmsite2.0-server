@@ -1,19 +1,11 @@
-import { donorModel } from "../models/donor.model.js";
-import { donationModel } from "../models/donation.model.js";
+import { donors as donorsTable, donations } from "../db/tables.js";
 import { istDayStart, istDayEnd } from "../config/timezone.js";
-import mongoose from "mongoose";
+import { aggregate, castId } from "../domain/donationQuery.js";
 import { isWhatsAppConfigured } from "../services/whatsapp.service.js";
 import { sendDonationWhatsAppReceipt } from "../services/paymentCompletion.service.js";
 
 const preacherController = {
   // GET /preacher/search-donor?q=<mobile, name, or donor ID>
-  // Searches ALL donors sitewide (not scoped to just this preacher's own
-  // assigned donors) - a donor may have first been raised by a different
-  // preacher, or come in through the website directly, and any preacher
-  // with the raise-receipt module should still be able to find them and
-  // record a new donation without accidentally creating a duplicate
-  // Donor record. This does NOT reassign the donor - assignedPreacherId
-  // only changes on a donor's very first donation ever.
   searchDonor: async (req, res) => {
     try {
       const q = String(req.query.q || "").trim();
@@ -27,12 +19,18 @@ const preacherController = {
       ];
       if (digitsOnly.length >= 3) conditions.push({ mobile: { $regex: digitsOnly } });
 
-      const donors = await donorModel.find({ $or: conditions }).limit(10).lean();
+      const donors = await donorsTable.find({ $or: conditions }, { sort: { _id: 1 }, limit: 10 });
       res.status(200).json({
         success: true,
         // DCC's DonorNumber is the real, authoritative ID once it exists;
         // donorId is only a fallback until DCC has synced a donation.
-        donors: donors.map((d) => ({ _id: d._id, donorId: d.dccDonorNumber || d.donorId, name: d.name, mobile: d.mobile, email: d.email })),
+        donors: donors.map((d) => ({
+          _id: d._id,
+          donorId: d.dccDonorNumber || d.donorId,
+          name: d.name,
+          mobile: d.mobile,
+          email: d.email,
+        })),
       });
     } catch (err) {
       console.error("preacher.searchDonor error:", err);
@@ -45,14 +43,22 @@ const preacherController = {
   myDonors: async (req, res) => {
     try {
       const preacherId = req.user.userId;
-      const donors = await donorModel.find({ assignedPreacherId: preacherId }).sort({ createdAt: -1 }).lean();
+      const donors = await donorsTable.find({ assignedPreacherId: preacherId }, { sort: { createdAt: -1, _id: 1 } });
 
       const donorIds = donors.map((d) => d._id);
-      const rollups = await donationModel.aggregate([
-        { $match: { donorRecordId: { $in: donorIds }, status: "completed" } },
-        { $group: { _id: "$donorRecordId", totalAmount: { $sum: "$amount" }, count: { $sum: 1 }, lastDonatedAt: { $max: "$createdAt" } } },
-      ]);
-      const rollupMap = new Map(rollups.map((r) => [String(r._id), r]));
+      const rollups = donorIds.length
+        ? await aggregate(
+            { donorRecordId: { $in: donorIds }, status: "completed" },
+            "donor_record_id AS k, SUM(amount) AS total_amount, COUNT(*) AS count, MAX(created_at) AS last_donated_at",
+            { groupBy: "donor_record_id" }
+          )
+        : [];
+      const rollupMap = new Map(
+        rollups.map((r) => [
+          String(r.k),
+          { totalAmount: r.total_amount, count: r.count, lastDonatedAt: r.last_donated_at },
+        ])
+      );
 
       const result = donors.map((d) => ({
         _id: d._id,
@@ -76,16 +82,33 @@ const preacherController = {
   // full donation history, only if that donor is assigned to THIS preacher.
   donorDonations: async (req, res) => {
     try {
-      const donor = await donorModel.findOne({ _id: req.params.donorRecordId, assignedPreacherId: req.user.userId }).lean();
+      const donor = await donorsTable.findOne({
+        _id: castId(req.params.donorRecordId),
+        assignedPreacherId: req.user.userId,
+      });
       if (!donor) return res.status(404).json({ success: false, message: "Donor not found or not assigned to you." });
 
-      const donations = await donationModel
-        .find({ donorRecordId: donor._id })
-        .sort({ createdAt: -1 })
-        .select("donorName amount sevaName type status receiptNumber createdAt utrNumber manualPaymentMode")
-        .lean();
+      const rows = await donations.find(
+        { donorRecordId: donor._id },
+        {
+          sort: { createdAt: -1, _id: 1 },
+          fields: [
+            "donorName",
+            "amount",
+            "sevaName",
+            "type",
+            "status",
+            "receiptNumber",
+            "createdAt",
+            "utrNumber",
+            "manualPaymentMode",
+          ],
+        }
+      );
 
-      res.status(200).json({ success: true, donor, donations });
+      // OTP state never leaves the server (the hash of a 6-digit code is brute-forceable).
+      const { otpCodeHash, otpExpiresAt, otpAttempts, otpLastRequestedAt, ...safeDonor } = donor;
+      res.status(200).json({ success: true, donor: safeDonor, donations: rows });
     } catch (err) {
       console.error("preacher.donorDonations error:", err);
       res.status(500).json({ success: false, message: err.message || "Server error" });
@@ -99,11 +122,8 @@ const preacherController = {
       const preacherId = req.user.userId;
       const { from, to } = req.query;
 
-      const match = { manualEnteredBy: new mongoose.Types.ObjectId(preacherId), status: "completed" };
+      const match = { manualEnteredBy: preacherId, status: "completed" };
 
-      // IST calendar days — a bare YYYY-MM-DD parses as UTC midnight
-      // (05:30 IST), which used to cut the first morning hours off a
-      // preacher's own collection figures.
       if (from || to) {
         match.createdAt = {};
         if (from) {
@@ -117,21 +137,17 @@ const preacherController = {
       }
 
       const [summary, bySeva] = await Promise.all([
-        donationModel.aggregate([
-          { $match: match },
-          { $group: { _id: null, total: { $sum: "$amount" }, count: { $sum: 1 } } },
-        ]),
-        donationModel.aggregate([
-          { $match: match },
-          { $group: { _id: { $ifNull: ["$sevaName", "General"] }, amount: { $sum: "$amount" }, count: { $sum: 1 } } },
-          { $sort: { amount: -1 } },
-        ]),
+        aggregate(match, "COALESCE(SUM(amount), 0) AS total, COUNT(*) AS count"),
+        aggregate(match, "COALESCE(seva_name, 'General') AS k, SUM(amount) AS amount, COUNT(*) AS count", {
+          groupBy: "k",
+          orderBy: `amount DESC, k COLLATE "C"`,
+        }),
       ]);
 
       res.status(200).json({
         success: true,
-        summary: { totalAmount: summary[0]?.total || 0, count: summary[0]?.count || 0 },
-        bySeva: bySeva.map((s) => ({ sevaName: s._id, amount: s.amount, count: s.count })),
+        summary: { totalAmount: Number(summary[0].total) || 0, count: Number(summary[0].count) || 0 },
+        bySeva: bySeva.map((s) => ({ sevaName: s.k, amount: s.amount, count: s.count })),
       });
     } catch (err) {
       console.error("preacher.myReports error:", err);
@@ -139,32 +155,31 @@ const preacherController = {
     }
   },
 
-  // POST /preacher/donations/:id/resend-whatsapp — same as the admin
-  // resend, but only allowed if this donation belongs to a donor
-  // assigned to THIS preacher (or was raised by them directly).
   resendWhatsApp: async (req, res) => {
     try {
-      const donation = await donationModel.findById(req.params.id);
+      const donation = await donations.findById(castId(req.params.id));
       if (!donation) return res.status(404).json({ success: false, message: "Donation not found." });
 
       const ownedDirectly = String(donation.manualEnteredBy || "") === String(req.user.userId);
       const ownedViaDonor = donation.donorRecordId
-        ? await donorModel.exists({ _id: donation.donorRecordId, assignedPreacherId: req.user.userId })
+        ? await donorsTable.exists({ _id: donation.donorRecordId, assignedPreacherId: req.user.userId })
         : false;
 
       if (!ownedDirectly && !ownedViaDonor) {
         return res.status(403).json({ success: false, message: "This donation isn't assigned to you." });
       }
 
-
-
-
-      if (!isWhatsAppConfigured()) return res.status(503).json({ success: false, message: "WhatsApp isn't configured on the server." });
+      if (!isWhatsAppConfigured())
+        return res.status(503).json({ success: false, message: "WhatsApp isn't configured on the server." });
 
       const result = await sendDonationWhatsAppReceipt(donation, { force: true });
       if (result.ok) return res.status(200).json({ success: true, message: "WhatsApp receipt sent successfully" });
       if (result.reason === "no_receipt_yet") {
-        return res.status(200).json({ success: false, message: "This donation doesn't have a DCC receipt yet — try again shortly.", skipped: true });
+        return res.status(200).json({
+          success: false,
+          message: "This donation doesn't have a DCC receipt yet — try again shortly.",
+          skipped: true,
+        });
       }
       res.status(502).json({ success: false, message: result.reason || "WhatsApp send failed" });
     } catch (err) {
