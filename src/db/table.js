@@ -253,7 +253,14 @@ function defineTable({
       if (nests[f]) Object.values(nests[f]).forEach((c) => cols.add(c));
       else cols.add(fieldToCol(f));
     }
-    return [...cols].map(qi).join(", ");
+    const list = [...cols].filter((c) => knownCol(c)).map(qi);
+    if (knownCol("extra")) {
+      const selected = fields.filter((f) => /^[A-Za-z0-9_.$]+$/.test(f)).map((f) => `'${f}'`);
+      list.push(
+        `jsonb_build_object('$nulls', COALESCE((SELECT jsonb_agg(p) FROM jsonb_array_elements_text("extra"->'$nulls') p WHERE p = ANY(ARRAY[${selected.join(",") || "''"}]::text[]) OR split_part(p, '.', 1) = ANY(ARRAY[${selected.join(",") || "''"}]::text[])), '[]'::jsonb)) AS "extra"`
+      );
+    }
+    return list.join(", ");
   };
   const orderBy = (sort) => {
     if (!sort) return "";
