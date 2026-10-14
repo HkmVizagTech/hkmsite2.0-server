@@ -36,7 +36,7 @@
 //      order, so a late "sent" must not overwrite an already-recorded
 //      "delivered" (see STATUS_RANK).
 
-const { donationModel } = require("../models/donation.model");
+import { donationModel } from "../models/donation.model.js";
 
 // Ordered so a later event can only advance the status, never regress it.
 // "failed" is deliberately outside this ladder — it is terminal and always
@@ -171,4 +171,4 @@ const whatsappWebhookController = {
   },
 };
 
-module.exports = { whatsappWebhookController };
+export { whatsappWebhookController };

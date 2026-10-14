@@ -1,7 +1,8 @@
-const { productModel, totalStock, priceRange } = require("../models/product.model");
-const { shopCategoryModel } = require("../models/shopCategory.model");
-const { getShopSettings, calculateShipping } = require("../models/shopSettings.model");
-const { uploadToR2 } = require("../utils/r2");
+import { unlink } from "node:fs";
+import { productModel, totalStock, priceRange } from "../models/product.model.js";
+import { shopCategoryModel } from "../models/shopCategory.model.js";
+import { getShopSettings, calculateShipping, shopSettingsModel } from "../models/shopSettings.model.js";
+import { uploadToR2 } from "../utils/r2.js";
 
 const slugify = (raw) =>
   String(raw || "")
@@ -264,7 +265,7 @@ const productController = {
     try {
       if (!req.file) return res.status(400).json({ message: "No file uploaded" });
       const result = await uploadToR2(req.file.path, "shop");
-      require("fs").unlink(req.file.path, () => {});
+      unlink(req.file.path, () => {});
       res.status(200).json({ secure_url: result.secure_url });
     } catch (error) {
       console.error("product.uploadImage error:", error);
@@ -548,7 +549,7 @@ const productController = {
         if (req.body[k] !== undefined) updates[k] = req.body[k];
       });
 
-      const { shopSettingsModel } = require("../models/shopSettings.model");
+
       const settings = await shopSettingsModel.findByIdAndUpdate("default", updates, { new: true, upsert: true });
       res.status(200).json({ success: true, message: "Shop settings saved.", settings });
     } catch (err) {
@@ -558,4 +559,4 @@ const productController = {
   },
 };
 
-module.exports = { productController, publicProductShape, slugify, calculateShipping };
+export { productController, publicProductShape, slugify, calculateShipping };

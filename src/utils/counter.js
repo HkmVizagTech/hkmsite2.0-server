@@ -1,4 +1,4 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
 // Generic atomic counter, used for generating sequential IDs (like donor
 // IDs) safely even if two requests try to create one at the exact same
@@ -19,4 +19,4 @@ async function getNextSequence(name) {
   return doc.seq;
 }
 
-module.exports = { getNextSequence };
+export { getNextSequence };

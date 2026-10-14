@@ -1,4 +1,6 @@
-// Live push to the HKM Vizag DRM (donor relationship manager, a separate
+import { donorModel } from "../models/donor.model.js";
+import { donationModel } from "../models/donation.model.js";
+import { buildDonorSnapshot } from "../controllers/internal.controller.js";// Live push to the HKM Vizag DRM (donor relationship manager, a separate
 // PostgreSQL/Express app). When a donation completes here, DRM should show
 // it immediately rather than waiting for someone to press "sync" - so the
 // post-completion pipeline calls notifyDrmOfDonation() and DRM upserts the
@@ -39,7 +41,7 @@ function isConfigured() {
 // lookup when donorRecordId wasn't linked (the linking step in the pipeline is
 // itself non-fatal, so it can legitimately be missing).
 async function resolveDonorForDonation(donation) {
-  const { donorModel } = require("../models/donor.model");
+
 
   if (donation.donorRecordId) {
     const byId = await donorModel.findById(donation.donorRecordId).lean();
@@ -63,7 +65,7 @@ async function notifyDrmOfDonation(donationId, { reason = "donation_completed" }
       return { ok: false, skipped: true, reason: "not_configured" };
     }
 
-    const { donationModel } = require("../models/donation.model");
+
     const donation = await donationModel.findById(donationId).lean();
     if (!donation) return { ok: false, skipped: true, reason: "donation_not_found" };
 
@@ -72,7 +74,7 @@ async function notifyDrmOfDonation(donationId, { reason = "donation_completed" }
 
     // Same snapshot shape the pull API returns, so DRM runs one upsert path
     // for both push and pull instead of two that can drift.
-    const { buildDonorSnapshot } = require("../controllers/internal.controller");
+
     const snapshot = await buildDonorSnapshot(donor);
 
     const baseUrl = normalizeBaseUrl(process.env.DRM_API_URL);
@@ -111,4 +113,4 @@ async function notifyDrmOfDonation(donationId, { reason = "donation_completed" }
   }
 }
 
-module.exports = { notifyDrmOfDonation, isConfigured };
+export { notifyDrmOfDonation, isConfigured };

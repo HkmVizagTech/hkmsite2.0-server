@@ -1,4 +1,4 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
 const gallerySchema = new mongoose.Schema({
   title: { type: String, required: true },
@@ -16,4 +16,4 @@ const gallerySchema = new mongoose.Schema({
 
 const galleryModel = mongoose.model("gallery", gallerySchema);
 
-module.exports = { galleryModel };
+export { galleryModel };

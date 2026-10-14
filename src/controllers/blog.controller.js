@@ -1,6 +1,6 @@
-const { blogModel, BLOG_CATEGORIES } = require("../models/blog.model");
-const { uploadToR2 } = require("../utils/r2");
-const fs = require("fs");
+import { blogModel, BLOG_CATEGORIES } from "../models/blog.model.js";
+import { uploadToR2 } from "../utils/r2.js";
+import fs from "node:fs";
 
 const slugify = (s) =>
   String(s || "")
@@ -425,4 +425,4 @@ const blogController = {
   },
 };
 
-module.exports = { blogController };
+export { blogController };

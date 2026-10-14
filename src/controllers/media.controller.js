@@ -1,6 +1,6 @@
-const fs = require("fs");
-const { mediaModel } = require("../models/media.model");
-const { uploadToR2, deleteFromR2 } = require("../utils/r2");
+import fs from "node:fs";
+import { mediaModel } from "../models/media.model.js";
+import { uploadToR2, deleteFromR2 } from "../utils/r2.js";
 
 const mediaController = {
   // ADMIN — upload one or more images to the media library.
@@ -92,4 +92,4 @@ const mediaController = {
   },
 };
 
-module.exports = { mediaController };
+export { mediaController };

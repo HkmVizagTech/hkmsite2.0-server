@@ -1,10 +1,10 @@
 
 
 
-const express = require("express");
-const rateLimit = require("express-rate-limit");
-const { userController } = require("../controllers/user.controller");
-const { authMiddleware, adminMiddleware } = require("../middlewares/auth.middleware");
+import express from "express";
+import rateLimit from "express-rate-limit";
+import { userController } from "../controllers/user.controller.js";
+import { authMiddleware, adminMiddleware } from "../middlewares/auth.middleware.js";
 
 const userRouter = express.Router();
 
@@ -34,4 +34,4 @@ userRouter.put("/update", authMiddleware, userController.update);
 userRouter.get("/", authMiddleware, adminMiddleware, userController.getUser);
 userRouter.delete("/:id", authMiddleware, adminMiddleware, userController.delete);
 
-module.exports = { userRouter };
+export { userRouter };

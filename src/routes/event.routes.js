@@ -1,13 +1,13 @@
-const express = require("express");
-const { eventController } = require("../controllers/event.controller");
-const { authMiddleware, adminMiddleware } = require("../middlewares/auth.middleware");
-const { eventValidationRules } = require("../validators/event.validator");
-const { validationResult } = require("express-validator");
-const upload = require("../utils/multer");
+import express from "express";
+import { eventController } from "../controllers/event.controller.js";
+import { authMiddleware, adminMiddleware } from "../middlewares/auth.middleware.js";
+import { eventValidationRules } from "../validators/event.validator.js";
+import { validationResult } from "express-validator";
+import upload from "../utils/multer.js";
 
 const eventRouter = express.Router();
 
-const { register, listRegistrations, markAttendance, publicCheckin } = require("../controllers/registration.controller");
+import { register, listRegistrations, markAttendance, publicCheckin } from "../controllers/registration.controller.js";
 
 eventRouter.get("/", eventController.list);
 eventRouter.get("/:id", eventController.get);
@@ -58,4 +58,4 @@ eventRouter.post(
 
 eventRouter.post("/:id/checkin/:token", publicCheckin);
 
-module.exports = { eventRouter };
+export { eventRouter };

@@ -5,8 +5,8 @@
 // express.json() in app.js would leave req.body empty for those, so the
 // urlencoded parser is added here at route level.
 
-const express = require("express");
-const { whatsappWebhookController } = require("../controllers/whatsappWebhook.controller");
+import express from "express";
+import { whatsappWebhookController } from "../controllers/whatsappWebhook.controller.js";
 
 const whatsappWebhookRouter = express.Router();
 
@@ -21,4 +21,4 @@ whatsappWebhookRouter.get("/gupshup/:secret", (req, res) =>
   res.status(200).json({ ok: true, endpoint: "gupshup-delivery-callback" })
 );
 
-module.exports = { whatsappWebhookRouter };
+export { whatsappWebhookRouter };

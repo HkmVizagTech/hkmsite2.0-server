@@ -6,7 +6,7 @@
  * idempotent — missing slugs are inserted, existing ones are left untouched.
  */
 
-const { shopCategoryModel } = require("../models/shopCategory.model");
+import { shopCategoryModel } from "../models/shopCategory.model.js";
 
 // Matches the slugifier used by the product controller so seeded and
 // admin-created categories behave identically.
@@ -116,4 +116,4 @@ async function ensureDefaultShopCategories() {
   return { created: createdNames.length, createdNames, skipped };
 }
 
-module.exports = { DEFAULT_SHOP_CATEGORIES, slugify, ensureDefaultShopCategories };
+export { DEFAULT_SHOP_CATEGORIES, slugify, ensureDefaultShopCategories };

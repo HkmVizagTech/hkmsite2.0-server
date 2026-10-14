@@ -1,4 +1,4 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
 
 const donationSchema = new mongoose.Schema({
@@ -233,4 +233,4 @@ donationSchema.index({ manualEnteredBy: 1 });
 
 const donationModel = mongoose.model("donation", donationSchema);
 
-module.exports = { donationModel };
+export { donationModel };

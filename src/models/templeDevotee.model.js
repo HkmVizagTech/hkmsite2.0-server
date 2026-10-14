@@ -1,4 +1,4 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
 // Curated list of temple devotees (counselors/preachers) maintained by
 // admin. Campaigner registrants pick "a devotee they know" from this list;
@@ -18,4 +18,4 @@ const templeDevoteeSchema = new mongoose.Schema(
 
 const templeDevoteeModel = mongoose.model("templeDevotee", templeDevoteeSchema);
 
-module.exports = { templeDevoteeModel };
+export { templeDevoteeModel };

@@ -1,4 +1,4 @@
-const { body } = require('express-validator');
+import { body } from "express-validator";
 
 const eventValidationRules = [
   body('title').notEmpty().withMessage('Title is required'),
@@ -8,4 +8,4 @@ const eventValidationRules = [
   body('category').optional().isString(),
 ];
 
-module.exports = { eventValidationRules };
+export { eventValidationRules };

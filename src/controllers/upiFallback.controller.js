@@ -12,11 +12,11 @@
 // time, so an admin can match them with one click. Matching runs the normal
 // completion pipeline (receipt, 80G, DCC, WhatsApp) via completeDonation.
 
-const mongoose = require("mongoose");
-const { donationModel } = require("../models/donation.model");
-const { createRazorpayInstance } = require("./payment.controller");
-const { completeDonation } = require("../services/paymentCompletion.service");
-const { liveCheckDonationOrder } = require("../services/liveOrderCheck.service");
+import mongoose from "mongoose";
+import { donationModel } from "../models/donation.model.js";
+import { createRazorpayInstance } from "./payment.controller.js";
+import { completeDonation } from "../services/paymentCompletion.service.js";
+import { liveCheckDonationOrder } from "../services/liveOrderCheck.service.js";
 
 const ACCOUNTS = ["default", "donations", "touchstone", "shop"];
 
@@ -436,4 +436,4 @@ const upiFallbackController = {
   },
 };
 
-module.exports = { upiFallbackController };
+export { upiFallbackController };

@@ -1,11 +1,16 @@
-const Razorpay = require('razorpay');
-const crypto = require('crypto');
-const { donationModel } = require('../models/donation.model');
-const { planModel } = require('../models/plan.model');
-const { sanitizeBannerImage } = require('../services/pageBanner.service');
-const { recordPaymentFailure, recordDowntime } = require('../services/paymentFailure.service');
+import Razorpay from "razorpay";
+import crypto from "node:crypto";
+import { donationModel } from "../models/donation.model.js";
+import { planModel } from "../models/plan.model.js";
+import { sanitizeBannerImage } from "../services/pageBanner.service.js";
+import { recordPaymentFailure, recordDowntime } from "../services/paymentFailure.service.js";
 
-const { completeDonation, markDonationCompleted, runPostCompletionPipeline, handleSubscriptionCharged } = require('../services/paymentCompletion.service');
+import { completeDonation, markDonationCompleted, runPostCompletionPipeline, handleSubscriptionCharged } from "../services/paymentCompletion.service.js";
+import { confirmShopOrderPaid, sendOrderWhatsApp } from "./shopOrder.controller.js";
+import { shopOrderModel } from "../models/shopOrder.model.js";
+import { festivalDonationModel } from "../models/festivalDonation.model.js";
+import { campaignerModel } from "../models/campaigner.model.js";
+import { liveCheckDonationOrder } from "../services/liveOrderCheck.service.js";
 
 // Smallest donation we will take, in rupees. Anything under this costs
 // more in payment-gateway fees, receipt generation and DCC sync than it
@@ -115,7 +120,7 @@ async function processWebhookEventInline(event) {
       // confirmShopOrderPaid is idempotent, so this is safe even when verify
       // already confirmed the very same payment.
       {
-        const { confirmShopOrderPaid, sendOrderWhatsApp } = require('./shopOrder.controller');
+
         const shopResult = await confirmShopOrderPaid({ razorpayOrderId: orderId, paymentId: payment.id });
         if (shopResult.ok && shopResult.order) {
           if (shopResult.skipped) {
@@ -140,7 +145,7 @@ async function processWebhookEventInline(event) {
       // showing as "awaiting payment". Stock was never decremented for an
       // unpaid order, so nothing needs restoring.
       {
-        const { shopOrderModel } = require('../models/shopOrder.model');
+
         const shopOrder = await shopOrderModel.findOne({ razorpayOrderId: orderId });
         if (shopOrder) {
           if (shopOrder.paymentStatus === 'pending') {
@@ -288,7 +293,7 @@ const paymentController = {
       let resolvedFestivalId = req.body.festivalId;
       if (!resolvedFestivalId && req.body.festivalSlug) {
         try {
-          const { festivalDonationModel } = require('../models/festivalDonation.model');
+
           const fest = await festivalDonationModel.findOne({ slug: req.body.festivalSlug }).select('_id');
           if (fest) resolvedFestivalId = fest._id;
         } catch (err) {
@@ -325,7 +330,7 @@ const paymentController = {
         dccEnrolledById: await (async () => {
           if (!req.body.campaignerSlug) return undefined;
           try {
-            const { campaignerModel } = require('../models/campaigner.model');
+
             const camp = await campaignerModel
               .findOne({ slug: String(req.body.campaignerSlug), status: 'active' })
               .populate('referredByDevotee', 'dccEnrolledById')
@@ -664,7 +669,7 @@ const paymentController = {
       let inProgress = false;
       if (req.query.live === '1' && donation.status !== 'completed') {
         try {
-          const { liveCheckDonationOrder } = require('../services/liveOrderCheck.service');
+
           const live = await liveCheckDonationOrder(donation);
           inProgress = live.inProgress;
           if (live.completed) donation = { ...donation, status: 'completed' };
@@ -896,4 +901,4 @@ const paymentController = {
   },
 };
 
-module.exports = { paymentController, createRazorpayInstance };
+export { paymentController, createRazorpayInstance };

@@ -1,7 +1,7 @@
-const express = require("express");
-const { mediaController } = require("../controllers/media.controller");
-const { authMiddleware, adminMiddleware } = require("../middlewares/auth.middleware");
-const upload = require("../utils/multer");
+import express from "express";
+import { mediaController } from "../controllers/media.controller.js";
+import { authMiddleware, adminMiddleware } from "../middlewares/auth.middleware.js";
+import upload from "../utils/multer.js";
 
 const mediaRouter = express.Router();
 
@@ -10,4 +10,4 @@ mediaRouter.post("/", authMiddleware, adminMiddleware, upload.any(), mediaContro
 mediaRouter.put("/:id", authMiddleware, adminMiddleware, mediaController.update);
 mediaRouter.delete("/:id", authMiddleware, adminMiddleware, mediaController.delete);
 
-module.exports = { mediaRouter };
+export { mediaRouter };

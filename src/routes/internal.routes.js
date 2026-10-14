@@ -1,5 +1,5 @@
-const express = require("express");
-const { internalController } = require("../controllers/internal.controller");
+import express from "express";
+import { internalController } from "../controllers/internal.controller.js";
 
 const internalRouter = express.Router();
 
@@ -43,4 +43,4 @@ internalRouter.get("/abandoned", internalController.getAbandonedDonations);
 internalRouter.get("/donations/:id/receipt.pdf", internalController.getReceiptPdf);
 internalRouter.post("/donations/:id/resend-receipt", internalController.resendReceipt);
 
-module.exports = { internalRouter };
+export { internalRouter };

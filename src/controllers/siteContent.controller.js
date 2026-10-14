@@ -1,4 +1,4 @@
-const { siteContentModel } = require("../models/siteContent.model");
+import { siteContentModel } from "../models/siteContent.model.js";
 
 // Matches the schema default in siteContent.model.js — used when an admin
 // clears the field, so the section always has a video rather than an empty
@@ -116,4 +116,4 @@ const siteContentController = {
   },
 };
 
-module.exports = { siteContentController };
+export { siteContentController };

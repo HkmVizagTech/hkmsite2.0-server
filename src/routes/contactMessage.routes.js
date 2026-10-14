@@ -1,6 +1,6 @@
-const express = require("express");
-const { contactMessageController } = require("../controllers/contactMessage.controller");
-const { authMiddleware, adminMiddleware } = require("../middlewares/auth.middleware");
+import express from "express";
+import { contactMessageController } from "../controllers/contactMessage.controller.js";
+import { authMiddleware, adminMiddleware } from "../middlewares/auth.middleware.js";
 
 const contactMessageRouter = express.Router();
 
@@ -12,4 +12,4 @@ contactMessageRouter.get("/", authMiddleware, adminMiddleware, contactMessageCon
 contactMessageRouter.put("/:id/status", authMiddleware, adminMiddleware, contactMessageController.updateStatus);
 contactMessageRouter.delete("/:id", authMiddleware, adminMiddleware, contactMessageController.delete);
 
-module.exports = { contactMessageRouter };
+export { contactMessageRouter };

@@ -3,10 +3,10 @@
 //   R2_BUCKET_NAME=... R2_PUBLIC_URL=... node scripts/r2-smoke-test.js
 // Uploads a tiny 1x1 PNG, prints the public URL, then deletes it.
 // Not part of the app — safe to delete after use.
-const fs = require("fs");
-const os = require("os");
-const path = require("path");
-const { uploadToR2, deleteFromR2 } = require("../src/utils/r2");
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { uploadToR2, deleteFromR2 } from "../src/utils/r2.js";
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";

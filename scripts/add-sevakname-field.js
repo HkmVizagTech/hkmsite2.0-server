@@ -2,9 +2,12 @@
 // next to the existing "Sevak Name :" printed label, then saves the result.
 // Run once: node scripts/add-sevakname-field.js
 
-const { PDFDocument, PDFName, PDFString, rgb } = require("pdf-lib");
-const fs = require("fs");
-const path = require("path");
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { PDFDocument, PDFName, PDFString, rgb } from "pdf-lib";
+import fs from "node:fs";
+import path from "node:path";
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const TEMPLATE = path.join(__dirname, "../receipt-template.pdf");
 const BACKUP   = path.join(__dirname, "../receipt-template.backup.pdf");

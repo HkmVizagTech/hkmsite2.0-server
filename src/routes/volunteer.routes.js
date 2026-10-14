@@ -1,6 +1,6 @@
-const express = require("express");
-const { volunteerController } = require("../controllers/volunteer.controller");
-const { authMiddleware, adminMiddleware } = require("../middlewares/auth.middleware");
+import express from "express";
+import { volunteerController } from "../controllers/volunteer.controller.js";
+import { authMiddleware, adminMiddleware } from "../middlewares/auth.middleware.js";
 
 const volunteerRouter = express.Router();
 
@@ -16,4 +16,4 @@ volunteerRouter.get("/", volunteerController.listActive);
 volunteerRouter.get("/:id", volunteerController.get);
 volunteerRouter.post("/:id/register", volunteerController.register);
 
-module.exports = { volunteerRouter };
+export { volunteerRouter };

@@ -1,6 +1,7 @@
 
-const jwt = require("jsonwebtoken");
-const { getJwtSecret } = require("../utils/utils");
+import jwt from "jsonwebtoken";
+import { getJwtSecret } from "../utils/utils.js";
+import { userModel } from "../models/user.model.js";
 
 const authMiddleware = (req, res, next) => {
 	let token;
@@ -79,7 +80,7 @@ const preacherModuleMiddleware = (moduleName) => async (req, res, next) => {
 		return res.status(403).json({ message: "Preacher access required" });
 	}
 	try {
-		const { userModel } = require("../models/user.model");
+
 		const user = await userModel.findById(req.user.userId).select("status allowedModules role");
 		if (!user || user.role !== "preacher" || user.status !== "active") {
 			return res.status(403).json({ message: "Preacher account not active" });
@@ -121,4 +122,4 @@ const donorAuthMiddleware = (req, res, next) => {
 	}
 };
 
-module.exports = { authMiddleware, adminMiddleware, donationsAdminMiddleware, blogsAdminMiddleware, shopAdminMiddleware, preacherModuleMiddleware, donorAuthMiddleware };
+export { authMiddleware, adminMiddleware, donationsAdminMiddleware, blogsAdminMiddleware, shopAdminMiddleware, preacherModuleMiddleware, donorAuthMiddleware };

@@ -15,8 +15,9 @@
  * - Deliberately does NOT read process.env.MONGO_URI so it can never be pointed at
  *   production by accident.
  */
-const { MongoClient } = require("mongodb");
-const { Client } = require("pg");
+import { MongoClient } from "mongodb";
+import _pg from "pg";
+const { Client } = _pg;
 
 const SRC = process.env.SRC_MONGO_URI;
 const DEST = process.env.DEST_PG_URL;

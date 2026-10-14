@@ -1,4 +1,4 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
 const formFieldSchema = new mongoose.Schema(
   {
@@ -67,4 +67,4 @@ volunteerRegistrationSchema.index({ eventId: 1 });
 const volunteerEventModel = mongoose.model("volunteerEvent", volunteerEventSchema);
 const volunteerRegistrationModel = mongoose.model("volunteerRegistration", volunteerRegistrationSchema);
 
-module.exports = { volunteerEventModel, volunteerRegistrationModel };
+export { volunteerEventModel, volunteerRegistrationModel };

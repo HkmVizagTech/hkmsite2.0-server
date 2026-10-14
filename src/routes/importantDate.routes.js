@@ -1,6 +1,6 @@
-const express = require("express");
-const { importantDateController } = require("../controllers/importantDate.controller");
-const { authMiddleware, adminMiddleware } = require("../middlewares/auth.middleware");
+import express from "express";
+import { importantDateController } from "../controllers/importantDate.controller.js";
+import { authMiddleware, adminMiddleware } from "../middlewares/auth.middleware.js";
 
 const router = express.Router();
 
@@ -11,4 +11,4 @@ router.post("/", authMiddleware, adminMiddleware, importantDateController.create
 router.put("/:id", authMiddleware, adminMiddleware, importantDateController.update);
 router.delete("/:id", authMiddleware, adminMiddleware, importantDateController.delete);
 
-module.exports = { importantDateRouter: router };
+export { router as importantDateRouter };

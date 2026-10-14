@@ -1,9 +1,9 @@
-const express = require("express");
-const { blogController } = require("../controllers/blog.controller");
-const { authMiddleware, adminMiddleware, blogsAdminMiddleware } = require("../middlewares/auth.middleware");
-const { blogValidationRules } = require("../validators/blog.validator");
-const { validationResult } = require("express-validator");
-const upload = require("../utils/multer");
+import express from "express";
+import { blogController } from "../controllers/blog.controller.js";
+import { authMiddleware, adminMiddleware, blogsAdminMiddleware } from "../middlewares/auth.middleware.js";
+import { blogValidationRules } from "../validators/blog.validator.js";
+import { validationResult } from "express-validator";
+import upload from "../utils/multer.js";
 
 const blogRouter = express.Router();
 
@@ -75,4 +75,4 @@ blogRouter.delete("/:id", authMiddleware, blogsAdminMiddleware, blogController.d
 blogRouter.post("/:id/approve-deletion", authMiddleware, adminMiddleware, blogController.approveDeletion);
 blogRouter.post("/:id/reject-deletion", authMiddleware, adminMiddleware, blogController.rejectDeletion);
 
-module.exports = { blogRouter };
+export { blogRouter };

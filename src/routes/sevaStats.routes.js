@@ -1,5 +1,5 @@
-const express = require("express");
-const { sevaStatsController } = require("../controllers/sevaStats.controller");
+import express from "express";
+import { sevaStatsController } from "../controllers/sevaStats.controller.js";
 
 const sevaStatsRouter = express.Router();
 
@@ -7,4 +7,4 @@ sevaStatsRouter.get("/sqft-campaign", sevaStatsController.sqftCampaign); // publ
 sevaStatsRouter.get("/overview", sevaStatsController.overview); // public
 sevaStatsRouter.get("/", sevaStatsController.get); // public
 
-module.exports = { sevaStatsRouter };
+export { sevaStatsRouter };

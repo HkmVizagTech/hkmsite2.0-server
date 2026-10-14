@@ -10,10 +10,10 @@
  * localhost:27017/hkmvizag.
  */
 
-require("dotenv").config();
+import "dotenv/config";
 
-const mongoose = require("mongoose");
-const { DEFAULT_SHOP_CATEGORIES, slugify, ensureDefaultShopCategories } = require("../src/services/shopBootstrap.service");
+import mongoose from "mongoose";
+import { DEFAULT_SHOP_CATEGORIES, slugify, ensureDefaultShopCategories } from "../src/services/shopBootstrap.service.js";
 
 const MONGO_URI = (process.env.MONGO_URI || process.env.MONGODB_URI || "mongodb://localhost:27017/hkmvizag").replace(
   /\/+$/,

@@ -14,7 +14,7 @@
 
 require("dotenv").config();
 
-const { sendPendingWhatsapp } = require("./src/services/whatsapp.service");
+import { sendPendingWhatsapp } from "./src/services/whatsapp.service.js";
 
 const BANNER =
   process.env.WAPI_PENDING_IMAGE ||

@@ -1,4 +1,4 @@
-const { donationModel } = require("../models/donation.model");
+import { donationModel } from "../models/donation.model.js";
 
 const devoteeController = {
   // ADMIN - real devotee list, aggregated from completed donations
@@ -80,4 +80,4 @@ const devoteeController = {
   },
 };
 
-module.exports = { devoteeController };
+export { devoteeController };

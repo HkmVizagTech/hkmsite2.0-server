@@ -1,4 +1,4 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
 // A line on the order. Every display field is SNAPSHOTTED at purchase time
 // (name, variant label, image, unit price) rather than looked up live from
@@ -148,4 +148,4 @@ const shopOrderSchema = new mongoose.Schema(
 shopOrderSchema.index({ createdAt: -1 });
 
 const shopOrderModel = mongoose.model("shopOrder", shopOrderSchema);
-module.exports = { shopOrderModel };
+export { shopOrderModel };

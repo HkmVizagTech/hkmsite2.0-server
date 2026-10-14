@@ -1,6 +1,9 @@
-const { donorModel } = require("../models/donor.model");
-const { donationModel } = require("../models/donation.model");
-const { toEnglish } = require("../utils/toEnglish");
+import { donorModel } from "../models/donor.model.js";
+import { donationModel } from "../models/donation.model.js";
+import { toEnglish } from "../utils/toEnglish.js";
+import { sendDonationWhatsAppReceipt } from "../services/paymentCompletion.service.js";
+import { donationController } from "./donation.controller.js";
+import { generateReceiptBuffer } from "../services/receipt.service.js";
 
 // How long after a receipt goes out another manual resend is refused. Stops a
 // double-click or a client retry from sending the donor two WhatsApp messages.
@@ -305,7 +308,7 @@ const internalController = {
         });
       }
 
-      const { sendDonationWhatsAppReceipt } = require("../services/paymentCompletion.service");
+
       const result = await sendDonationWhatsAppReceipt(donation, { force: true });
 
       if (!result || result.ok === false) {
@@ -344,7 +347,7 @@ const internalController = {
   // guard, the validation - is inherited untouched, so a bug fixed there is
   // fixed for both callers.
   createOfflineDonation: async (req, res) => {
-    const { donationController } = require("./donation.controller");
+
 
     // Who typed it in DRM travels as a note rather than manualEnteredBy: that
     // field references a user in THIS database, and a DRM user id would be a
@@ -384,7 +387,7 @@ const internalController = {
   // says "dispatched". Translating here rather than in DRM keeps the mapping
   // next to the model it is mapping onto.
   updatePrasadamStatus: async (req, res) => {
-    const { donationController } = require("./donation.controller");
+
 
     const DRM_TO_SITE = {
       pending: "pending",
@@ -501,7 +504,7 @@ const internalController = {
         return res.status(400).json({ success: false, message: "This donation doesn't have a receipt yet." });
       }
 
-      const { generateReceiptBuffer } = require("../services/receipt.service");
+
       const pdfBytes = await generateReceiptBuffer(donation._id);
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader(
@@ -600,4 +603,4 @@ const internalController = {
   },
 };
 
-module.exports = { internalController, buildDonorSnapshot };
+export { internalController, buildDonorSnapshot };

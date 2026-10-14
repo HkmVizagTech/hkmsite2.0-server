@@ -1,4 +1,4 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
 // Peer-to-peer fundraising campaigner. Originally Square Foot Seva only;
 // now supports multiple campaign types (SQFT, JANMASHTAMI). Each campaigner
@@ -30,4 +30,4 @@ campaignerSchema.index({ email: 1 });
 
 const campaignerModel = mongoose.model("campaigner", campaignerSchema);
 
-module.exports = { campaignerModel };
+export { campaignerModel };

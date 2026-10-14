@@ -1,6 +1,6 @@
-const { donationModel } = require("../models/donation.model");
-const { cacheWrap, cacheKeys } = require("../cache/memoryCache");
-const { IST } = require("../config/timezone");
+import { donationModel } from "../models/donation.model.js";
+import { cacheWrap, cacheKeys } from "../cache/memoryCache.js";
+import { IST } from "../config/timezone.js";
 
 // How long a public stats payload may be stale. These numbers are "raised so
 // far" totals and donor walls — a minute of lag is invisible to a donor, and
@@ -290,4 +290,4 @@ const sevaStatsController = {
   },
 };
 
-module.exports = { sevaStatsController };
+export { sevaStatsController };

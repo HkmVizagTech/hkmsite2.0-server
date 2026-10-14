@@ -1,5 +1,5 @@
-const { body } = require("express-validator");
-const { BLOG_CATEGORIES } = require("../models/blog.model");
+import { body } from "express-validator";
+import { BLOG_CATEGORIES } from "../models/blog.model.js";
 
 const blogValidationRules = [
   body("title")
@@ -15,4 +15,4 @@ const blogValidationRules = [
   body("tags").optional(),
 ];
 
-module.exports = { blogValidationRules };
+export { blogValidationRules };

@@ -18,7 +18,7 @@
 //       page that forgot to). Reads the og:image of the live page, which on
 //       the festival pages is the desktop hero banner. Cached per page.
 
-const { SITE_URL } = require("./pendingMessage.util");
+import { SITE_URL } from "./pendingMessage.util.js";
 
 // Hosts (and optional path prefixes) a stored banner may point at. Everything
 // the media library uploads lives on the R2 public bucket; a few older pages
@@ -163,10 +163,4 @@ async function fetchPageOgImage(page) {
   return url;
 }
 
-module.exports = {
-  sanitizeBannerImage,
-  fetchPageOgImage,
-  extractOgImage,
-  absolutize,
-  ALLOWED_BANNER_SOURCES,
-};
+export { sanitizeBannerImage, fetchPageOgImage, extractOgImage, absolutize, ALLOWED_BANNER_SOURCES };

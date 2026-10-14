@@ -1,8 +1,8 @@
-const express = require("express");
-const rateLimit = require("express-rate-limit");
-const { productController } = require("../controllers/product.controller");
-const { shopOrderController } = require("../controllers/shopOrder.controller");
-const { donorAuthMiddleware } = require("../middlewares/auth.middleware");
+import express from "express";
+import rateLimit from "express-rate-limit";
+import { productController } from "../controllers/product.controller.js";
+import { shopOrderController } from "../controllers/shopOrder.controller.js";
+import { donorAuthMiddleware } from "../middlewares/auth.middleware.js";
 
 const shopRouter = express.Router();
 
@@ -42,4 +42,4 @@ shopRouter.post("/orders/verify", shopOrderController.verifyPayment);
 shopRouter.get("/my-orders", donorAuthMiddleware, shopOrderController.myOrders);
 shopRouter.get("/my-orders/:orderNumber", donorAuthMiddleware, shopOrderController.getMyOrder);
 
-module.exports = { shopRouter };
+export { shopRouter };

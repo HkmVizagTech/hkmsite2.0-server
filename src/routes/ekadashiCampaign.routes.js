@@ -1,5 +1,5 @@
-const express = require("express");
-const { ekadashiCampaignController } = require("../controllers/ekadashiCampaign.controller");
+import express from "express";
+import { ekadashiCampaignController } from "../controllers/ekadashiCampaign.controller.js";
 
 const ekadashiCampaignRouter = express.Router();
 
@@ -7,4 +7,4 @@ const ekadashiCampaignRouter = express.Router();
 // Admin edit routes were removed: /ekadashi is a permanent, common page.
 ekadashiCampaignRouter.get("/", ekadashiCampaignController.get);
 
-module.exports = { ekadashiCampaignRouter };
+export { ekadashiCampaignRouter };

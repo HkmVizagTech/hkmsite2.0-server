@@ -1,7 +1,7 @@
-const express = require("express");
-const { donationAdminController } = require("../controllers/donationAdmin.controller");
-const { authMiddleware, donationsAdminMiddleware } = require("../middlewares/auth.middleware");
-const upload = require("../utils/multer");
+import express from "express";
+import { donationAdminController } from "../controllers/donationAdmin.controller.js";
+import { authMiddleware, donationsAdminMiddleware } from "../middlewares/auth.middleware.js";
+import upload from "../utils/multer.js";
 
 const donationAdminRouter = express.Router();
 
@@ -25,4 +25,4 @@ donationAdminRouter.post("/manual-complete", authMiddleware, donationsAdminMiddl
 donationAdminRouter.post("/reconcile-pending", authMiddleware, donationsAdminMiddleware, donationAdminController.reconcilePending);
 donationAdminRouter.post("/upload-image", authMiddleware, donationsAdminMiddleware, upload.single("file"), donationAdminController.uploadImage);
 
-module.exports = { donationAdminRouter };
+export { donationAdminRouter };

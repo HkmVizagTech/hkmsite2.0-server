@@ -102,4 +102,4 @@ function cacheStatus() {
   return { backend: "memory", entries: store.size, ...stats };
 }
 
-module.exports = { cacheGet, cacheSet, cacheDel, cacheWrap, cacheKeys, cacheStatus };
+export { cacheGet, cacheSet, cacheDel, cacheWrap, cacheKeys, cacheStatus };

@@ -1,4 +1,5 @@
-const cloudinary = require('cloudinary').v2;
+import _cloudinary from "cloudinary";
+const cloudinary = _cloudinary.v2;
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -13,4 +14,4 @@ const uploadToCloudinary = async (filePath, folder = 'events') => {
   });
 };
 
-module.exports = { cloudinary, uploadToCloudinary };
+export { cloudinary, uploadToCloudinary };

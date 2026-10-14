@@ -7,12 +7,14 @@
 // annadan.harekrishnavizag.org admin dashboard pattern), trimmed to what
 // this simpler one-time-donation page actually needs.
 
-const fs = require("fs");
-const { donationModel } = require("../models/donation.model");
-const { uploadToR2 } = require("../utils/r2");
-const { createRazorpayInstance } = require("./payment.controller");
-const { completeDonation } = require("../services/paymentCompletion.service");
-const { IST, istDayStart, istDayEnd } = require("../config/timezone");
+import fs from "node:fs";
+import { donationModel } from "../models/donation.model.js";
+import { uploadToR2 } from "../utils/r2.js";
+import { createRazorpayInstance } from "./payment.controller.js";
+import { completeDonation } from "../services/paymentCompletion.service.js";
+import { IST, istDayStart, istDayEnd } from "../config/timezone.js";
+import { dccReceiptStatus, isSweepRunning, sweepDccReceipts, pushAndSendReceipt, pushResultMessage, setReceiptNumberAndSend } from "../services/dccSweep.service.js";
+import { isDccConfigured } from "../services/dcc.service.js";
 
 // Every query here is scoped to the /donations page's own donations only —
 // never mixes in seva-page or campaign donations from the rest of the site.
@@ -316,8 +318,8 @@ const donationAdminController = {
   // GET /donations-admin/dcc-status?includeOld=true
   dccStatus: async (req, res) => {
     try {
-      const { dccReceiptStatus, isSweepRunning } = require("../services/dccSweep.service");
-      const { isDccConfigured } = require("../services/dcc.service");
+
+
       const status = await dccReceiptStatus({ includeOld: req.query.includeOld === "true", scope: DONATIONS_PAGE_FILTER });
       res.status(200).json({ success: true, configured: isDccConfigured(), running: isSweepRunning(), ...status });
     } catch (error) {
@@ -329,8 +331,8 @@ const donationAdminController = {
   // POST /donations-admin/dcc-push-all — runs in the background
   dccPushAll: async (req, res) => {
     try {
-      const { sweepDccReceipts, isSweepRunning } = require("../services/dccSweep.service");
-      const { isDccConfigured } = require("../services/dcc.service");
+
+
       if (!isDccConfigured()) return res.status(400).json({ success: false, message: "DCC is not configured on this server." });
       if (isSweepRunning()) return res.status(202).json({ success: true, message: "A push is already running." });
       sweepDccReceipts({ limit: 200, ignoreBackoff: true, scope: DONATIONS_PAGE_FILTER })
@@ -352,10 +354,10 @@ const donationAdminController = {
       const txn = await donationModel.findOne({ _id: id, ...DONATIONS_PAGE_FILTER }).select("status").lean();
       if (!txn) return res.status(404).json({ success: false, message: "Transaction not found" });
       if (txn.status !== "completed") return res.status(400).json({ success: false, message: "Only successful donations get a DCC receipt." });
-      const { isDccConfigured } = require("../services/dcc.service");
+
       if (!isDccConfigured()) return res.status(400).json({ success: false, message: "DCC is not configured on this server." });
 
-      const { pushAndSendReceipt, pushResultMessage } = require("../services/dccSweep.service");
+
       const result = await pushAndSendReceipt(id);
       const message = pushResultMessage(result);
       res.status(result.receiptNumber ? 200 : 502).json({ success: !!result.receiptNumber, message, receiptNumber: result.receiptNumber, whatsapp: result.whatsapp });
@@ -376,7 +378,7 @@ const donationAdminController = {
       const txn = await donationModel.findOne({ _id: id, ...DONATIONS_PAGE_FILTER }).select("_id").lean();
       if (!txn) return res.status(404).json({ success: false, message: "Transaction not found" });
 
-      const { setReceiptNumberAndSend } = require("../services/dccSweep.service");
+
       const result = await setReceiptNumberAndSend(id, clean);
       res.status(200).json({ success: true, message: result.message, whatsapp: result.whatsapp });
     } catch (error) {
@@ -668,4 +670,4 @@ const donationAdminController = {
   },
 };
 
-module.exports = { donationAdminController };
+export { donationAdminController };

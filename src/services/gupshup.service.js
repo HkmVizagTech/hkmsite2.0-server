@@ -38,9 +38,12 @@
 // the Flaxxa integration silently marked donations as reminded for messages
 // that Meta had rejected, and that must not happen again here.
 
-const crypto = require("crypto");
-const { buildPendingFields } = require("./pendingMessage.util");
-const { normalizePhone } = require("./whatsapp.service");
+import crypto from "node:crypto";
+import { buildPendingFields } from "./pendingMessage.util.js";
+import { normalizePhone } from "./whatsapp.service.js";
+import sharp from "sharp";
+import { PutObjectCommand } from "@aws-sdk/client-s3";
+import { r2Client, bucketName } from "../config/R2.config.js";
 
 const GUPSHUP_TEMPLATE_URL = "https://api.gupshup.io/wa/api/v1/template/msg";
 
@@ -137,15 +140,15 @@ async function resolveJpegHeaderUrl(sourceUrl) {
     if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${sourceUrl}`);
     const input = Buffer.from(await res.arrayBuffer());
 
-    const sharp = require("sharp");
+
     const jpeg = await sharp(input)
       .rotate()
       .resize({ width: 1600, withoutEnlargement: true })
       .jpeg({ quality: 80, mozjpeg: true })
       .toBuffer();
 
-    const { PutObjectCommand } = require("@aws-sdk/client-s3");
-    const { r2Client, bucketName } = require("../config/R2.config");
+
+
     await r2Client.send(
       new PutObjectCommand({
         Bucket: bucketName,
@@ -309,8 +312,8 @@ async function uploadReceiptPdf(pdfBytes, donationId) {
   const hash = crypto.createHash("sha256").update(`${salt}:${donationId}`).digest("hex").slice(0, 24);
   const key = `receipts/${hash}.pdf`;
 
-  const { PutObjectCommand } = require("@aws-sdk/client-s3");
-  const { r2Client, bucketName } = require("../config/R2.config");
+
+
   await r2Client.send(
     new PutObjectCommand({
       Bucket: bucketName,
@@ -362,11 +365,11 @@ async function sendReceiptWhatsappViaGupshup({
   });
 }
 
-module.exports = {
+export {
   isGupshupConfigured,
   isGupshupReceiptConfigured,
-  getPendingTemplateId: PENDING_TEMPLATE_ID,
-  getReceiptTemplateId: RECEIPT_TEMPLATE_ID,
+  PENDING_TEMPLATE_ID as getPendingTemplateId,
+  RECEIPT_TEMPLATE_ID as getReceiptTemplateId,
   sendGupshupTemplate,
   sendPendingWhatsappViaGupshup,
   sendReceiptWhatsappViaGupshup,

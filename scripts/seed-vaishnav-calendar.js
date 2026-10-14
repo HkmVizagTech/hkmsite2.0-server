@@ -7,9 +7,12 @@
  * Requires MONGO_URI in env or falls back to localhost:27017/hkmvizag.
  */
 
-const mongoose = require("mongoose");
-const fs = require("fs");
-const path = require("path");
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import mongoose from "mongoose";
+import fs from "node:fs";
+import path from "node:path";
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017/hkmvizag";
 

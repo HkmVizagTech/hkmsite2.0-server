@@ -1,6 +1,6 @@
-const { donorModel } = require("../models/donor.model");
-const { getNextSequence } = require("../utils/counter");
-const { IST } = require("../config/timezone");
+import { donorModel } from "../models/donor.model.js";
+import { getNextSequence } from "../utils/counter.js";
+import { IST } from "../config/timezone.js";
 
 // Finds the existing donor record for a mobile number, or creates one.
 // Used whenever a donation happens (manual entry by a preacher, or later
@@ -59,4 +59,4 @@ async function findOrCreateShopCustomer({ mobile, name, email }) {
   return findOrCreateDonor({ mobile, name, email, createdVia: "shop" });
 }
 
-module.exports = { findOrCreateDonor, findOrCreateShopCustomer };
+export { findOrCreateDonor, findOrCreateShopCustomer };

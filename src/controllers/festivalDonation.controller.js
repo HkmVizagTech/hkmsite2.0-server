@@ -1,4 +1,6 @@
-const { festivalDonationModel } = require("../models/festivalDonation.model");
+import { festivalDonationModel } from "../models/festivalDonation.model.js";
+import * as donationModule from "../models/donation.model.js";
+import { donationModel } from "../models/donation.model.js";
 
 const festivalDonationController = {
   publicList: async (req, res) => {
@@ -31,7 +33,7 @@ const festivalDonationController = {
       const festivals = await festivalDonationModel.find()
         .populate('createdBy', 'name email')
         .populate('eventId');
-      const donationModule = require('../models/donation.model');
+
       console.log('DEBUG donationModule keys:', Object.keys(donationModule));
       console.log('DEBUG donationModule content:', donationModule);
       const { donationModel } = donationModule;
@@ -78,7 +80,7 @@ const festivalDonationController = {
       if (!festival) {
         return res.status(404).json({ message: "Festival donation page not found" });
       }
-  const { donationModel } = require('../models/donation.model');
+
   const donations = await donationModel.find({ $or: [{ festivalId: festival._id }, { festivalSlug: slug }] })
         .sort({ createdAt: -1 })
         .limit(10);
@@ -136,4 +138,4 @@ const festivalDonationController = {
   }
 };
 
-module.exports = { festivalDonationController };
+export { festivalDonationController };

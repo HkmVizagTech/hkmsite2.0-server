@@ -1,7 +1,7 @@
-const express = require("express");
-const { galleryController } = require("../controllers/gallery.controller");
-const { authMiddleware, adminMiddleware } = require("../middlewares/auth.middleware");
-const upload = require("../utils/multer");
+import express from "express";
+import { galleryController } from "../controllers/gallery.controller.js";
+import { authMiddleware, adminMiddleware } from "../middlewares/auth.middleware.js";
+import upload from "../utils/multer.js";
 
 const galleryRouter = express.Router();
 
@@ -17,4 +17,4 @@ galleryRouter.post("/", authMiddleware, adminMiddleware, express.json(), gallery
 galleryRouter.put("/:id", authMiddleware, adminMiddleware, express.json(), galleryController.update);
 galleryRouter.delete("/:id", authMiddleware, adminMiddleware, galleryController.delete);
 
-module.exports = { galleryRouter };
+export { galleryRouter };

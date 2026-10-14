@@ -1,9 +1,9 @@
-const fs = require("fs");
-const path = require("path");
-const { v4: uuidv4 } = require("uuid");
-const { registrationModel } = require("../models/registration.model");
-const { eventModel } = require("../models/event.model");
-const { uploadToR2 } = require("../utils/r2");
+import fs from "node:fs";
+import path from "node:path";
+import { v4 as uuidv4 } from "uuid";
+import { registrationModel } from "../models/registration.model.js";
+import { eventModel } from "../models/event.model.js";
+import { uploadToR2 } from "../utils/r2.js";
 
 async function register(req, res) {
   try {
@@ -97,4 +97,4 @@ async function publicCheckin(req, res) {
   }
 }
 
-module.exports = { register, listRegistrations, markAttendance, publicCheckin };
+export { register, listRegistrations, markAttendance, publicCheckin };

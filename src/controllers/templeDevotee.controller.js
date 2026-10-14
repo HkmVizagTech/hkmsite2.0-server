@@ -1,4 +1,4 @@
-const { templeDevoteeModel } = require("../models/templeDevotee.model");
+import { templeDevoteeModel } from "../models/templeDevotee.model.js";
 
 const templeDevoteeController = {
   // PUBLIC — names + ids only, for the campaigner registration dropdown.
@@ -77,4 +77,4 @@ const templeDevoteeController = {
   },
 };
 
-module.exports = { templeDevoteeController };
+export { templeDevoteeController };

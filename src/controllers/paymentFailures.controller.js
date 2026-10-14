@@ -3,8 +3,8 @@
 // (donation.paymentError, via services/paymentFailure.service.js) and the
 // bank / UPI-app downtime alerts Razorpay sends.
 
-const { donationModel } = require("../models/donation.model");
-const { paymentDowntimeModel } = require("../services/paymentFailure.service");
+import { donationModel } from "../models/donation.model.js";
+import { paymentDowntimeModel } from "../services/paymentFailure.service.js";
 
 const paymentFailuresController = {
   summary: async (req, res) => {
@@ -107,4 +107,4 @@ const paymentFailuresController = {
   },
 };
 
-module.exports = { paymentFailuresController };
+export { paymentFailuresController };

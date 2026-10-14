@@ -1,7 +1,7 @@
-const express = require("express");
-const { register, listRegistrations, markAttendance } = require("../controllers/registration.controller");
-const { authMiddleware, adminMiddleware } = require("../middlewares/auth.middleware");
-const upload = require("../utils/multer");
+import express from "express";
+import { register, listRegistrations, markAttendance } from "../controllers/registration.controller.js";
+import { authMiddleware, adminMiddleware } from "../middlewares/auth.middleware.js";
+import upload from "../utils/multer.js";
 
 const registrationRouter = express.Router();
 
@@ -11,4 +11,4 @@ registrationRouter.get("/:eventId", authMiddleware, adminMiddleware, listRegistr
 
 registrationRouter.post("/:eventId/:token/attendance", authMiddleware, adminMiddleware, markAttendance);
 
-module.exports = { registrationRouter };
+export { registrationRouter };

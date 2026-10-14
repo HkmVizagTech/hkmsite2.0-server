@@ -1,4 +1,4 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
 // Admin media library — reusable uploaded assets (images) whose Cloudinary
 // URLs can be pasted anywhere across the site (banners, blogs, seva pages…).
@@ -23,4 +23,4 @@ mediaSchema.index({ name: "text", tags: "text" });
 
 const mediaModel = mongoose.model("media", mediaSchema);
 
-module.exports = { mediaModel };
+export { mediaModel };

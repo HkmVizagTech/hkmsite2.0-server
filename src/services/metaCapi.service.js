@@ -15,7 +15,8 @@
 // If the token or pixel id isn't set, this is a no-op — donations still
 // complete normally, we just don't report to Meta.
 
-const crypto = require("crypto");
+import crypto from "node:crypto";
+import { donationModel } from "../models/donation.model.js";
 
 const GRAPH_VERSION = "v21.0";
 
@@ -125,7 +126,7 @@ async function sendPurchaseEvent(donation) {
 
     // Mark as sent so retries/webhooks don't double-report.
     try {
-      const { donationModel } = require("../models/donation.model");
+
       await donationModel.findByIdAndUpdate(donation._id, { metaPurchaseSentAt: new Date() });
     } catch (e) {
       // non-fatal
@@ -139,4 +140,4 @@ async function sendPurchaseEvent(donation) {
   }
 }
 
-module.exports = { sendPurchaseEvent };
+export { sendPurchaseEvent };

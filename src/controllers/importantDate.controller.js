@@ -1,4 +1,4 @@
-const { importantDateModel } = require("../models/importantDate.model");
+import { importantDateModel } from "../models/importantDate.model.js";
 
 const importantDateController = {
   list: async (req, res) => {
@@ -61,4 +61,4 @@ const importantDateController = {
   },
 };
 
-module.exports = { importantDateController };
+export { importantDateController };

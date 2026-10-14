@@ -1,6 +1,6 @@
-const { eventModel } = require("../models/event.model");
-const { uploadToR2 } = require("../utils/r2");
-const fs = require("fs");
+import { eventModel } from "../models/event.model.js";
+import { uploadToR2 } from "../utils/r2.js";
+import fs from "node:fs";
 
 const eventController = {
   list: async (req, res) => {
@@ -81,4 +81,4 @@ const eventController = {
   }
 };
 
-module.exports = { eventController };
+export { eventController };

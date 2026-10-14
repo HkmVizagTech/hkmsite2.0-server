@@ -14,10 +14,10 @@
 // approval banner instead of the donor's own seva image. This script tells you
 // which it is, per banner, before a real donor finds out.
 
-require("dotenv").config();
+import "dotenv/config";
 
-const { SEVA_IMAGES, DEFAULT_SEVA_IMAGE } = require("./src/services/pendingReminder.service");
-const { resolveJpegHeaderUrl } = require("./src/services/gupshup.service");
+import { SEVA_IMAGES, DEFAULT_SEVA_IMAGE } from "./src/services/pendingReminder.service.js";
+import { resolveJpegHeaderUrl } from "./src/services/gupshup.service.js";
 
 const FALLBACK_MARKER = "fss.gupshup.io";
 

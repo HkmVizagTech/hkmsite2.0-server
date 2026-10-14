@@ -3,8 +3,8 @@
 // reasons (bank declined, UPI request expired, cancelled by the donor…) and the
 // bank / UPI-app / card-network downtimes Razorpay announced.
 
-const mongoose = require("mongoose");
-const { donationModel } = require("../models/donation.model");
+import mongoose from "mongoose";
+import { donationModel } from "../models/donation.model.js";
 
 /** The fields worth keeping from a failed Razorpay payment entity. */
 function paymentErrorFrom(p) {
@@ -71,4 +71,4 @@ async function recordDowntime(eventName, payload) {
   console.log(`[downtime] ${doc.event} · ${doc.method || "?"} · ${what} · severity ${doc.severity || "?"}`);
 }
 
-module.exports = { paymentErrorFrom, recordPaymentFailure, recordDowntime, paymentDowntimeModel };
+export { paymentErrorFrom, recordPaymentFailure, recordDowntime, paymentDowntimeModel };

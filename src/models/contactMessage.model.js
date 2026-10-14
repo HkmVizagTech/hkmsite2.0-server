@@ -1,4 +1,4 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
 const contactMessageSchema = new mongoose.Schema(
   {
@@ -18,4 +18,4 @@ contactMessageSchema.index({ createdAt: -1 });
 
 const contactMessageModel = mongoose.model("contactMessage", contactMessageSchema);
 
-module.exports = { contactMessageModel };
+export { contactMessageModel };

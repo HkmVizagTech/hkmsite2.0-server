@@ -1,7 +1,8 @@
-const { campaignerModel } = require("../models/campaigner.model");
-const { donationModel } = require("../models/donation.model");
-const { cacheWrap, cacheKeys } = require("../cache/memoryCache");
-const { IST } = require("../config/timezone");
+import { campaignerModel } from "../models/campaigner.model.js";
+import { donationModel } from "../models/donation.model.js";
+import { cacheWrap, cacheKeys } from "../cache/memoryCache.js";
+import { IST } from "../config/timezone.js";
+import { templeDevoteeModel } from "../models/templeDevotee.model.js";
 
 // Shorter than the site-wide stats TTL: a campaigner refreshing their own page
 // to watch donations land is the single most sensitive audience for staleness
@@ -70,7 +71,7 @@ const campaignerController = {
       // it drives DCC receipt attribution).
       let referredByDevotee = null;
       if (devoteeId) {
-        const { templeDevoteeModel } = require("../models/templeDevotee.model");
+
         const devotee = await templeDevoteeModel.findOne({ _id: devoteeId, status: "active" }).lean();
         if (!devotee) return res.status(400).json({ message: "Please select a valid devotee from the list." });
         referredByDevotee = devotee._id;
@@ -248,4 +249,4 @@ const campaignerController = {
   },
 };
 
-module.exports = { campaignerController };
+export { campaignerController };

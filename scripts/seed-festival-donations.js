@@ -11,11 +11,11 @@
  * localhost:27017/hkmvizag.
  */
 
-require("dotenv").config();
+import "dotenv/config";
 
-const mongoose = require("mongoose");
-const { ensureDefaultFestivalDonations } = require("../src/services/festivalDonationBootstrap.service");
-const { siteContentModel } = require("../src/models/siteContent.model");
+import mongoose from "mongoose";
+import { ensureDefaultFestivalDonations } from "../src/services/festivalDonationBootstrap.service.js";
+import { siteContentModel } from "../src/models/siteContent.model.js";
 
 const MONGO_URI = (process.env.MONGO_URI || process.env.MONGODB_URI || "mongodb://localhost:27017/hkmvizag").replace(
   /\/+$/,

@@ -1,4 +1,4 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
 // Mirrors the Vaikuntham admin panel's Daily Darshan photos. Kept as its
 // own collection (rather than reusing `gallery`) so the automated sync
@@ -24,4 +24,4 @@ darshanSchema.index({ position: 1 });
 
 const darshanModel = mongoose.model("darshan", darshanSchema);
 
-module.exports = { darshanModel };
+export { darshanModel };

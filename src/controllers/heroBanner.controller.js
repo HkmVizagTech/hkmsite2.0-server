@@ -1,6 +1,6 @@
-const fs = require("fs");
-const { heroBannerModel } = require("../models/heroBanner.model");
-const { uploadToR2 } = require("../utils/r2");
+import fs from "node:fs";
+import { heroBannerModel } from "../models/heroBanner.model.js";
+import { uploadToR2 } from "../utils/r2.js";
 
 const heroBannerController = {
   // PUBLIC - active banners in display order
@@ -125,4 +125,4 @@ const heroBannerController = {
   },
 };
 
-module.exports = { heroBannerController };
+export { heroBannerController };

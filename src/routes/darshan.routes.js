@@ -1,5 +1,5 @@
-const express = require("express");
-const { darshanController } = require("../controllers/darshan.controller");
+import express from "express";
+import { darshanController } from "../controllers/darshan.controller.js";
 
 const darshanRouter = express.Router();
 
@@ -12,4 +12,4 @@ darshanRouter.get("/", darshanController.list);
 // admin browser session.
 darshanRouter.post("/sync", express.json({ limit: "1mb" }), darshanController.sync);
 
-module.exports = { darshanRouter };
+export { darshanRouter };

@@ -1,4 +1,4 @@
-const { sweepDccReceipts } = require("../services/dccSweep.service");
+import { sweepDccReceipts } from "../services/dccSweep.service.js";
 
 // Pushes every successful donation that still has no DCC receipt number, and
 // sends the WhatsApp receipt as soon as one comes back. See
@@ -27,4 +27,4 @@ function startDccSweepJob() {
   console.log(`[dcc-sweep] DCC receipt sweep scheduled every ${INTERVAL_MS / 60000} min`);
 }
 
-module.exports = { startDccSweepJob, runDccSweep };
+export { startDccSweepJob, runDccSweep };

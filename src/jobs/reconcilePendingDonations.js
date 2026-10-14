@@ -1,8 +1,4 @@
-const {
-  reconcilePendingDonations,
-  closeStalePendingWithoutOrder,
-  CLOSE_UNPAID_AFTER_MINUTES,
-} = require("../services/reconciliation.service");
+import { reconcilePendingDonations, closeStalePendingWithoutOrder, CLOSE_UNPAID_AFTER_MINUTES } from "../services/reconciliation.service.js";
 
 // No donation stays "pending". Every run looks at donations pending for more
 // than CLOSE_UNPAID_AFTER_MINUTES (30) and settles each one against
@@ -57,4 +53,4 @@ function startReconciliationJob() {
   console.log(`[reconcile] Scheduled donation reconciliation job started (every ${INTERVAL_MS / 60000} min).`);
 }
 
-module.exports = { startReconciliationJob, runReconciliation };
+export { startReconciliationJob, runReconciliation };

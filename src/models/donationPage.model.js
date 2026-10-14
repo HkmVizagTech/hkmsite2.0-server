@@ -1,4 +1,4 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
 const donationPageSchema = new mongoose.Schema({
   key: { type: String, default: "donations", unique: true },
@@ -44,4 +44,4 @@ const donationPageSchema = new mongoose.Schema({
 
 const donationPageModel = mongoose.model("donationPage", donationPageSchema);
 
-module.exports = { donationPageModel };
+export { donationPageModel };

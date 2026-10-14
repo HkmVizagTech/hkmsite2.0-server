@@ -1,4 +1,4 @@
-const { donationPageModel } = require("../models/donationPage.model");
+import { donationPageModel } from "../models/donationPage.model.js";
 
 const defaultDonationPage = {
   key: "donations",
@@ -137,4 +137,4 @@ const donationPageController = {
   },
 };
 
-module.exports = { donationPageController, defaultDonationPage };
+export { donationPageController, defaultDonationPage };

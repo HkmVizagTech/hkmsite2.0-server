@@ -1,16 +1,15 @@
 
-// Must stay the first require in this file — see src/config/timezone.js.
-require("./src/config/timezone");
-// ENV_FILE lets local/test runs load a sanitized env file instead of the real .env.
-require("dotenv").config(process.env.ENV_FILE ? { path: process.env.ENV_FILE } : undefined);
-const { app } = require("./app");
-const { connectDb } = require("./src/config/db");
-const { startReconciliationJob } = require("./src/jobs/reconcilePendingDonations");
-const { startTrackingSyncJob } = require("./src/jobs/trackingSync");
-const { startDccSweepJob } = require("./src/jobs/dccReceiptSweep");
-const { ensureDefaultShopCategories } = require("./src/services/shopBootstrap.service");
-const { ensureDefaultFestivalDonations } = require("./src/services/festivalDonationBootstrap.service");
-const { ensureBlogDrafts } = require("./src/services/blogDraftsBootstrap.service");
+import "./src/config/timezone.js";
+import "./src/config/env.js";
+import { app } from "./app.js";
+import { connectDb } from "./src/config/db.js";
+import { startReconciliationJob } from "./src/jobs/reconcilePendingDonations.js";
+import { startTrackingSyncJob } from "./src/jobs/trackingSync.js";
+import { startDccSweepJob } from "./src/jobs/dccReceiptSweep.js";
+import { ensureDefaultShopCategories } from "./src/services/shopBootstrap.service.js";
+import { ensureDefaultFestivalDonations } from "./src/services/festivalDonationBootstrap.service.js";
+import { ensureBlogDrafts } from "./src/services/blogDraftsBootstrap.service.js";
+import { runPendingReminders } from "./src/services/pendingReminder.service.js";
 const PORT = process.env.PORT || 8080;
 
 const startServer =async()=>{
@@ -63,7 +62,7 @@ const startServer =async()=>{
         // cron instead. The whatsappPendingReminderSent flag makes it
         // idempotent regardless.
         if (process.env.PENDING_REMINDER_ENABLED !== "false") {
-            const { runPendingReminders } = require("./src/services/pendingReminder.service");
+
             // Every minute, so the 3-minute reminder goes at 3 minutes, not
             // whenever the next 10-minute pass happens to come round.
             const intervalMinutes = Number(process.env.PENDING_REMINDER_INTERVAL_MINUTES || 1);

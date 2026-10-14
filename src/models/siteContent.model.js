@@ -1,4 +1,4 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
 // Singleton document — one row holds all admin-editable site copy.
 // Public GET is unauthenticated so the frontend can render it directly.
@@ -103,4 +103,4 @@ const siteContentSchema = new mongoose.Schema(
 
 const siteContentModel = mongoose.model("siteContent", siteContentSchema);
 
-module.exports = { siteContentModel };
+export { siteContentModel };

@@ -1,4 +1,4 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
 // Single-document settings for the shop. Pinned to a fixed _id ("default")
 // so getSettings() can upsert it on first read and there is never a second
@@ -58,4 +58,4 @@ function calculateShipping(subtotal, settings, items = []) {
   return flat;
 }
 
-module.exports = { shopSettingsModel, getShopSettings, calculateShipping };
+export { shopSettingsModel, getShopSettings, calculateShipping };

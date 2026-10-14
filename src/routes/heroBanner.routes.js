@@ -1,7 +1,7 @@
-const express = require("express");
-const { heroBannerController } = require("../controllers/heroBanner.controller");
-const { authMiddleware, adminMiddleware } = require("../middlewares/auth.middleware");
-const upload = require("../utils/multer");
+import express from "express";
+import { heroBannerController } from "../controllers/heroBanner.controller.js";
+import { authMiddleware, adminMiddleware } from "../middlewares/auth.middleware.js";
+import upload from "../utils/multer.js";
 
 const heroBannerRouter = express.Router();
 
@@ -11,4 +11,4 @@ heroBannerRouter.put("/reorder", authMiddleware, adminMiddleware, heroBannerCont
 heroBannerRouter.put("/:id", authMiddleware, adminMiddleware, upload.any(), heroBannerController.update);
 heroBannerRouter.delete("/:id", authMiddleware, adminMiddleware, heroBannerController.delete);
 
-module.exports = { heroBannerRouter };
+export { heroBannerRouter };

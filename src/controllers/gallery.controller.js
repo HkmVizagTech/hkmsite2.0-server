@@ -1,6 +1,7 @@
-const { galleryModel } = require("../models/gallery.model");
-const { uploadToR2 } = require("../utils/r2");
-const { istDayStart, istDayEnd } = require("../config/timezone");
+import { galleryModel } from "../models/gallery.model.js";
+import { uploadToR2 } from "../utils/r2.js";
+import { istDayStart, istDayEnd } from "../config/timezone.js";
+import fs from "node:fs";
 
 const galleryController = {
   // POST /gallery/upload-image — upload a single image to R2 and return
@@ -11,7 +12,7 @@ const galleryController = {
     try {
       if (!req.file) return res.status(400).json({ message: "No file uploaded" });
       const result = await uploadToR2(req.file.path, "gallery");
-      const fs = require("fs");
+
       fs.unlink(req.file.path, () => {});
       res.status(200).json({ secure_url: result.secure_url });
     } catch (error) {
@@ -90,4 +91,4 @@ const galleryController = {
   }
 };
 
-module.exports = { galleryController };
+export { galleryController };

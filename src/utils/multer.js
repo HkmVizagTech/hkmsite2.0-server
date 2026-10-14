@@ -1,6 +1,6 @@
-const multer = require('multer');
-const path = require('path');
-const os = require('os');
+import multer from "multer";
+import path from "node:path";
+import os from "node:os";
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -25,4 +25,4 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB — matches the JSON body limit; fails fast with a clear error instead of a slow upload that risks a proxy-level timeout
 });
 
-module.exports = upload;
+export default upload;

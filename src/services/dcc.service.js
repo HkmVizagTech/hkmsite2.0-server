@@ -1,6 +1,8 @@
-const { donationModel } = require("../models/donation.model");
-const { IST } = require("../config/timezone");
-const { toEnglish } = require("../utils/toEnglish");
+import { donationModel } from "../models/donation.model.js";
+import { IST } from "../config/timezone.js";
+import { toEnglish } from "../utils/toEnglish.js";
+import { donorModel } from "../models/donor.model.js";
+import { notifyDrmOfDonation } from "./drmNotify.service.js";
 
 const DCC_API_URL = process.env.DCC_API_URL || "https://vhkmsurabhi.com/api/socialmedia/addDonation";
 
@@ -731,7 +733,7 @@ async function syncDonationToDcc(donationOrId, gatewayPaymentId) {
     const dccDonorNumber = dccResponse?.DonorNumber || null;
     if (dccDonorNumber && lock.donorRecordId) {
       try {
-        const { donorModel } = require("../models/donor.model");
+
         await donorModel.findByIdAndUpdate(lock.donorRecordId, { dccDonorNumber });
       } catch (e) {
         console.error("Could not save dccDonorNumber to Donor record (non-fatal):", lock.donorRecordId, e.message);
@@ -743,7 +745,7 @@ async function syncDonationToDcc(donationOrId, gatewayPaymentId) {
     // Online donations push from their own pipeline once this returns.
     if (lock.manualEntry && receiptNumber) {
       try {
-        const { notifyDrmOfDonation } = require("./drmNotify.service");
+
         notifyDrmOfDonation(lock._id, { reason: "receipt_issued" }).catch(() => undefined);
       } catch {}
     }
@@ -762,12 +764,4 @@ async function syncDonationToDcc(donationOrId, gatewayPaymentId) {
   }
 }
 
-module.exports = {
-  DCC_PAYMENT_MODES,
-  buildDccPayload,
-  dccTransactionId,
-  isDccConfigured,
-  resolveEnrolledBy,
-  resolveSevaMapping,
-  syncDonationToDcc,
-};
+export { DCC_PAYMENT_MODES, buildDccPayload, dccTransactionId, isDccConfigured, resolveEnrolledBy, resolveSevaMapping, syncDonationToDcc };

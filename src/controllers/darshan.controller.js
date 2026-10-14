@@ -1,5 +1,5 @@
-const mongoose = require("mongoose");
-const { darshanModel } = require("../models/darshan.model");
+import mongoose from "mongoose";
+import { darshanModel } from "../models/darshan.model.js";
 
 const darshanController = {
   // POST /darshan/sync — internal endpoint hit by the Vaikuntham admin
@@ -75,4 +75,4 @@ const darshanController = {
   },
 };
 
-module.exports = { darshanController };
+export { darshanController };

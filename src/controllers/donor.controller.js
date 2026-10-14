@@ -1,8 +1,11 @@
-const { donorModel } = require("../models/donor.model");
-const { donationModel } = require("../models/donation.model");
-const { userModel } = require("../models/user.model");
-const { donorIssueModel } = require("../models/donorIssue.model");
-const { IST } = require("../config/timezone");
+import mongoose from "mongoose";
+import { donorModel } from "../models/donor.model.js";
+import { donationModel } from "../models/donation.model.js";
+import { userModel } from "../models/user.model.js";
+import { donorIssueModel } from "../models/donorIssue.model.js";
+import { IST } from "../config/timezone.js";
+import { createRazorpayInstance } from "./payment.controller.js";
+import { generateReceiptBuffer } from "../services/receipt.service.js";
 
 const PAN_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -243,7 +246,7 @@ const donorController = {
       // alone can't answer "is this still active?". Falls back to the local
       // (potentially stale) status if Razorpay is unreachable, so the page
       // still renders something rather than erroring out.
-      const { createRazorpayInstance } = require("./payment.controller");
+
       await Promise.all(
         Array.from(bySubscription.values()).map(async (entry) => {
           const created = createRazorpayInstance(entry.paymentAccount);
@@ -296,7 +299,7 @@ const donorController = {
         return res.status(404).json({ success: false, message: "Subscription not found." });
       }
 
-      const { createRazorpayInstance } = require("./payment.controller");
+
       const created = createRazorpayInstance(owned.paymentAccount);
       if (!created) {
         return res.status(500).json({ success: false, message: "Payment provider not configured. Please contact us to cancel." });
@@ -356,7 +359,7 @@ const donorController = {
   // thing from the raw donation list.
   mySummary: async (req, res) => {
     try {
-      const donorRecordId = new (require("mongoose").Types.ObjectId)(req.donor.donorId);
+      const donorRecordId = new mongoose.Types.ObjectId(req.donor.donorId);
       const match = { donorRecordId, status: "completed" };
 
       const [monthly, bySeva, totals] = await Promise.all([
@@ -402,7 +405,7 @@ const donorController = {
         return res.status(400).json({ success: false, message: "This donation doesn't have a receipt yet." });
       }
 
-      const { generateReceiptBuffer } = require("../services/receipt.service");
+
       const pdfBytes = await generateReceiptBuffer(donation._id);
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", `attachment; filename="receipt-${donation.receiptNumber.replace(/\|/g, "-")}.pdf"`);
@@ -447,4 +450,4 @@ const donorController = {
   },
 };
 
-module.exports = { donorController };
+export { donorController };

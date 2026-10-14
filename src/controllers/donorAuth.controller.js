@@ -1,8 +1,9 @@
-const crypto = require("crypto");
-const jwt = require("jsonwebtoken");
-const { getJwtSecret } = require("../utils/utils");
-const { donorModel } = require("../models/donor.model");
-const { sendDonorOtp, isWhatsAppConfigured } = require("../services/whatsapp.service");
+import crypto from "node:crypto";
+import jwt from "jsonwebtoken";
+import { getJwtSecret } from "../utils/utils.js";
+import { donorModel } from "../models/donor.model.js";
+import { sendDonorOtp, isWhatsAppConfigured } from "../services/whatsapp.service.js";
+import { findOrCreateShopCustomer } from "../services/donor.service.js";
 
 const OTP_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const OTP_RESEND_COOLDOWN_MS = 60 * 1000; // 1 minute between requests
@@ -144,7 +145,7 @@ const donorAuthController = {
         return res.status(400).json({ success: false, message: "Please enter a valid 10-digit mobile number." });
       }
 
-      const { findOrCreateShopCustomer } = require("../services/donor.service");
+
       const donor = await findOrCreateShopCustomer({
         mobile,
         name: req.body.name ? String(req.body.name).slice(0, 120) : undefined,
@@ -206,4 +207,4 @@ const donorAuthController = {
   },
 };
 
-module.exports = { donorAuthController };
+export { donorAuthController };

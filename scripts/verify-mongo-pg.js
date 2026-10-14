@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /* Compares Mongo vs Postgres after migrate-mongo-to-pg.js. Read-only on both sides.
  *   SRC_MONGO_URI=... DEST_PG_URL=... node scripts/verify-mongo-pg.js */
-const { MongoClient } = require("mongodb");
-const { Client } = require("pg");
+import { MongoClient } from "mongodb";
+import _pg from "pg";
+const { Client } = _pg;
 let fails = 0;
 // jsonb does not preserve key order, so compare JSON canonically (sorted keys).
 const canon = (v) => JSON.stringify(v, (k, x) => (x && typeof x === "object" && !Array.isArray(x) ? Object.fromEntries(Object.keys(x).sort().map((kk) => [kk, x[kk]])) : x));

@@ -1,4 +1,4 @@
-const { festivalShowcaseModel } = require("../models/festivalShowcase.model");
+import { festivalShowcaseModel } from "../models/festivalShowcase.model.js";
 
 const festivalShowcaseController = {
   /** Public list for the /festival index — active showcases, featured on top. */
@@ -91,4 +91,4 @@ const festivalShowcaseController = {
   },
 };
 
-module.exports = { festivalShowcaseController };
+export { festivalShowcaseController };

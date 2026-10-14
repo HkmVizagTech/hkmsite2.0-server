@@ -1,4 +1,4 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
 const scheduleItemSchema = new mongoose.Schema(
   {
@@ -65,4 +65,4 @@ const festivalShowcaseSchema = new mongoose.Schema(
 
 const festivalShowcaseModel = mongoose.model("festivalShowcase", festivalShowcaseSchema);
 
-module.exports = { festivalShowcaseModel };
+export { festivalShowcaseModel };

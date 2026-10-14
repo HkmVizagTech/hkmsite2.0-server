@@ -1,10 +1,10 @@
-const express = require("express");
-const { donationPageController } = require("../controllers/donationPage.controller");
-const { authMiddleware, donationsAdminMiddleware } = require("../middlewares/auth.middleware");
+import express from "express";
+import { donationPageController } from "../controllers/donationPage.controller.js";
+import { authMiddleware, donationsAdminMiddleware } from "../middlewares/auth.middleware.js";
 
 const donationPageRouter = express.Router();
 
 donationPageRouter.get("/", donationPageController.get);
 donationPageRouter.put("/", authMiddleware, donationsAdminMiddleware, donationPageController.update);
 
-module.exports = { donationPageRouter };
+export { donationPageRouter };

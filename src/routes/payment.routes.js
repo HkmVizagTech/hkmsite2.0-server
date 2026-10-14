@@ -1,8 +1,8 @@
-const express = require('express');
-const rateLimit = require('express-rate-limit');
-const { paymentController } = require('../controllers/payment.controller');
-const { upiFallbackController } = require('../controllers/upiFallback.controller');
-const { authMiddleware, adminMiddleware } = require('../middlewares/auth.middleware');
+import express from "express";
+import rateLimit from "express-rate-limit";
+import { paymentController } from "../controllers/payment.controller.js";
+import { upiFallbackController } from "../controllers/upiFallback.controller.js";
+import { authMiddleware, adminMiddleware } from "../middlewares/auth.middleware.js";
 
 const paymentRouter = express.Router();
 
@@ -58,4 +58,4 @@ paymentRouter.post('/reconcile/:donationId', authMiddleware, adminMiddleware, ex
 paymentRouter.get('/audit-subscriptions', authMiddleware, adminMiddleware, paymentController.auditSubscriptions);
 paymentRouter.post('/backfill-subscription-gaps', authMiddleware, adminMiddleware, paymentController.backfillSubscriptionGaps);
 
-module.exports = { paymentRouter };
+export { paymentRouter };

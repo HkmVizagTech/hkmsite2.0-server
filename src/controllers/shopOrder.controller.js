@@ -1,10 +1,13 @@
-const crypto = require("crypto");
-const { productModel, resolvePurchasable } = require("../models/product.model");
-const { shopOrderModel } = require("../models/shopOrder.model");
-const { getShopSettings, calculateShipping } = require("../models/shopSettings.model");
-const { donorModel } = require("../models/donor.model");
-const { getNextSequence } = require("../utils/counter");
-const { IST } = require("../config/timezone");
+import crypto from "node:crypto";
+import { productModel, resolvePurchasable } from "../models/product.model.js";
+import { shopOrderModel } from "../models/shopOrder.model.js";
+import { getShopSettings, calculateShipping } from "../models/shopSettings.model.js";
+import { donorModel } from "../models/donor.model.js";
+import { getNextSequence } from "../utils/counter.js";
+import { IST } from "../config/timezone.js";
+import { createRazorpayInstance } from "./payment.controller.js";
+import { isWhatsAppConfigured, sendUtilityMessage } from "../services/whatsapp.service.js";
+import * as trackingService from "../services/tracking.service.js";
 
 // Which Razorpay account the shop sells through. Shop sales now settle
 // through their own account, separate from donations, so the two money
@@ -23,7 +26,7 @@ const { IST } = require("../config/timezone");
 const SHOP_ACCOUNT = process.env.SHOP_RAZORPAY_ACCOUNT || "shop";
 
 function resolveShopRazorpay() {
-  const { createRazorpayInstance } = require("./payment.controller");
+
   const shop = createRazorpayInstance(SHOP_ACCOUNT);
   if (shop) return shop;
   console.warn(
@@ -210,7 +213,7 @@ async function confirmShopOrderPaid({ orderId, razorpayOrderId, paymentId }) {
 // donation receipt template.
 async function sendOrderWhatsApp(order) {
   try {
-    const { isWhatsAppConfigured, sendUtilityMessage } = require("../services/whatsapp.service");
+
     if (!isWhatsAppConfigured()) return;
 
     const lines = order.items
@@ -376,7 +379,7 @@ const shopOrderController = {
         return res.status(403).json({ success: false, message: "This order belongs to another account." });
       }
 
-      const { createRazorpayInstance } = require("./payment.controller");
+
       const created = createRazorpayInstance(order.paymentAccount);
       const keySecret = created && created.account ? created.account.key_secret : null;
       if (!keySecret) return res.status(500).json({ success: false, message: "Payments aren't configured." });
@@ -541,7 +544,7 @@ const shopOrderController = {
         // guess the courier from the number's format when they didn't pick
         // one. Both are conveniences only — an explicit admin value always
         // wins over an auto-built URL.
-        const trackingService = require("../services/tracking.service");
+
         const newTracking = {
           courier: tracking.courier || order.tracking?.courier,
           trackingNumber: tracking.trackingNumber || order.tracking?.trackingNumber,
@@ -572,7 +575,7 @@ const shopOrderController = {
       if (fulfilmentStatus === "shipped") {
         setImmediate(async () => {
           try {
-            const { isWhatsAppConfigured, sendUtilityMessage } = require("../services/whatsapp.service");
+
             if (!isWhatsAppConfigured()) return;
             const trackingLine = order.tracking?.trackingNumber
               ? `\nTracking: ${order.tracking.courier || ""} ${order.tracking.trackingNumber}`.trim()
@@ -595,4 +598,4 @@ const shopOrderController = {
   },
 };
 
-module.exports = { shopOrderController, confirmShopOrderPaid, sendOrderWhatsApp };
+export { shopOrderController, confirmShopOrderPaid, sendOrderWhatsApp };

@@ -2,7 +2,7 @@
 // Cloudflare R2 client — same account/bucket pattern already used in
 // campaign-server (HkmVizagTech's campaigner platform). CommonJS here
 // since hkmsite2.0-server is not an ESM package (campaign-server is).
-const { S3Client } = require("@aws-sdk/client-s3");
+import { S3Client } from "@aws-sdk/client-s3";
 
 const accountId = process.env.R2_ACCOUNT_ID || "";
 if (!accountId) {
@@ -24,4 +24,4 @@ const r2Client = new S3Client({
 
 const bucketName = process.env.R2_BUCKET_NAME;
 
-module.exports = { r2Client, bucketName };
+export { r2Client, bucketName };

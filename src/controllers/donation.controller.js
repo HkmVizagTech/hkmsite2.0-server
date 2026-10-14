@@ -1,7 +1,18 @@
-const mongoose = require("mongoose");
-const { donationModel } = require("../models/donation.model");
-const { createRazorpayInstance } = require("./payment.controller");
-const { IST, istDayStart, istDayEnd } = require("../config/timezone");
+import mongoose from "mongoose";
+import { donationModel } from "../models/donation.model.js";
+import { createRazorpayInstance } from "./payment.controller.js";
+import { IST, istDayStart, istDayEnd } from "../config/timezone.js";
+import { reconcilePendingDonations } from "../services/reconciliation.service.js";
+import { templeDevoteeModel } from "../models/templeDevotee.model.js";
+import { findOrCreateDonor } from "../services/donor.service.js";
+import { markDonationCompleted, sendDonationWhatsAppReceipt, resendRecentFailedReceipts } from "../services/paymentCompletion.service.js";
+import { syncDonationToDcc as dccSync, isDccConfigured } from "../services/dcc.service.js";
+import { notifyDrmOfDonation } from "../services/drmNotify.service.js";
+import { festivalDonationModel } from "../models/festivalDonation.model.js";
+import { pushAndSendReceipt, pushResultMessage, setReceiptNumberAndSend, dccReceiptStatus, isSweepRunning, sweepDccReceipts } from "../services/dccSweep.service.js";
+import { donorModel } from "../models/donor.model.js";
+import { isWhatsAppConfigured } from "../services/whatsapp.service.js";
+import { isGupshupReceiptConfigured } from "../services/gupshup.service.js";
 
 // The standalone /donations page (and anything built under /donations/...,
 // e.g. /donations/janmashtami2) is fully separate from the rest of the
@@ -205,7 +216,7 @@ const donationController = {
         ? String(req.query.statuses).split(",").map((s) => s.trim()).filter(Boolean)
         : ["pending"];
 
-      const { reconcilePendingDonations } = require("../services/reconciliation.service");
+
       const { summary, results } = await reconcilePendingDonations({ limit, skip, fix, scope, statuses });
 
       res.status(200).json({
@@ -479,7 +490,7 @@ const donationController = {
       // devotee instead of the generic default (36 for most flows).
       let dccEnrolledById;
       if (devoteeId) {
-        const { templeDevoteeModel } = require("../models/templeDevotee.model");
+
         // Guarded: a malformed id used to throw a Mongoose CastError that the
         // outer catch returned as a 500, so one bad value failed the whole
         // donation rather than just the attribution.
@@ -544,7 +555,7 @@ const donationController = {
       // preacher happens to raise this particular receipt for them).
       if (donation.donorMobile) {
         try {
-          const { findOrCreateDonor } = require("../services/donor.service");
+
           const raisedByPreacherId = req.user?.role === "preacher" ? req.user.userId : undefined;
           const donorRecord = await findOrCreateDonor({
             mobile: donation.donorMobile,
@@ -558,13 +569,13 @@ const donationController = {
         }
       }
 
-      const { markDonationCompleted, sendDonationWhatsAppReceipt } = require("../services/paymentCompletion.service");
+
       await markDonationCompleted({ donationId: donation._id });
 
       // DCC sync + WhatsApp — same pipeline as automated completions,
       // Meta CAPI deliberately excluded (see comment above).
       try {
-        const { syncDonationToDcc: dccSync } = require("../services/dcc.service");
+
         await dccSync(await donationModel.findById(donation._id), utr);
       } catch (e) {
         console.error("Manual entry DCC sync failed:", e && e.message ? e.message : e);
@@ -582,7 +593,7 @@ const donationController = {
       // they never reached DRM until somebody ran a full import there. Last,
       // after DCC, so the receipt number goes too. Never throws.
       try {
-        const { notifyDrmOfDonation } = require("../services/drmNotify.service");
+
         notifyDrmOfDonation(donation._id, { reason: "manual_entry" }).catch(() => undefined);
       } catch (e) {
         console.warn("DRM push not started (non-fatal):", e && e.message ? e.message : e);
@@ -633,11 +644,11 @@ const donationController = {
         manualEnteredBy: req.user?.userId || undefined,
       });
 
-      const { markDonationCompleted, sendDonationWhatsAppReceipt } = require("../services/paymentCompletion.service");
+
       await markDonationCompleted({ donationId: donation._id });
 
       try {
-        const { syncDonationToDcc: dccSync } = require("../services/dcc.service");
+
         await dccSync(await donationModel.findById(donation._id), utr);
       } catch (e) {
         console.error("Manual completion DCC sync failed:", e && e.message ? e.message : e);
@@ -655,7 +666,7 @@ const donationController = {
       // they never reached DRM until somebody ran a full import there. Last,
       // after DCC, so the receipt number goes too. Never throws.
       try {
-        const { notifyDrmOfDonation } = require("../services/drmNotify.service");
+
         notifyDrmOfDonation(donation._id, { reason: "manual_entry" }).catch(() => undefined);
       } catch (e) {
         console.warn("DRM push not started (non-fatal):", e && e.message ? e.message : e);
@@ -793,7 +804,7 @@ const donationController = {
       let resolvedFestivalId = festivalId;
       if (!resolvedFestivalId && festivalSlug) {
         try {
-          const { festivalDonationModel } = require('../models/festivalDonation.model');
+
           const fest = await festivalDonationModel.findOne({ slug: festivalSlug }).select('_id');
           if (fest) resolvedFestivalId = fest._id;
         } catch (err) {
@@ -850,7 +861,7 @@ const donationController = {
   resendReceipt: async (req, res) => {
     try {
       const { id } = req.params;
-      const { isDccConfigured } = require("../services/dcc.service");
+
       const donation = await donationModel.findById(id);
       if (!donation) return res.status(404).json({ message: "Donation not found" });
 
@@ -863,7 +874,7 @@ const donationController = {
 
       // Push to DCC (DCC answers a repeat push with the receipt it already
       // issued), then send the WhatsApp receipt once there is a number.
-      const { pushAndSendReceipt, pushResultMessage } = require("../services/dccSweep.service");
+
       const result = await pushAndSendReceipt(id);
       const message = pushResultMessage(result);
       if (result.receiptNumber) {
@@ -887,7 +898,7 @@ const donationController = {
       if (!clean) return res.status(400).json({ success: false, message: "receiptNumber is required." });
 
       // Stores it and sends the donor the WhatsApp receipt (never twice).
-      const { setReceiptNumberAndSend } = require("../services/dccSweep.service");
+
       const result = await setReceiptNumberAndSend(req.params.id, clean);
       if (!result) return res.status(404).json({ success: false, message: "Donation not found." });
       res.status(200).json({ success: true, ...result });
@@ -902,8 +913,8 @@ const donationController = {
   // what the automatic sweep will do with it, and the counts.
   dccStatus: async (req, res) => {
     try {
-      const { dccReceiptStatus, isSweepRunning } = require("../services/dccSweep.service");
-      const { isDccConfigured } = require("../services/dcc.service");
+
+
       const status = await dccReceiptStatus({ includeOld: req.query.includeOld === "true" });
       res.status(200).json({ success: true, configured: isDccConfigured(), running: isSweepRunning(), ...status });
     } catch (err) {
@@ -917,8 +928,8 @@ const donationController = {
   // the panel refreshes /dcc-status to follow it.
   dccPushAll: async (req, res) => {
     try {
-      const { sweepDccReceipts, isSweepRunning } = require("../services/dccSweep.service");
-      const { isDccConfigured } = require("../services/dcc.service");
+
+
       if (!isDccConfigured()) return res.status(400).json({ success: false, message: "DCC is not configured on this server." });
       if (isSweepRunning()) return res.status(202).json({ success: true, message: "A push is already running." });
       sweepDccReceipts({ limit: 200, ignoreBackoff: true })
@@ -1005,7 +1016,7 @@ const donationController = {
         { $limit: limit },
       ]);
 
-      const { findOrCreateDonor } = require("../services/donor.service");
+
       const results = [];
 
       for (const g of groups) {
@@ -1054,7 +1065,7 @@ const donationController = {
       const limit = Math.min(300, Math.max(1, parseInt(req.query.limit, 10) || 200));
       const execute = req.query.execute === "true";
 
-      const { donorModel } = require("../models/donor.model");
+
       const donors = await donorModel
         .find({ dccDonorNumber: { $exists: false } })
         .sort({ _id: 1 })
@@ -1159,7 +1170,7 @@ const donationController = {
         return res.status(400).json({ success: false, message: "hours must be 0 (all time) or between 1 and 8760." });
       }
 
-      const { resendRecentFailedReceipts } = require("../services/paymentCompletion.service");
+
       const result = await resendRecentFailedReceipts({ hours, limit, dryRun, delayMs: 700 });
 
       return res.status(200).json({ success: true, ...result });
@@ -1175,9 +1186,9 @@ const donationController = {
   resendWhatsApp: async (req, res) => {
     try {
       const { id } = req.params;
-      const { isWhatsAppConfigured } = require("../services/whatsapp.service");
-      const { isGupshupReceiptConfigured } = require("../services/gupshup.service");
-      const { sendDonationWhatsAppReceipt } = require("../services/paymentCompletion.service");
+
+
+
       const donation = await donationModel.findById(id);
       if (!donation) return res.status(404).json({ message: "Donation not found" });
 
@@ -1547,4 +1558,4 @@ const donationController = {
   },
 };
 
-module.exports = { donationController };
+export { donationController };

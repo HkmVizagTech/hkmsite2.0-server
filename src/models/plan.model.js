@@ -1,4 +1,4 @@
-const mongoose = require('mongoose');
+import mongoose from "mongoose";
 
 // Caches Razorpay Plan IDs so the same amount on the same account always
 // reuses one plan instead of creating a new one per subscription.
@@ -11,4 +11,4 @@ const planSchema = new mongoose.Schema({
 planSchema.index({ amount: 1, account: 1 }, { unique: true });
 
 const planModel = mongoose.model('Plan', planSchema);
-module.exports = { planModel };
+export { planModel };

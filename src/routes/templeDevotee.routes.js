@@ -1,6 +1,6 @@
-const express = require("express");
-const { templeDevoteeController } = require("../controllers/templeDevotee.controller");
-const { authMiddleware, adminMiddleware } = require("../middlewares/auth.middleware");
+import express from "express";
+import { templeDevoteeController } from "../controllers/templeDevotee.controller.js";
+import { authMiddleware, adminMiddleware } from "../middlewares/auth.middleware.js";
 
 const templeDevoteeRouter = express.Router();
 
@@ -9,4 +9,4 @@ templeDevoteeRouter.get("/admin/list", authMiddleware, adminMiddleware, templeDe
 templeDevoteeRouter.post("/admin", authMiddleware, adminMiddleware, templeDevoteeController.create);
 templeDevoteeRouter.put("/admin/:id", authMiddleware, adminMiddleware, templeDevoteeController.update);
 
-module.exports = { templeDevoteeRouter };
+export { templeDevoteeRouter };

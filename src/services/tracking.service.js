@@ -16,7 +16,7 @@
 // A courier API outage must never block an admin saving an order, and the
 // auto-detect job simply tries again on its next pass.
 
-const axios = require("axios");
+import axios from "axios";
 
 const HTTP_TIMEOUT_MS = Number(process.env.TRACKING_HTTP_TIMEOUT_MS || 8000);
 
@@ -246,12 +246,5 @@ async function fetchCourierStatus(courier, trackingNumber) {
   }
 }
 
-module.exports = {
-  detectCourier,
-  buildTrackingUrl,
-  mapCourierStatusToOrderStatus,
-  fetchCourierStatus,
-  // Exposed for tests/debugging.
-  TRACKING_URL_BUILDERS,
-  DETECT_RULES,
-};
+export { detectCourier, buildTrackingUrl, mapCourierStatusToOrderStatus, fetchCourierStatus, // Exposed for tests/debugging.
+  TRACKING_URL_BUILDERS, DETECT_RULES };

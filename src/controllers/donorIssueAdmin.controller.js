@@ -1,5 +1,5 @@
-const { donorIssueModel } = require("../models/donorIssue.model");
-const { donorModel } = require("../models/donor.model");
+import { donorIssueModel } from "../models/donorIssue.model.js";
+import { donorModel } from "../models/donor.model.js";
 
 const donorIssueAdminController = {
   // GET /admin/donor-issues?status=open|in-progress|resolved
@@ -45,4 +45,4 @@ const donorIssueAdminController = {
   },
 };
 
-module.exports = { donorIssueAdminController };
+export { donorIssueAdminController };

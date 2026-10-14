@@ -1,8 +1,8 @@
-const express = require("express");
-const { donationController } = require("../controllers/donation.controller");
-const { upiFallbackController } = require("../controllers/upiFallback.controller");
-const { paymentFailuresController } = require("../controllers/paymentFailures.controller");
-const { authMiddleware, adminMiddleware, preacherModuleMiddleware } = require("../middlewares/auth.middleware");
+import express from "express";
+import { donationController } from "../controllers/donation.controller.js";
+import { upiFallbackController } from "../controllers/upiFallback.controller.js";
+import { paymentFailuresController } from "../controllers/paymentFailures.controller.js";
+import { authMiddleware, adminMiddleware, preacherModuleMiddleware } from "../middlewares/auth.middleware.js";
 
 const donationRouter = express.Router();
 
@@ -48,4 +48,4 @@ donationRouter.put("/:id/manual-complete", authMiddleware, adminMiddleware, dona
 donationRouter.put("/:id", authMiddleware, adminMiddleware, donationController.update);
 donationRouter.delete("/:id", authMiddleware, adminMiddleware, donationController.delete);
 
-module.exports = { donationRouter };
+export { donationRouter };

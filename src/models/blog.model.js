@@ -1,4 +1,4 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
 // GVD-style 13 categories (matches guptvrindavandham.org/blogs structure)
 const BLOG_CATEGORIES = [
@@ -81,4 +81,4 @@ blogSchema.index({ category: 1, status: 1, publishedAt: -1 });
 
 const blogModel = mongoose.model("blog", blogSchema);
 
-module.exports = { blogModel, BLOG_CATEGORIES };
+export { blogModel, BLOG_CATEGORIES };

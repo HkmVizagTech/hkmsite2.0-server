@@ -1,8 +1,8 @@
-const express = require("express");
-const { productController } = require("../controllers/product.controller");
-const { shopOrderController } = require("../controllers/shopOrder.controller");
-const { authMiddleware, shopAdminMiddleware } = require("../middlewares/auth.middleware");
-const upload = require("../utils/multer");
+import express from "express";
+import { productController } from "../controllers/product.controller.js";
+import { shopOrderController } from "../controllers/shopOrder.controller.js";
+import { authMiddleware, shopAdminMiddleware } from "../middlewares/auth.middleware.js";
+import upload from "../utils/multer.js";
 
 const shopAdminRouter = express.Router();
 
@@ -35,4 +35,4 @@ shopAdminRouter.patch("/orders/:id", shopOrderController.adminUpdateOrder);
 shopAdminRouter.get("/settings", productController.getAdminSettings);
 shopAdminRouter.patch("/settings", productController.updateSettings);
 
-module.exports = { shopAdminRouter };
+export { shopAdminRouter };

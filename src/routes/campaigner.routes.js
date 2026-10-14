@@ -1,6 +1,6 @@
-const express = require("express");
-const { campaignerController } = require("../controllers/campaigner.controller");
-const { authMiddleware, adminMiddleware } = require("../middlewares/auth.middleware");
+import express from "express";
+import { campaignerController } from "../controllers/campaigner.controller.js";
+import { authMiddleware, adminMiddleware } from "../middlewares/auth.middleware.js";
 
 const campaignerRouter = express.Router();
 
@@ -9,4 +9,4 @@ campaignerRouter.get("/admin/list", authMiddleware, adminMiddleware, campaignerC
 campaignerRouter.put("/admin/:id/status", authMiddleware, adminMiddleware, campaignerController.updateStatus);
 campaignerRouter.get("/:slug", campaignerController.getBySlug); // public — keep last (wildcard)
 
-module.exports = { campaignerRouter };
+export { campaignerRouter };

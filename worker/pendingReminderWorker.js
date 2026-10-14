@@ -12,10 +12,10 @@
 
 // Must stay the first require in this file — see src/config/timezone.js.
 // A worker is a separate process and does not inherit anything index.js did.
-require("../src/config/timezone");
+import "../src/config/timezone.js";
 
-const { connectDb } = require("../src/config/db");
-const { runPendingReminders } = require("../src/services/pendingReminder.service");
+import { connectDb } from "../src/config/db.js";
+import { runPendingReminders } from "../src/services/pendingReminder.service.js";
 
 async function main() {
   await connectDb();

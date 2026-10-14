@@ -170,4 +170,4 @@ function buildPendingFields({
   };
 }
 
-module.exports = { buildPendingFields, withCampaignContext, appendQuery, SITE_URL };
+export { buildPendingFields, withCampaignContext, appendQuery, SITE_URL };

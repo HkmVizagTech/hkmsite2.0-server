@@ -1,4 +1,4 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
 const importantDateSchema = new mongoose.Schema({
   title: { type: String, required: true },
@@ -13,4 +13,4 @@ const importantDateSchema = new mongoose.Schema({
 
 const importantDateModel = mongoose.model("importantDate", importantDateSchema);
 
-module.exports = { importantDateModel };
+export { importantDateModel };

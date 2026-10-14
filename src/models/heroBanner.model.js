@@ -1,4 +1,4 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
 const heroBannerSchema = new mongoose.Schema(
   {
@@ -17,4 +17,4 @@ heroBannerSchema.index({ active: 1, order: 1 });
 
 const heroBannerModel = mongoose.model("heroBanner", heroBannerSchema);
 
-module.exports = { heroBannerModel };
+export { heroBannerModel };

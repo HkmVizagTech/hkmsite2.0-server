@@ -22,17 +22,10 @@
 // after a successful send, so overlapping runs (in-process scheduler + an
 // external cron hitting the internal endpoint) can never double-message.
 
-const { donationModel } = require("../models/donation.model");
-const {
-  isWhatsAppConfigured,
-  sendPendingWhatsapp,
-} = require("./whatsapp.service");
-const {
-  isGupshupConfigured,
-  sendPendingWhatsappViaGupshup,
-  FALLBACK_HEADER_IMAGE,
-} = require("./gupshup.service");
-const { sanitizeBannerImage, fetchPageOgImage, absolutize } = require("./pageBanner.service");
+import { donationModel } from "../models/donation.model.js";
+import { isWhatsAppConfigured, sendPendingWhatsapp } from "./whatsapp.service.js";
+import { isGupshupConfigured, sendPendingWhatsappViaGupshup, FALLBACK_HEADER_IMAGE } from "./gupshup.service.js";
+import { sanitizeBannerImage, fetchPageOgImage, absolutize } from "./pageBanner.service.js";
 
 // Which BSP sends the pending reminder.
 //
@@ -597,11 +590,8 @@ async function runPendingReminders() {
   };
 }
 
-module.exports = {
+export {
   runPendingReminders,
-  // Exported for warm-seva-banners.js, which pre-converts every banner to JPEG
-  // so no donor's reminder is the first to pay that cost (or to hit the
-  // generic-banner fallback because R2 was misconfigured).
   SEVA_IMAGES,
   DEFAULT_SEVA_IMAGE,
   getSevaImage,

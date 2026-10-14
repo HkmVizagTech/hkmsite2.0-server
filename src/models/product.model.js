@@ -1,4 +1,4 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
 // One purchasable option of a product — "100g", "Pack of 3", "Medium".
 // Each variant carries its OWN price and stock because that's the whole
@@ -133,4 +133,4 @@ function priceRange(product) {
 }
 
 const productModel = mongoose.model("product", productSchema);
-module.exports = { productModel, resolvePurchasable, totalStock, priceRange };
+export { productModel, resolvePurchasable, totalStock, priceRange };

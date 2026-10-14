@@ -17,13 +17,8 @@
 
 require("dotenv").config();
 
-const { buildPendingFields } = require("./src/services/pendingMessage.util");
-const {
-  isGupshupConfigured,
-  sendPendingWhatsappViaGupshup,
-  resolveJpegHeaderUrl,
-  getPendingTemplateId,
-} = require("./src/services/gupshup.service");
+import { buildPendingFields } from "./src/services/pendingMessage.util.js";
+import { isGupshupConfigured, sendPendingWhatsappViaGupshup, resolveJpegHeaderUrl, getPendingTemplateId } from "./src/services/gupshup.service.js";
 
 const BANNER =
   process.env.WAPI_PENDING_IMAGE ||

@@ -10,11 +10,11 @@
 // it makes the exclusion permanent, so that widening that window later — or
 // running an old build — can never release a flood of stale reminders.
 
-require("dotenv").config();
+import "dotenv/config";
 
-const mongoose = require("mongoose");
-const { connectDb } = require("./src/config/db");
-const { donationModel } = require("./src/models/donation.model");
+import mongoose from "mongoose";
+import { connectDb } from "./src/config/db.js";
+import { donationModel } from "./src/models/donation.model.js";
 
 const MAX_AGE_HOURS = Number(process.env.PENDING_REMINDER_MAX_AGE_HOURS || 24);
 

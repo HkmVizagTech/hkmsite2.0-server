@@ -1,6 +1,6 @@
-const express = require("express");
-const rateLimit = require("express-rate-limit");
-const { donorAuthController } = require("../controllers/donorAuth.controller");
+import express from "express";
+import rateLimit from "express-rate-limit";
+import { donorAuthController } from "../controllers/donorAuth.controller.js";
 
 const donorAuthRouter = express.Router();
 
@@ -52,4 +52,4 @@ donorAuthRouter.post("/lookup", (req, res) =>
 // are the same kind of session, proven the same way.
 donorAuthRouter.post("/verify-otp", verifyRateLimit, donorAuthController.verifyOtp);
 
-module.exports = { donorAuthRouter };
+export { donorAuthRouter };

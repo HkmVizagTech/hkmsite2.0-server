@@ -73,4 +73,4 @@ function istDayEnd(value) {
   return d;
 }
 
-module.exports = { IST, IST_OFFSET, istDayStart, istDayEnd };
+export { IST, IST_OFFSET, istDayStart, istDayEnd };

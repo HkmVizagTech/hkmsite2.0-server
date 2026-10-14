@@ -18,8 +18,10 @@
 // 2 July 2026) are never pushed automatically — staff may have entered them in
 // DCC by hand. Admin can still push them one at a time.
 
-const { donationModel } = require("../models/donation.model");
-const { syncDonationToDcc, dccTransactionId, isDccConfigured } = require("./dcc.service");
+import { donationModel } from "../models/donation.model.js";
+import { syncDonationToDcc, dccTransactionId, isDccConfigured } from "./dcc.service.js";
+import { notifyDrmOfDonation } from "./drmNotify.service.js";
+import { sendDonationWhatsAppReceipt } from "./paymentCompletion.service.js";
 
 const AUTO_SINCE = new Date(process.env.DCC_AUTO_SINCE || "2026-07-02T00:00:00+05:30");
 const STALE_LOCK_MS = 10 * 60 * 1000; // a push never takes this long; the process died mid-push
@@ -82,7 +84,7 @@ async function pushAndSendReceipt(donationId, { sendReceipt = true } = {}) {
     // by syncDonationToDcc itself.
     if (!before.manualEntry) {
       try {
-        const { notifyDrmOfDonation } = require("./drmNotify.service");
+
         notifyDrmOfDonation(after._id, { reason: "receipt_issued" }).catch(() => undefined);
       } catch {}
     }
@@ -90,7 +92,7 @@ async function pushAndSendReceipt(donationId, { sendReceipt = true } = {}) {
 
   if (receiptNumber && sendReceipt && !after.whatsappReceiptSentAt) {
     try {
-      const { sendDonationWhatsAppReceipt } = require("./paymentCompletion.service");
+
       result.whatsapp = await sendDonationWhatsAppReceipt(after);
     } catch (err) {
       result.whatsapp = { ok: false, error: err && err.message ? err.message : String(err) };
@@ -127,7 +129,7 @@ async function setReceiptNumberAndSend(donationId, receiptNumber) {
   let whatsapp = null;
   if (donation.status === "completed" && !donation.whatsappReceiptSentAt) {
     try {
-      const { sendDonationWhatsAppReceipt } = require("./paymentCompletion.service");
+
       whatsapp = await sendDonationWhatsAppReceipt(donation);
     } catch (e) {
       whatsapp = { ok: false, error: e && e.message ? e.message : String(e) };
@@ -241,14 +243,4 @@ async function dccReceiptStatus({ listLimit = 300, includeOld = false, scope = n
 
 const isSweepRunning = () => running;
 
-module.exports = {
-  sweepDccReceipts,
-  pushAndSendReceipt,
-  pushResultMessage,
-  setReceiptNumberAndSend,
-  dccReceiptStatus,
-  autoPushDecision,
-  releaseStaleLocks,
-  isSweepRunning,
-  AUTO_SINCE,
-};
+export { sweepDccReceipts, pushAndSendReceipt, pushResultMessage, setReceiptNumberAndSend, dccReceiptStatus, autoPushDecision, releaseStaleLocks, isSweepRunning, AUTO_SINCE };

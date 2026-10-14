@@ -1,6 +1,6 @@
-const express = require("express");
-const { preacherController } = require("../controllers/preacher.controller");
-const { authMiddleware, preacherModuleMiddleware } = require("../middlewares/auth.middleware");
+import express from "express";
+import { preacherController } from "../controllers/preacher.controller.js";
+import { authMiddleware, preacherModuleMiddleware } from "../middlewares/auth.middleware.js";
 
 const preacherRouter = express.Router();
 
@@ -14,4 +14,4 @@ preacherRouter.get("/my-donors/:donorRecordId/donations", authMiddleware, preach
 preacherRouter.get("/my-reports", authMiddleware, preacherModuleMiddleware("my-reports"), preacherController.myReports);
 preacherRouter.post("/donations/:id/resend-whatsapp", authMiddleware, preacherModuleMiddleware("resend"), preacherController.resendWhatsApp);
 
-module.exports = { preacherRouter };
+export { preacherRouter };

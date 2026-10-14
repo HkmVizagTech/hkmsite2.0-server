@@ -1,4 +1,4 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
 // A lightweight identity record per donor, keyed by mobile number (the
 // most reliable identifier Indian donors consistently provide). Built now
@@ -71,4 +71,4 @@ const donorSchema = new mongoose.Schema(
 );
 
 const donorModel = mongoose.model("donor", donorSchema);
-module.exports = { donorModel };
+export { donorModel };

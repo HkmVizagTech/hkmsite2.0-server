@@ -245,4 +245,4 @@ const ekadashiCampaignController = {
   },
 };
 
-module.exports = { ekadashiCampaignController, DEFAULT_CAMPAIGN };
+export { ekadashiCampaignController, DEFAULT_CAMPAIGN };

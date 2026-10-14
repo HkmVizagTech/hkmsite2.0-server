@@ -18,7 +18,7 @@
  * /radhashtami, /govardhan-puja and /ekadashi pages.
  */
 
-const { festivalDonationModel } = require("../models/festivalDonation.model");
+import { festivalDonationModel } from "../models/festivalDonation.model.js";
 
 const CANONICAL_SLUGS = ["radhashtami", "govardhan-puja", "ekadashi"];
 
@@ -138,4 +138,4 @@ async function ensureDefaultFestivalDonations() {
   return { created, skipped, deactivated };
 }
 
-module.exports = { DEFAULT_FESTIVAL_DONATIONS, CANONICAL_SLUGS, slugify, ensureDefaultFestivalDonations };
+export { DEFAULT_FESTIVAL_DONATIONS, CANONICAL_SLUGS, slugify, ensureDefaultFestivalDonations };

@@ -1,4 +1,4 @@
-const { volunteerEventModel, volunteerRegistrationModel } = require("../models/volunteer.model");
+import { volunteerEventModel, volunteerRegistrationModel } from "../models/volunteer.model.js";
 
 const volunteerController = {
   listActive: async (req, res) => {
@@ -186,4 +186,4 @@ const volunteerController = {
   },
 };
 
-module.exports = { volunteerController };
+export { volunteerController };

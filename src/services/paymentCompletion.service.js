@@ -1,19 +1,15 @@
-const fs = require("fs");
-const os = require("os");
-const path = require("path");
-const { donationModel } = require("../models/donation.model");
-const { syncDonationToDcc } = require("./dcc.service");
-const {
-  isWhatsAppConfigured,
-  sendTemplateMessage,
-  sendTemplateMessageWithAttachment,
-} = require("./whatsapp.service");
-const {
-  isGupshupReceiptConfigured,
-  sendReceiptWhatsappViaGupshup,
-} = require("./gupshup.service");
-const { generateReceiptBuffer } = require("./receipt.service");
-const { cacheDel, cacheKeys } = require("../cache/memoryCache");
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { donationModel } from "../models/donation.model.js";
+import { syncDonationToDcc } from "./dcc.service.js";
+import { isWhatsAppConfigured, sendTemplateMessage, sendTemplateMessageWithAttachment } from "./whatsapp.service.js";
+import { isGupshupReceiptConfigured, sendReceiptWhatsappViaGupshup } from "./gupshup.service.js";
+import { generateReceiptBuffer } from "./receipt.service.js";
+import { cacheDel, cacheKeys } from "../cache/memoryCache.js";
+import { findOrCreateDonor } from "./donor.service.js";
+import { sendPurchaseEvent } from "./metaCapi.service.js";
+import { notifyDrmOfDonation } from "./drmNotify.service.js";
 
 // Approved Meta template for the receipt-with-PDF message. Confirmed from
 // the real approved template: body expects 3 params — donor name
@@ -509,7 +505,7 @@ async function runPostCompletionPipeline(donationId, paymentId, { sendWhatsApp =
   // preacher first raises something for them, or an admin assigns one).
   if (donation.donorMobile && !donation.donorRecordId) {
     try {
-      const { findOrCreateDonor } = require("./donor.service");
+
       const donorRecord = await findOrCreateDonor({
         mobile: donation.donorMobile,
         name: donation.donorName,
@@ -558,7 +554,7 @@ async function runPostCompletionPipeline(donationId, paymentId, { sendWhatsApp =
 
   // Meta CAPI — best-effort, never blocks anything.
   try {
-    const { sendPurchaseEvent } = require("./metaCapi.service");
+
     sendPurchaseEvent(donation).catch((e) => {
       console.warn("Meta CAPI purchase event failed (non-fatal):", e && e.message ? e.message : e);
     });
@@ -580,7 +576,7 @@ async function runPostCompletionPipeline(donationId, paymentId, { sendWhatsApp =
   // subscription charge, and every later recurring charge all reach here
   // through completeDonation().
   try {
-    const { notifyDrmOfDonation } = require("./drmNotify.service");
+
     notifyDrmOfDonation(donationId).catch((e) => {
       console.warn("DRM push failed (non-fatal):", e && e.message ? e.message : e);
     });
@@ -665,4 +661,4 @@ async function handleSubscriptionCharged(payload) {
   return { ok: true, donationId: targetDonationId.toString() };
 }
 
-module.exports = { completeDonation, markDonationCompleted, runPostCompletionPipeline, sendDonationWhatsAppReceipt, resendRecentFailedReceipts, handleSubscriptionCharged, invalidateDonationCaches };
+export { completeDonation, markDonationCompleted, runPostCompletionPipeline, sendDonationWhatsAppReceipt, resendRecentFailedReceipts, handleSubscriptionCharged, invalidateDonationCaches };

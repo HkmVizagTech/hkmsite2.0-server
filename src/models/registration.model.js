@@ -1,4 +1,4 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
 const registrationSchema = new mongoose.Schema({
   eventId: { type: mongoose.Schema.Types.ObjectId, ref: "event", required: true },
@@ -15,4 +15,4 @@ const registrationSchema = new mongoose.Schema({
 
 const registrationModel = mongoose.model("registration", registrationSchema);
 
-module.exports = { registrationModel };
+export { registrationModel };

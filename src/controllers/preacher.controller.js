@@ -1,6 +1,9 @@
-const { donorModel } = require("../models/donor.model");
-const { donationModel } = require("../models/donation.model");
-const { istDayStart, istDayEnd } = require("../config/timezone");
+import { donorModel } from "../models/donor.model.js";
+import { donationModel } from "../models/donation.model.js";
+import { istDayStart, istDayEnd } from "../config/timezone.js";
+import mongoose from "mongoose";
+import { isWhatsAppConfigured } from "../services/whatsapp.service.js";
+import { sendDonationWhatsAppReceipt } from "../services/paymentCompletion.service.js";
 
 const preacherController = {
   // GET /preacher/search-donor?q=<mobile, name, or donor ID>
@@ -95,7 +98,7 @@ const preacherController = {
     try {
       const preacherId = req.user.userId;
       const { from, to } = req.query;
-      const mongoose = require("mongoose");
+
       const match = { manualEnteredBy: new mongoose.Types.ObjectId(preacherId), status: "completed" };
 
       // IST calendar days — a bare YYYY-MM-DD parses as UTC midnight
@@ -153,8 +156,8 @@ const preacherController = {
         return res.status(403).json({ success: false, message: "This donation isn't assigned to you." });
       }
 
-      const { isWhatsAppConfigured } = require("../services/whatsapp.service");
-      const { sendDonationWhatsAppReceipt } = require("../services/paymentCompletion.service");
+
+
 
       if (!isWhatsAppConfigured()) return res.status(503).json({ success: false, message: "WhatsApp isn't configured on the server." });
 
@@ -171,4 +174,4 @@ const preacherController = {
   },
 };
 
-module.exports = { preacherController };
+export { preacherController };

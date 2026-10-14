@@ -1,9 +1,9 @@
-const { donationModel } = require("../models/donation.model");
-const { eventModel } = require("../models/event.model");
-const { galleryModel } = require("../models/gallery.model");
-const { blogModel } = require("../models/blog.model");
-const { contactMessageModel } = require("../models/contactMessage.model");
-const { IST } = require("../config/timezone");
+import { donationModel } from "../models/donation.model.js";
+import { eventModel } from "../models/event.model.js";
+import { galleryModel } from "../models/gallery.model.js";
+import { blogModel } from "../models/blog.model.js";
+import { contactMessageModel } from "../models/contactMessage.model.js";
+import { IST } from "../config/timezone.js";
 
 // The standalone /donations page is a fully separate donation flow with its
 // own dedicated admin (/donations/admin) -- it must never be blended into
@@ -211,4 +211,4 @@ const dashboardController = {
   },
 };
 
-module.exports = { dashboardController };
+export { dashboardController };

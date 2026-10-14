@@ -11,22 +11,20 @@
 // dimensions — hero banners and blog hero images need full resolution —
 // and only applies lossless-ish compression to shrink file size.
 
-const fs = require("fs");
-const path = require("path");
-const { PutObjectCommand, DeleteObjectCommand } = require("@aws-sdk/client-s3");
-const { r2Client, bucketName } = require("../config/R2.config");
+import fs from "node:fs";
+import path from "node:path";
+import { PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import { r2Client, bucketName } from "../config/R2.config.js";
 
 // sharp is optional — it compresses images before upload.
 // On Alpine Linux (Railway's Dockerfile base) sharp needs native vips libs;
 // if they're missing the module fails to load. We catch that here and fall
 // back to uploading the original buffer uncompressed. Vercel's next/image
 // optimizer handles client-side resize/compression anyway.
-let sharp = null;
-try {
-  sharp = require("sharp");
-} catch (e) {
+const sharp = await import("sharp").then((m) => m.default).catch((e) => {
   console.warn("r2.js: sharp not available, uploads will skip compression:", e.message);
-}
+  return null;
+});
 
 const MIME_BY_EXT = {
   ".jpg": "image/jpeg",
@@ -103,4 +101,4 @@ const deleteFromR2 = async (key) => {
   await r2Client.send(new DeleteObjectCommand({ Bucket: bucketName, Key: key }));
 };
 
-module.exports = { uploadToR2, deleteFromR2 };
+export { uploadToR2, deleteFromR2 };

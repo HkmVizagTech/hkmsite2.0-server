@@ -9,17 +9,18 @@
 // "Target closed" crash class of bugs that hit the Puppeteer-based receipt
 // generator on the Subhojanam platform.
 
-const fs = require("fs");
-const path = require("path");
-const fontkit = require("fontkit");
-const { PDFDocument, StandardFonts, rgb } = require("pdf-lib");
+import fs from "node:fs";
+import path from "node:path";
+import fontkit from "fontkit";
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 
 // How a hand-entered donation was paid, as printed after "by" on the receipt.
 const MODE_WORDS = { cash: "Cash", cheque: "Cheque", upi: "UPI", bank: "Bank" };
-const numToWord = require("number-to-words");
-const { donationModel } = require("../models/donation.model");
-const { campaignerModel } = require("../models/campaigner.model");
-const { IST } = require("../config/timezone");
+import numToWord from "number-to-words";
+import { donationModel } from "../models/donation.model.js";
+import { campaignerModel } from "../models/campaigner.model.js";
+import { IST } from "../config/timezone.js";
+import { donorModel } from "../models/donor.model.js";
 
 const resolveFontPath = (fontPath) => {
   if (!fontPath) return null;
@@ -150,7 +151,7 @@ async function generateReceiptBuffer(donationId) {
   // right now, not whatever was true the moment this donation was linked.
   let displayDonorId = donation.donorId || "---";
   if (donation.donorRecordId) {
-    const { donorModel } = require("../models/donor.model");
+
     const donorRecord = await donorModel.findById(donation.donorRecordId).select("dccDonorNumber donorId").lean();
     if (donorRecord) displayDonorId = donorRecord.dccDonorNumber || donorRecord.donorId || displayDonorId;
   }
@@ -295,4 +296,4 @@ async function generateReceiptBuffer(donationId) {
   }
 }
 
-module.exports = { generateReceiptBuffer };
+export { generateReceiptBuffer };

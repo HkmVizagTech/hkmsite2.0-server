@@ -1,4 +1,4 @@
-const { contactMessageModel } = require("../models/contactMessage.model");
+import { contactMessageModel } from "../models/contactMessage.model.js";
 
 const contactMessageController = {
   // PUBLIC - submit the contact form
@@ -75,4 +75,4 @@ const contactMessageController = {
   },
 };
 
-module.exports = { contactMessageController };
+export { contactMessageController };

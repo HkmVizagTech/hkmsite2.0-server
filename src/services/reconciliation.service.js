@@ -1,7 +1,8 @@
-const { donationModel } = require("../models/donation.model");
-const { createRazorpayInstance } = require("../controllers/payment.controller");
-const { completeDonation } = require("./paymentCompletion.service");
-const { AUTO_SINCE } = require("./dccSweep.service");
+import { recordPaymentFailure } from "./paymentFailure.service.js";
+import { donationModel } from "../models/donation.model.js";
+import { createRazorpayInstance } from "../controllers/payment.controller.js";
+import { completeDonation } from "./paymentCompletion.service.js";
+import { AUTO_SINCE } from "./dccSweep.service.js";
 
 // Donations from before the site pushed to DCC (2 Jul 2026) that turn out to
 // be paid are completed and pushed to DCC (DCC answers with the receipt it
@@ -282,7 +283,7 @@ async function reconcilePendingDonations({ limit = 100, skip = 0, fix = false, s
           });
           // keep Razorpay's reason (the most recent failed attempt)
           const latest = failedPayments.slice().sort((a, b) => (b.created_at || 0) - (a.created_at || 0))[0];
-          await require("./paymentFailure.service").recordPaymentFailure(donation._id, latest).catch(() => {});
+          await recordPaymentFailure(donation._id, latest).catch(() => {});
           entry.action = "MARKED_FAILED";
           summary.markedFailed++;
         } else {
@@ -308,4 +309,4 @@ async function reconcilePendingDonations({ limit = 100, skip = 0, fix = false, s
   return { summary, results };
 }
 
-module.exports = { reconcilePendingDonations, closeStalePendingWithoutOrder, CLOSE_UNPAID_AFTER_MINUTES };
+export { reconcilePendingDonations, closeStalePendingWithoutOrder, CLOSE_UNPAID_AFTER_MINUTES };

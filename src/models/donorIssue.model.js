@@ -1,4 +1,4 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
 // A donor-raised issue/query, tracked from submission through resolution.
 // Kept simple deliberately — one message in, one response out, a status.
@@ -20,4 +20,4 @@ const donorIssueSchema = new mongoose.Schema(
 donorIssueSchema.index({ status: 1, createdAt: -1 });
 
 const donorIssueModel = mongoose.model("donorIssue", donorIssueSchema);
-module.exports = { donorIssueModel };
+export { donorIssueModel };

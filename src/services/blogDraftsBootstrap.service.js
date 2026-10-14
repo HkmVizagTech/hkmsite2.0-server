@@ -15,11 +15,14 @@
  * Set BLOG_DRAFTS_IMPORT=off to disable.
  */
 
-const fs = require("fs");
-const path = require("path");
-const mongoose = require("mongoose");
-const { blogModel, BLOG_CATEGORIES } = require("../models/blog.model");
-const { uploadToR2 } = require("../utils/r2");
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import fs from "node:fs";
+import path from "node:path";
+import mongoose from "mongoose";
+import { blogModel, BLOG_CATEGORIES } from "../models/blog.model.js";
+import { uploadToR2 } from "../utils/r2.js";
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const RUN_KEY = "blog-drafts-2026-10";
 const SEED_DIR = path.join(__dirname, "..", "seed", "blog-drafts");
@@ -84,4 +87,4 @@ async function ensureBlogDrafts() {
   }
 }
 
-module.exports = { ensureBlogDrafts };
+export { ensureBlogDrafts };

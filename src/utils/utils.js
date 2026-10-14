@@ -1,6 +1,6 @@
 
-const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
 
 const hashPassword = async (password) => {
 	return await bcrypt.hash(password, 10);
@@ -28,4 +28,4 @@ const generateToken = (payload) => {
 	return jwt.sign(payload, getJwtSecret(), { expiresIn: "7d" });
 };
 
-module.exports = { hashPassword, comparePassword, generateToken, getJwtSecret };
+export { hashPassword, comparePassword, generateToken, getJwtSecret };

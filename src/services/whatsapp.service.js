@@ -57,7 +57,11 @@
 
 const WAPI_BASE = "https://wapi.flaxxa.com";
 
-const { buildPendingFields } = require("./pendingMessage.util");
+import { buildPendingFields } from "./pendingMessage.util.js";
+import FormData from "form-data";
+import axios from "axios";
+import fs from "node:fs";
+import sharp from "sharp";
 
 const isWhatsAppConfigured = () => Boolean(process.env.WAPI_TOKEN);
 
@@ -220,8 +224,8 @@ async function postTemplateWithAttachment(normalizedPhone, templateName, compone
   const token = process.env.WAPI_TOKEN;
   if (!token) throw new Error("WAPI_TOKEN is not set");
 
-  const FormData = require("form-data");
-  const axios = require("axios");
+
+
 
   const form = new FormData();
   form.append("token", token);
@@ -256,7 +260,7 @@ async function sendTemplateMessageWithAttachment(phone, templateName, bodyParame
   const normalizedPhone = normalizePhone(phone);
   if (!normalizedPhone) throw new Error("Invalid or missing phone number");
 
-  const fs = require("fs");
+
   return postTemplateWithAttachment(
     normalizedPhone,
     templateName,
@@ -289,7 +293,7 @@ async function fetchHeaderImageJpeg(url) {
   if (!res.ok) throw new Error(`Header image download failed (HTTP ${res.status}): ${url}`);
   const input = Buffer.from(await res.arrayBuffer());
 
-  const sharp = require("sharp");
+
   let jpeg = await sharp(input)
     .rotate()
     .resize({ width: 1600, withoutEnlargement: true })
@@ -434,14 +438,4 @@ async function sendDonorOtp(phone, otpCode) {
   return sendTemplateMessage(phone, OTP_TEMPLATE_NAME, components, "en");
 }
 
-module.exports = {
-  isWhatsAppConfigured,
-  sendTemplateMessage,
-  sendTemplateMessageWithAttachment,
-  sendTextMessage,
-  sendPendingWhatsapp,
-  sendDonorOtp,
-  sendUtilityMessage,
-  normalizePhone,
-  fetchHeaderImageJpeg,
-};
+export { isWhatsAppConfigured, sendTemplateMessage, sendTemplateMessageWithAttachment, sendTextMessage, sendPendingWhatsapp, sendDonorOtp, sendUtilityMessage, normalizePhone, fetchHeaderImageJpeg };

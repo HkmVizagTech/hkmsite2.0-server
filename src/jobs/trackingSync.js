@@ -20,11 +20,8 @@
 // delivered orders are never re-checked. All failures are logged and
 // swallowed — a courier outage must never take the job down.
 
-const { shopOrderModel } = require("../models/shopOrder.model");
-const {
-  fetchCourierStatus,
-  mapCourierStatusToOrderStatus,
-} = require("../services/tracking.service");
+import { shopOrderModel } from "../models/shopOrder.model.js";
+import { fetchCourierStatus, mapCourierStatusToOrderStatus, detectCourier, buildTrackingUrl } from "../services/tracking.service.js";
 
 // How often the job runs (default: every 2 hours). Overridable via env.
 const INTERVAL_MINUTES = Number(process.env.TRACKING_SYNC_INTERVAL_MINUTES || 120);
@@ -101,7 +98,7 @@ async function runTrackingSync() {
       // it from the number's format and store the guess (this also fills
       // the customer-facing tracking URL below).
       if (!courier) {
-        const { detectCourier, buildTrackingUrl } = require("../services/tracking.service");
+
         const guessed = detectCourier(trackingNumber);
         if (guessed) {
           order.tracking.courier = guessed;
@@ -216,4 +213,4 @@ function startTrackingSyncJob() {
   console.log(`[trackingSync] scheduled every ${INTERVAL_MINUTES} min (batch ${BATCH_SIZE})`);
 }
 
-module.exports = { startTrackingSyncJob, runTrackingSync };
+export { startTrackingSyncJob, runTrackingSync };

@@ -1,45 +1,49 @@
 // Must stay the first require in this file — see src/config/timezone.js.
 // app.js is required by index.js, which already sets the zone, but it is
 // also loadable on its own, and the require is idempotent either way.
-require("./src/config/timezone");
+import "./src/config/timezone.js";
 
-const express = require("express");
-const cors = require("cors");
-const cookieParser = require("cookie-parser");
-const compression = require("compression");
-const helmet = require("helmet");
-const mongoose = require('mongoose');
+import express from "express";
+import cors from "cors";
+import cookieParser from "cookie-parser";
+import compression from "compression";
+import helmet from "helmet";
+import mongoose from "mongoose";
 
 
-const { userRouter } = require("./src/routes/user.routes");
-const { eventRouter } = require("./src/routes/event.routes");
-const { galleryRouter } = require("./src/routes/gallery.routes");
-const { darshanRouter } = require("./src/routes/darshan.routes");
-const { donationRouter } = require("./src/routes/donation.routes");
-const { preacherRouter } = require("./src/routes/preacher.routes");
-const { donorAuthRouter } = require("./src/routes/donorAuth.routes");
-const { donorRouter } = require("./src/routes/donor.routes");
-const { donationPageRouter } = require("./src/routes/donationPage.routes");
-const { donationAdminRouter } = require("./src/routes/donationAdmin.routes");
-const { festivalDonationRouter } = require("./src/routes/festivalDonation.routes");
-const { festivalShowcaseRouter } = require("./src/routes/festivalShowcase.routes");
-const { ekadashiCampaignRouter } = require("./src/routes/ekadashiCampaign.routes");
-const { paymentRouter } = require("./src/routes/payment.routes");
-const { importantDateRouter } = require("./src/routes/importantDate.routes.js");
-const { blogRouter } = require("./src/routes/blog.routes");
-const { contactMessageRouter } = require("./src/routes/contactMessage.routes");
-const { dashboardRouter } = require("./src/routes/dashboard.routes");
-const { devoteeRouter } = require("./src/routes/devotee.routes");
-const { siteContentRouter } = require("./src/routes/siteContent.routes");
-const { heroBannerRouter } = require("./src/routes/heroBanner.routes");
-const { sevaStatsRouter } = require("./src/routes/sevaStats.routes");
-const { campaignerRouter } = require("./src/routes/campaigner.routes");
-const { mediaRouter } = require("./src/routes/media.routes");
-const { volunteerRouter } = require("./src/routes/volunteer.routes");
-const { whatsappWebhookRouter } = require("./src/routes/whatsappWebhook.routes");
-const { shopRouter } = require("./src/routes/shop.routes");
-const { shopAdminRouter } = require("./src/routes/shopAdmin.routes");
-const { internalRouter } = require("./src/routes/internal.routes");
+import { userRouter } from "./src/routes/user.routes.js";
+import { eventRouter } from "./src/routes/event.routes.js";
+import { galleryRouter } from "./src/routes/gallery.routes.js";
+import { darshanRouter } from "./src/routes/darshan.routes.js";
+import { donationRouter } from "./src/routes/donation.routes.js";
+import { preacherRouter } from "./src/routes/preacher.routes.js";
+import { donorAuthRouter } from "./src/routes/donorAuth.routes.js";
+import { donorRouter } from "./src/routes/donor.routes.js";
+import { donationPageRouter } from "./src/routes/donationPage.routes.js";
+import { donationAdminRouter } from "./src/routes/donationAdmin.routes.js";
+import { festivalDonationRouter } from "./src/routes/festivalDonation.routes.js";
+import { festivalShowcaseRouter } from "./src/routes/festivalShowcase.routes.js";
+import { ekadashiCampaignRouter } from "./src/routes/ekadashiCampaign.routes.js";
+import { paymentRouter } from "./src/routes/payment.routes.js";
+import { importantDateRouter } from "./src/routes/importantDate.routes.js";
+import { blogRouter } from "./src/routes/blog.routes.js";
+import { contactMessageRouter } from "./src/routes/contactMessage.routes.js";
+import { dashboardRouter } from "./src/routes/dashboard.routes.js";
+import { devoteeRouter } from "./src/routes/devotee.routes.js";
+import { siteContentRouter } from "./src/routes/siteContent.routes.js";
+import { heroBannerRouter } from "./src/routes/heroBanner.routes.js";
+import { sevaStatsRouter } from "./src/routes/sevaStats.routes.js";
+import { campaignerRouter } from "./src/routes/campaigner.routes.js";
+import { mediaRouter } from "./src/routes/media.routes.js";
+import { volunteerRouter } from "./src/routes/volunteer.routes.js";
+import { whatsappWebhookRouter } from "./src/routes/whatsappWebhook.routes.js";
+import { shopRouter } from "./src/routes/shop.routes.js";
+import { shopAdminRouter } from "./src/routes/shopAdmin.routes.js";
+import { templeDevoteeRouter } from "./src/routes/templeDevotee.routes.js";
+import { cacheStatus } from "./src/cache/memoryCache.js";
+import { internalRouter } from "./src/routes/internal.routes.js";
+import { runPendingReminders } from "./src/services/pendingReminder.service.js";
+import { resendRecentFailedReceipts } from "./src/services/paymentCompletion.service.js";
 const app = express();
 app.set('trust proxy', 1);
 
@@ -130,7 +134,7 @@ app.use("/devotees", devoteeRouter);
 app.use("/site-content", siteContentRouter);
 app.use("/hero-banners", heroBannerRouter);
 app.use("/campaigners", campaignerRouter);
-app.use("/temple-devotees", require("./src/routes/templeDevotee.routes").templeDevoteeRouter);
+app.use("/temple-devotees", templeDevoteeRouter);
 app.use("/media", mediaRouter);
 app.use("/seva-stats", sevaStatsRouter);
 
@@ -158,7 +162,7 @@ app.get("/api/internal/send-pending-reminders", async (req, res) => {
   }
 
   try {
-    const { runPendingReminders } = require("./src/services/pendingReminder.service");
+
     const result = await runPendingReminders();
     return res.json({ success: true, ...result });
   } catch (err) {
@@ -199,7 +203,7 @@ const handleResendReceipts = async (req, res) => {
   const dryRun = String(req.query.send || "") !== "true";
 
   try {
-    const { resendRecentFailedReceipts } = require("./src/services/paymentCompletion.service");
+
     const result = await resendRecentFailedReceipts({ hours, limit, dryRun, delayMs });
     return res.json({
       success: true,
@@ -238,7 +242,7 @@ app.get('/health', (req, res) => {
   // they never affect the status code.
   let cache;
   try {
-    cache = require('./src/cache/memoryCache').cacheStatus();
+    cache = cacheStatus();
   } catch (err) {
     cache = { error: err && err.message ? err.message : String(err) };
   }
@@ -287,4 +291,4 @@ app.use((err, req, res, next) => {
   res.status(status).json({ message: (err && err.message) || 'Server error' });
 });
 
-module.exports = { app };
+export { app };

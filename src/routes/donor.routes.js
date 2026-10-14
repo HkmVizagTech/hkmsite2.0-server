@@ -1,6 +1,6 @@
-const express = require("express");
-const { donorController } = require("../controllers/donor.controller");
-const { donorAuthMiddleware } = require("../middlewares/auth.middleware");
+import express from "express";
+import { donorController } from "../controllers/donor.controller.js";
+import { donorAuthMiddleware } from "../middlewares/auth.middleware.js";
 
 const donorRouter = express.Router();
 
@@ -15,4 +15,4 @@ donorRouter.get("/receipt/:donationId", donorAuthMiddleware, donorController.dow
 donorRouter.post("/issues", donorAuthMiddleware, donorController.raiseIssue);
 donorRouter.get("/issues", donorAuthMiddleware, donorController.myIssues);
 
-module.exports = { donorRouter };
+export { donorRouter };

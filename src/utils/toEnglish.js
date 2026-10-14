@@ -268,4 +268,4 @@ function toEnglish(value) {
     .trim();
 }
 
-module.exports = { toEnglish, transliterate, hasIndic };
+export { toEnglish, transliterate, hasIndic };

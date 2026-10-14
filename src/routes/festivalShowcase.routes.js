@@ -1,6 +1,6 @@
-const express = require("express");
-const { festivalShowcaseController } = require("../controllers/festivalShowcase.controller");
-const { authMiddleware, adminMiddleware } = require("../middlewares/auth.middleware");
+import express from "express";
+import { festivalShowcaseController } from "../controllers/festivalShowcase.controller.js";
+import { authMiddleware, adminMiddleware } from "../middlewares/auth.middleware.js";
 
 const festivalShowcaseRouter = express.Router();
 
@@ -12,4 +12,4 @@ festivalShowcaseRouter.post("/", authMiddleware, adminMiddleware, festivalShowca
 festivalShowcaseRouter.put("/:id", authMiddleware, adminMiddleware, festivalShowcaseController.update);
 festivalShowcaseRouter.delete("/:id", authMiddleware, adminMiddleware, festivalShowcaseController.delete);
 
-module.exports = { festivalShowcaseRouter };
+export { festivalShowcaseRouter };

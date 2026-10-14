@@ -1,4 +1,4 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
 // Shop categories are their own small collection rather than an enum on the
 // product, so a shop admin can add "Tulsi Mala" or "Deity Dresses" without a
@@ -17,4 +17,4 @@ const shopCategorySchema = new mongoose.Schema(
 );
 
 const shopCategoryModel = mongoose.model("shopCategory", shopCategorySchema);
-module.exports = { shopCategoryModel };
+export { shopCategoryModel };

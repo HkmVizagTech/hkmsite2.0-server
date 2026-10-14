@@ -1,8 +1,8 @@
 
-const { userModel } = require("../models/user.model");
-const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");
-const { getJwtSecret } = require("../utils/utils");
+import { userModel } from "../models/user.model.js";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+import { getJwtSecret } from "../utils/utils.js";
 
 const userController = {
     getUser: async (req, res) => {
@@ -235,4 +235,4 @@ const userController = {
 };
 
 
-module.exports = {userController};
+export { userController };
