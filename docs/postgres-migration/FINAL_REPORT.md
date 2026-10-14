@@ -23,6 +23,15 @@ Method: old build (Mongo, branch main, worktree) and new build (Postgres) run si
 4. A prasadam-status fix made at the very end (old code unset fields; new code wrote null) is verified only by the donations suite (it removed 9 failures).
 5. Success paths needing real outside services were exercised only through mocks: DCC duplicate-donor handling and courier payload shapes are guesses.
 
+6. Payment-flow re-run on the final code was interrupted (laptop session ended) after 3 scenarios: `one-time verify path` PASS, `razorpay error on createOrder` PASS, **`createOrder validation + wrong types` FAIL**: the new donation row has `prasadamAddress: {}` where the old row has no such field (an insert with an empty/null address creates an empty nested object; fix in `src/db/table.js` insert/`toColumns` null-marker handling or in `paymentCast.js`; then re-run the whole `writes-payments-flows.mjs`).
+
+## Restarting the local test infrastructure (it was stopped)
+```
+/Library/PostgreSQL/18/bin/pg_ctl -D /Users/giridhar/Developer/hkm-vizag/.localdb -o "-p 5433 -k /tmp" start
+mongod --dbpath /Users/giridhar/Developer/hkm-vizag/.localdb/mongo-data --port 27018 --bind_ip 127.0.0.1 --fork --logpath /Users/giridhar/Developer/hkm-vizag/.localdb/mongo.log
+cd hkmsite2.0-server && MOCKS=1 scripts/parity/env.sh up eq-payments 9510   # then append the RAZORPAY_TOUCHSTONE_* lines to the env files, restart, run writes-payments-flows.mjs
+```
+
 ## Intentional differences
 Admin-only `POST /donations` and whitelisted `PUT /donations/:id`; admin update whitelists (event, gallery, importantDate, volunteer, festival donation/showcase); blog HTML sanitization on save; payment verify binds signed order to donation; constant-time secret/signature checks; `crypto.randomInt` OTP; rate limits on `/payments/subscription` and `/payments/verify`; no OTP hash in preacher donor view; duplicate/overlapping `subscription.charged` and reminder passes are race-safe (old code created duplicates); client `/api/revalidate` needs staff login.
 
