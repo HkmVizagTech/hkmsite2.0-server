@@ -3,10 +3,11 @@
 //   SRC_MONGO_URI=... DATABASE_URL=... node scripts/parity/writes-donations.mjs http://localhost:9400 http://localhost:9401
 // Run `env.sh reset donations` before each run.
 import crypto from "node:crypto";
-import { MongoClient } from "mongodb";
+import { MongoClient, ObjectId } from "mongodb";
+import fs from "node:fs";
 import { discover, sign, call, normalize, diff, orderOnly } from "./lib.mjs";
 
-import { setState, readLog, compareLogs } from "./mocks/ctl.mjs";
+import { setState, payOrder, readLog, compareLogs } from "./mocks/ctl.mjs";
 
 const [A, B] = [process.argv[2], process.argv[3]];
 const MOCK_ENV = process.argv[4] || process.env.PARITY_ENV; // env name when the servers run with MOCKS=1
@@ -576,6 +577,133 @@ await step(
   req("PUT", "/donations-admin/transactions/000000000000000000000000/receipt-number", { receiptNumber: "X" })
 );
 
+// ---------- main admin tools with the mock services ----------
+await step("audit-pending read-only", req("GET", "/donations/audit-pending?limit=5"));
+await step("audit-pending fix", req("GET", "/donations/audit-pending?limit=5&fix=true&statuses=pending,failed"));
+await step(
+  "receipt-number: set on D3",
+  req("PUT", (s) => `/donations/${s.ids.d3}/receipt-number`, { receiptNumber: " HKMI|PARITY|9 " })
+);
+await step(
+  "receipt-number: unknown",
+  req("PUT", "/donations/000000000000000000000000/receipt-number", { receiptNumber: "X" })
+);
+await step(
+  "resend-recent-whatsapp dry run",
+  req("POST", "/donations/resend-recent-whatsapp", { hours: "all", limit: 5 })
+);
+await step(
+  "resend-recent-whatsapp send",
+  req("POST", "/donations/resend-recent-whatsapp", { hours: 24, limit: 3, send: true })
+);
+await step("dcc-push-all", req("POST", "/donations/dcc-push-all"));
+await step("dcc-status after", req("GET", "/donations/dcc-status?includeOld=true"));
+await step("needs-manual-receipt after", req("GET", "/donations/needs-manual-receipt"));
+await step("needs-whatsapp after", req("GET", "/donations/needs-whatsapp"));
+
+// ---------- /donations page admin (sourcePage donations) ----------
+async function patchBoth(key, sourcePage) {
+  for (const side of [sides.A, sides.B]) side.pid = side.ids[key];
+  await mdb.collection("donations").updateOne({ _id: new ObjectId(sides.A.ids[key]) }, { $set: { sourcePage } });
+  await query("UPDATE donations SET source_page=$1 WHERE id=$2", [sourcePage, sides.B.ids[key]]);
+}
+await create(
+  "create D8 (donations page, pending)",
+  {
+    donorName: `${MARK} Eight`,
+    amount: 800,
+    donorMobile: "9000000021",
+    donorEmail: "p8@example.com",
+    razorpayOrderId: "order_parity8",
+  },
+  "d8"
+);
+await create(
+  "create D9 (donations page, unpaid)",
+  { donorName: `${MARK} Nine`, amount: 900, donorMobile: "9000000022", razorpayOrderId: "order_parity9" },
+  "d9"
+);
+await create(
+  "create D10 (donations page, paid at razorpay)",
+  { donorName: `${MARK} Ten`, amount: 1000, donorMobile: "9000000023", razorpayOrderId: "order_parity10" },
+  "d10"
+);
+for (const k of ["d8", "d9", "d10"]) await patchBoth(k, k === "d9" ? "donations/janmashtami2" : "donations");
+if (MOCK_ENV) {
+  const order = (id, amount) => ({
+    id,
+    entity: "order",
+    amount,
+    amount_paid: 0,
+    amount_due: amount,
+    currency: "INR",
+    status: "created",
+    attempts: 0,
+    notes: [],
+  });
+  setState(MOCK_ENV, "both", {
+    razorpay: {
+      orders: { order_parity8: order("order_parity8", 80000), order_parity10: order("order_parity10", 100000) },
+    },
+  });
+  payOrder(MOCK_ENV, "both", "order_parity8", { id: "pay_par8", amount: 80000 });
+  payOrder(MOCK_ENV, "both", "order_parity10", { id: "pay_par10", amount: 100000 });
+}
+await step("admin transactions after creates", req("GET", "/donations-admin/transactions?search=ParityTest&limit=50"));
+await step(
+  "admin transaction by id",
+  req("GET", (s) => `/donations-admin/transactions/${s.ids.d8}`)
+);
+await step(
+  "admin dcc push one: not completed",
+  req("POST", (s) => `/donations-admin/transactions/${s.ids.d8}/dcc-push`)
+);
+await step("admin diagnose-order", req("GET", "/donations-admin/diagnose-order?orderId=order_parity8&account=default"));
+await step(
+  "admin manual-complete: ok",
+  req("POST", "/donations-admin/manual-complete", (s) => ({ donationId: s.ids.d8, razorpayPaymentId: "pay_par8" }))
+);
+await step(
+  "admin manual-complete: again",
+  req("POST", "/donations-admin/manual-complete", (s) => ({ donationId: s.ids.d8, razorpayPaymentId: "pay_par8" }))
+);
+await step(
+  "admin dcc push one",
+  req("POST", (s) => `/donations-admin/transactions/${s.ids.d8}/dcc-push`)
+);
+await step(
+  "admin receipt-number: set",
+  req("PUT", (s) => `/donations-admin/transactions/${s.ids.d8}/receipt-number`, { receiptNumber: "HKMI|PARITY|8" })
+);
+await step(
+  "admin receipt-number: empty",
+  req("PUT", (s) => `/donations-admin/transactions/${s.ids.d8}/receipt-number`, {})
+);
+await step("admin reconcile-pending", req("POST", "/donations-admin/reconcile-pending?limit=10&resetChecked=true"));
+await step("admin reconcile-pending again", req("POST", "/donations-admin/reconcile-pending?limit=10"));
+await step("admin dcc-push-all", req("POST", "/donations-admin/dcc-push-all"));
+await step("admin dcc-status", req("GET", "/donations-admin/dcc-status"));
+await step("admin dashboard-stats", req("GET", "/donations-admin/dashboard-stats"));
+await step("admin report", req("GET", "/donations-admin/report?startDate=2026-01-01&endDate=2026-12-31"));
+await step("admin utm-stats", req("GET", "/donations-admin/utm-stats"));
+await step("admin export", req("GET", "/donations-admin/export?status=completed,pending"));
+await step("admin upload-image: none", req("POST", "/donations-admin/upload-image", {}));
+await step("admin upload-image", async (side) => {
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "base64"
+  );
+  const form = new FormData();
+  form.append("file", new Blob([png], { type: "image/png" }), "parity.png");
+  const r = await fetch(side.base + "/donations-admin/upload-image", {
+    method: "POST",
+    headers: { authorization: `Bearer ${adminTok}` },
+    body: form,
+  });
+  const data = await r.json().catch(() => null);
+  return { status: r.status, data: data?.secure_url ? { ok: /^https?:\/\//.test(data.secure_url) } : data };
+});
+
 // ---------- delete ----------
 await step(
   "delete D2",
@@ -680,6 +808,55 @@ await step("donor receipt: unknown donation", dreq("GET", "/donor/receipt/000000
 await step("donor my-summary", dreq("GET", "/donor/my-summary"));
 await step("donor my-donations", dreq("GET", "/donor/my-donations"));
 await step("donor stats", dreq("GET", "/donor/stats"));
+// recurring donation + a receipt of their own
+const recId = new ObjectId();
+const recDoc = {
+  donorName: `${MARK} Recurring`,
+  amount: 250,
+  status: "completed",
+  isRecurring: true,
+  subscriptionId: "sub_parity1",
+  paymentAccount: "default",
+  sevaName: "Monthly Seva",
+};
+await mdb
+  .collection("donations")
+  .insertOne({
+    _id: recId,
+    ...recDoc,
+    donorRecordId: new ObjectId(ctx.donorWithDonations),
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    date: new Date(),
+  });
+await pgDonations.insert({ _id: String(recId), ...recDoc, donorRecordId: ctx.donorWithDonations });
+await mdb
+  .collection("donations")
+  .updateOne(
+    { _id: recId },
+    { $set: { createdAt: new Date("2026-09-01T10:00:00Z"), updatedAt: new Date("2026-09-01T10:00:00Z") } }
+  );
+await query("UPDATE donations SET created_at=$1, updated_at=$1 WHERE id=$2", [
+  new Date("2026-09-01T10:00:00Z"),
+  String(recId),
+]);
+if (MOCK_ENV)
+  setState(MOCK_ENV, "both", { razorpay: { subscriptions: { sub_parity1: { status: "active", paid_count: 1 } } } });
+await step("donor subscriptions", dreq("GET", "/donor/subscriptions"));
+await step("donor my-donations with recurring", dreq("GET", "/donor/my-donations"));
+await step("donor cancel subscription", dreq("POST", "/donor/subscriptions/sub_parity1/cancel"));
+await step("donor subscriptions after cancel", dreq("GET", "/donor/subscriptions"));
+const ownReceipt = await mdb
+  .collection("donations")
+  .findOne({
+    donorRecordId: new ObjectId(ctx.donorWithDonations),
+    status: "completed",
+    receiptNumber: { $exists: true },
+  });
+if (ownReceipt) await step("donor receipt: own", dreq("GET", `/donor/receipt/${ownReceipt._id}`));
+await step("donor receipt: no receipt yet", dreq("GET", `/donor/receipt/${recId}`));
+await step("donor my-summary after", dreq("GET", "/donor/my-summary"));
+await step("donor lookup retired", au("/donor-auth/lookup", { mobile: donorMobile }));
 await step("donor no token", (side) => call(side.base, { path: "/donor/me" }));
 
 // ---------- preacher ----------
@@ -806,6 +983,15 @@ await step(
   ir("POST", (s) => `/api/internal/drm/donations/${s.ids.d1}/resend-receipt`)
 );
 await step("internal abandoned", ir("GET", "/api/internal/drm/abandoned?minMinutes=3&limit=500"));
+const resendTarget = ownReceipt || ctx.donation;
+await step("internal resend-receipt: ok", ir("POST", `/api/internal/drm/donations/${resendTarget._id}/resend-receipt`));
+await step(
+  "internal resend-receipt: cooldown",
+  ir("POST", `/api/internal/drm/donations/${resendTarget._id}/resend-receipt`)
+);
+await step("internal receipt.pdf", ir("GET", `/api/internal/drm/donations/${resendTarget._id}/receipt.pdf`));
+await step("internal by-mobile (new donors)", ir("GET", "/api/internal/drm/donors/by-mobile/9000000031"));
+await step("internal donors list", ir("GET", "/api/internal/drm/donors?limit=5&page=1"));
 
 // ---------- read-backs of derived lists ----------
 await step("list: ParityTest search", req("GET", `/donations?q=${MARK}&limit=100`));

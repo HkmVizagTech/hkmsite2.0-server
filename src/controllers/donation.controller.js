@@ -463,7 +463,11 @@ const donationController = {
 
       let dccEnrolledById;
       if (devoteeId) {
-        const devotee = isId(devoteeId) ? await templeDevotees.findById(devoteeId, { lean: true }) : null;
+        // mongoose.isValidObjectId accepted numbers too, and the findById then failed the cast.
+        const devotee =
+          isId(devoteeId) || typeof devoteeId === "number"
+            ? await templeDevotees.findById(castId(devoteeId, "templeDevotee"), { lean: true })
+            : null;
         if (devotee?.dccEnrolledById != null) dccEnrolledById = devotee.dccEnrolledById;
       }
       if (

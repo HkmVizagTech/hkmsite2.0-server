@@ -167,8 +167,6 @@ export function castDonationForCreate(input, { model = "donation" } = {}) {
   }
 
   const doc = {};
-  // A non-object address was dropped by Mongoose (no default country either).
-  if (input.prasadamAddress !== undefined && !addrObj) doc.prasadamAddress = { country: null };
   for (const [path, v] of Object.entries(out)) {
     if (path.startsWith("prasadamAddress.")) (doc.prasadamAddress ||= {})[path.slice(16)] = v;
     else doc[path] = v;
@@ -187,16 +185,17 @@ export function castDonationForUpdate(input) {
   }
   if (input.prasadamAddress !== undefined) {
     const a = input.prasadamAddress;
+    const supplied = {};
     if (a && typeof a === "object" && !Array.isArray(a)) {
-      // Mongoose replaces the whole sub-object: keys that were not supplied are cleared.
-      const addr = Object.fromEntries(ADDRESS_KEYS.map((k) => [k, null]));
       for (const k of ADDRESS_KEYS) {
         if (a[k] === undefined) continue;
         const v = castString(a[k], `prasadamAddress.${k}`);
-        if (v !== undefined) addr[k] = v;
+        if (v !== undefined) supplied[k] = v;
       }
-      doc.prasadamAddress = addr;
-    } else doc.prasadamAddress = Object.fromEntries(ADDRESS_KEYS.map((k) => [k, null]));
+    }
+    // Mongoose replaces the whole sub-object: keys that were not supplied disappear.
+    doc.prasadamAddress = supplied;
+    doc.$unset = ADDRESS_KEYS.filter((k) => !(k in supplied)).map((k) => `prasadamAddress.${k}`);
   }
   return doc;
 }
@@ -219,7 +218,7 @@ const FILTER_TYPES = {
 const typeOfPath = (path) => FILTER_TYPES[path] || "string";
 
 function castFilterValue(type, v, path, model) {
-  if (v instanceof RegExp || v instanceof Date) return v;
+  if (v instanceof RegExp) return v;
   return CASTERS[type](v, path, { model });
 }
 

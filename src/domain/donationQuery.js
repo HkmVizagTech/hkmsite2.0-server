@@ -37,7 +37,11 @@ export function aggMatch(filter) {
     else if (key === "$raw") out[key] = cond;
     else if (Array.isArray(cond)) never = true;
     else if (cond && typeof cond === "object" && !(cond instanceof RegExp) && !(cond instanceof Date)) {
-      if (Object.keys(cond).some((k) => k.startsWith("$"))) out[key] = cond;
+      if (Object.keys(cond).some((k) => k.startsWith("$")))
+        // the Mongo driver wrote an Invalid Date as the epoch
+        out[key] = Object.fromEntries(
+          Object.entries(cond).map(([op, v]) => [op, v instanceof Date && Number.isNaN(v.getTime()) ? new Date(0) : v])
+        );
       else never = true;
     } else out[key] = cond;
   }
