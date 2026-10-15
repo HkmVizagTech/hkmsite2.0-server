@@ -80,7 +80,9 @@ function defineTable({
       const fieldPath = nestOfCol[col]
         ? nestOfCol[col].join(".")
         : Object.keys(renames).find((k) => renames[k] === col) || camel(col);
-      const fallback = !lean && val === null && !nullSet.has(fieldPath) ? columnDefaults.get(table)?.[col] : undefined;
+      const rootIsNull = nestOfCol[col] ? nullSet.has(nestOfCol[col][0]) : false;
+      const fallback =
+        !lean && val === null && !nullSet.has(fieldPath) && !rootIsNull ? columnDefaults.get(table)?.[col] : undefined;
       const value = fallback !== undefined ? fallback : val;
       if (nestOfCol[col]) {
         const [field, key] = nestOfCol[col];
