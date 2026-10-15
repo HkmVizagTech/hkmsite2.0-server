@@ -23,6 +23,10 @@ donationAdminRouter.get("/export", authMiddleware, donationsAdminMiddleware, don
 donationAdminRouter.get("/diagnose-order", authMiddleware, donationsAdminMiddleware, donationAdminController.diagnoseOrder);
 donationAdminRouter.post("/manual-complete", authMiddleware, donationsAdminMiddleware, donationAdminController.manualComplete);
 donationAdminRouter.post("/reconcile-pending", authMiddleware, donationsAdminMiddleware, donationAdminController.reconcilePending);
+// Maha Prasadam dispatch tracking — per donation, this page's donations only.
+donationAdminRouter.get("/prasadam-requests", authMiddleware, donationsAdminMiddleware, donationAdminController.listPrasadamRequests);
+donationAdminRouter.get("/prasadam-export", authMiddleware, donationsAdminMiddleware, donationAdminController.exportPrasadamCsv);
+donationAdminRouter.put("/transactions/:id/prasadam-status", authMiddleware, donationsAdminMiddleware, donationAdminController.updatePrasadamStatus);
 donationAdminRouter.post("/upload-image", authMiddleware, donationsAdminMiddleware, upload.single("file"), donationAdminController.uploadImage);
 
 module.exports = { donationAdminRouter };

@@ -13,6 +13,7 @@ const { uploadToR2 } = require("../utils/r2");
 const { createRazorpayInstance } = require("./payment.controller");
 const { completeDonation } = require("../services/paymentCompletion.service");
 const { IST, istDayStart, istDayEnd } = require("../config/timezone");
+const prasadamService = require("../services/prasadam.service");
 
 // Every query here is scoped to the /donations page's own donations only —
 // never mixes in seva-page or campaign donations from the rest of the site.
@@ -271,6 +272,11 @@ const donationAdminController = {
           certificate: txn.certificate,
           wantPrasadam: txn.wantPrasadam,
           prasadamAddress: txn.prasadamAddress,
+          prasadamStatus: txn.prasadamStatus,
+          prasadamCourier: txn.prasadamCourier,
+          prasadamTrackingNumber: txn.prasadamTrackingNumber,
+          prasadamDispatchedAt: txn.prasadamDispatchedAt,
+          prasadamDeliveredAt: txn.prasadamDeliveredAt,
           receiptNumber: txn.receiptNumber,
           dccSyncStatus: txn.dccSyncStatus,
           razorpayPaymentId: txn.razorpayPaymentId,
@@ -664,6 +670,76 @@ const donationAdminController = {
     } catch (error) {
       console.error("donationAdmin.reconcilePending error:", error);
       res.status(500).json({ success: false, message: error.message || "Reconcile failed" });
+    }
+  },
+
+  // ─── Maha Prasadam dispatch tracking (this page's donations only) ─────
+  // Every record is tracked per DONATION, never per donor/mobile — see
+  // prasadam.service.js. The scope is always DONATIONS_PAGE_FILTER, so this
+  // panel can neither list nor modify a main-site donation.
+
+  // GET /donations-admin/prasadam-requests?status=&q=&seva=&sourcePage=&from=&to=&page=&limit=
+  listPrasadamRequests: async (req, res) => {
+    try {
+      const out = await prasadamService.listRequests({
+        scope: DONATIONS_PAGE_FILTER,
+        dateMatch: buildDateRangeMatch(req.query.from, req.query.to),
+        query: req.query,
+      });
+      res.status(200).json(out);
+    } catch (error) {
+      console.error("donationAdmin.listPrasadamRequests error:", error);
+      res.status(500).json({ success: false, message: "Failed to fetch prasadam requests" });
+    }
+  },
+
+  // PUT /donations-admin/transactions/:id/prasadam-status
+  updatePrasadamStatus: async (req, res) => {
+    try {
+      const { id } = req.params;
+      if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
+        return res.status(400).json({ success: false, message: "Invalid transaction ID" });
+      }
+      const status = req.body && req.body.prasadamStatus;
+      if (!prasadamService.PRASADAM_STATUSES.includes(status)) {
+        return res.status(400).json({ success: false, message: "prasadamStatus must be one of: pending, dispatched, delivered, cancelled" });
+      }
+
+      // Scope check: a donation outside the /donations family is "not found"
+      // here, exactly like the other write endpoints in this controller.
+      const donation = await donationModel.findOne({ _id: id, ...DONATIONS_PAGE_FILTER });
+      if (!donation) return res.status(404).json({ success: false, message: "Transaction not found" });
+      if (!donation.wantPrasadam) {
+        return res.status(400).json({ success: false, message: "This donation has no Maha Prasadam request to track." });
+      }
+      if (donation.status !== "completed") {
+        return res.status(400).json({ success: false, message: "Prasadam is only sent for completed donations." });
+      }
+
+      prasadamService.applyStatusUpdate(donation, req.body);
+      await donation.save();
+      res.status(200).json({ success: true, message: `Prasadam request marked ${status}`, donation });
+    } catch (error) {
+      console.error("donationAdmin.updatePrasadamStatus error:", error);
+      res.status(500).json({ success: false, message: "Failed to update prasadam status" });
+    }
+  },
+
+  // GET /donations-admin/prasadam-export — CSV for the courier run
+  exportPrasadamCsv: async (req, res) => {
+    try {
+      const csv = await prasadamService.buildCsv({
+        scope: DONATIONS_PAGE_FILTER,
+        dateMatch: buildDateRangeMatch(req.query.from, req.query.to),
+        query: req.query,
+      });
+      const stamp = new Date().toLocaleDateString("en-CA", { timeZone: IST });
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="donations-prasadam-dispatch-${stamp}.csv"`);
+      res.status(200).send(csv);
+    } catch (error) {
+      console.error("donationAdmin.exportPrasadamCsv error:", error);
+      res.status(500).json({ success: false, message: "Failed to export prasadam CSV" });
     }
   },
 };
