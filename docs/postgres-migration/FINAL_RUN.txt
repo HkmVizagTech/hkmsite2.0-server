@@ -1,10 +1,12 @@
-final verification run started 18:50
-env up: SRC_MONGO_URI=mongodb://127.0.0.1:27018/m_fin DATABASE_URL=p
+final verification run 2 started 10-15 12:08
+routes: 216
 1 shapes (all documents, strict nulls): All documents round-trip identically
-2 reads: parity reads: 303/311 identical | order-only differences (same rows, different order): 17
+2 reads: parity reads: 462/470 identical | order-only differences (same rows, different order): 22
 3 writes-shop exit=0 | 147 steps compared, 0 difference group(s) 
 3 writes-content exit=0 | write steps: 238/238 identical 
-3 writes-donations exit=1 | writes parity: 248 steps identical, 18 differing, 3 expected (intentional) differences 
-3 writes-payments exit=1 | 
-4 matrix: matrix: 2057/2090 identical (213 routes x 10 identities)
-FINISHED 18:52
+3 writes-donations exit=0 | writes parity: 349 steps identical, 0 differing, 3 expected (intentional) differences 
+4 payment flows exit=1 | 19 pass, 1 fail | 1 scenario(s) differ
+5 matrix: matrix: 2087/2120 identical (216 routes x 10 identities) | differing routes: 12
+6 headers: response headers identical for all sampled requests (4 origins x 2 encodings x 18 paths)
+7 generic fuzz (all routes, quick): 
+FINISHED 12:24

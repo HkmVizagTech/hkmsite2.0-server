@@ -77,7 +77,12 @@ export async function call(base, { method = "GET", path, body, token, headers = 
     h["content-type"] = "application/json";
     payload = typeof body === "string" ? body : JSON.stringify(body);
   }
-  const res = await fetch(base + path, { method, headers: h, body: payload, redirect: "manual" });
+  let res;
+  try {
+    res = await fetch(base + path, { method, headers: h, body: payload, redirect: "manual" });
+  } catch (e) {
+    return { status: -1, data: `NETWORK ${e.cause?.code ?? e.message}` };
+  }
   const type = res.headers.get("content-type") || "";
   let data;
   if (type.includes("json")) data = await res.json().catch(() => null);

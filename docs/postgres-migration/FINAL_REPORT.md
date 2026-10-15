@@ -1,45 +1,42 @@
-# Final verification report (2026-10-14, ~18:55)
+# Final verification report (2026-10-15)
 
-All local; branches `postgres-migration` (server) and `chore/hardening` (client); nothing pushed; `main` untouched; production untouched.
-Method: old build (Mongo, branch main, worktree) and new build (Postgres) run side by side on copies of the same production data; identical requests sent to both; status, body and database state compared with `null` and "missing" treated as different.
+Local only. Branches: server `postgres-migration` (contains upstream `origin/main` 6fc96ca incl. the Prasadam dispatch module), client `chore/hardening` (contains upstream 1a7b66a). **Nothing pushed, `main` untouched in both repos.** Re-fetch `origin` and port anything new right before the production migration (the team keeps pushing).
 
-## Result of the last full run (code at commit after b04688b)
+Method: old build (upstream `origin/main`, MongoDB) and new build (Postgres) run side by side on copies of the same production data, with Razorpay/DCC/WhatsApp/Meta/DRM/R2/courier replaced by recording fakes; identical requests are sent to both; status, body, database state and the exact outbound requests to the outside services are compared, with `null` and "missing" treated as different.
+
+## Results (final code)
 | Check | Result |
 |---|---|
-| Every stored document, all tables, strict nulls | identical (17k+ documents incl. variants/order items) |
-| Reads (304 endpoint calls) | 303/311 identical in the last run; the rest are Mongo tie-order (payment-failures, devotees) and 1 ms blog timestamps |
-| Shop writes | 147 steps, 0 differences (plus 5,167-step edge matrix, 35k fuzz variants, earlier) |
-| Content writes | 238/238 identical, 18/18 tables identical (plus ~210k fuzz requests, earlier) |
-| Donations writes | 257 steps identical, 3 intentional, **9 differing: see open items** |
-| Payments | helper ran 16/20 full-flow scenarios identical incl. exact outbound requests (earlier); not re-run in this last pass |
-| Role/route matrix 213 routes x 10 identities | 2057/2090; all 12 differing routes are timestamp noise, tie order, or the intentional `POST /donations` change |
+| Every stored document, all tables, strict nulls | identical (all documents incl. variants and order items) |
+| Reads (470 calls) | 462 identical; the 8 left are Mongo tie order (payment-failures, devotees) and 1 ms blog `updatedAt` |
+| Shop writes | 147 steps, 0 differences (+ 5,167-step edge matrix, 35k fuzz variants) |
+| Content/admin writes | 238/238 identical, 18/18 tables identical (+ ~210k fuzz requests) |
+| Donations writes (incl. new Prasadam routes) | 349 steps identical, 0 differing, 3 intentional |
+| Payment flows with mocked outside services | 20/20 scenarios identical incl. exact outbound requests to Razorpay, DCC, Flaxxa/Gupshup, Meta, DRM, R2, couriers (one scenario was flaky from test row timestamps; fixed, 5/5) |
+| Role matrix, 216 routes x 10 identities | 2087/2120; the 12 differing routes are clock noise, tie order, or the intentional `POST /donations` change |
 | Response headers (CORS, cache, security) | identical, 144 combinations |
-| Client production build | passes; browser flows (Chromium + Brave) identical |
+| Client | production build passes (105 routes); 66 pages load clean on both stacks; 14 browser flows (contact form, admin login/donations/Prasadam tabs/blog editor/dashboard/shop, donor session, add to cart...) identical on Mongo stack, Postgres stack in Chromium and in Brave |
 
-## Open items (not yet closed)
-1. Donations write suite, 9 steps (after `dcc-status`, `needs-manual-receipt`, `needs-whatsapp` counts differ by 1; and shape differences on a donation created directly by the test fixture: `type`, `certificate`, `prasadamAddress.country`, `utm`). Probably test-fixture rows (created raw in Mongo and by SQL in Postgres) rather than product behavior, but not proven. Next step: run `scripts/parity/writes-donations.mjs` on a fresh env and compare the fixture rows' defaults and the three admin counts.
-2. Re-run the payment flow proof on the final code: `MOCKS=1 scripts/parity/env.sh reset eq-payments` then `node scripts/parity/writes-payments-flows.mjs` (the older `writes-payments.mjs` is stale: it compares mock counters and now flags strict nulls).
-3. Donations helper's last edits (Invalid Date handling in aggregates, devoteeId cast) were never re-run; non-quick `/donations` fuzz never completed.
-4. A prasadam-status fix made at the very end (old code unset fields; new code wrote null) is verified only by the donations suite (it removed 9 failures).
-5. Success paths needing real outside services were exercised only through mocks: DCC duplicate-donor handling and courier payload shapes are guesses.
+## Decisions by the owner (2026-10-15)
+- Protections stay on (they do not change behavior for normal use). The extra rate limits on `/payments/subscription` and `/payments/verify` were removed (not in the old code).
+- Everything else must behave exactly like the old APIs.
 
-6. RESOLVED 19:00 (fixed `$absent` nest handling; scenario passes). Earlier note: payment-flow re-run on the final code was interrupted (laptop session ended) after 3 scenarios: `one-time verify path` PASS, `razorpay error on createOrder` PASS, **`createOrder validation + wrong types` FAIL**: the new donation row has `prasadamAddress: {}` where the old row has no such field (an insert with an empty/null address creates an empty nested object; fix in `src/db/table.js` insert/`toColumns` null-marker handling or in `paymentCast.js`; then re-run the whole `writes-payments-flows.mjs`).
+## Intentional differences that remain (only for abusive or unusual input; normal flows are identical)
+1. `POST /donations` requires an admin login (was open to anyone); no client calls it.
+2. `PUT /donations/:id` and admin updates for events, galleries, important dates, volunteers, festival donations/showcases accept only the fields the admin forms send.
+3. Blog `content` is sanitized on create/update (scripts, event handlers, `javascript:` URLs, non-YouTube/Vimeo iframes removed).
+4. `/payments/verify`: the signed order must belong to the donation being verified (old code let a cheap payment complete a different, expensive donation); verify fields sent as arrays/objects get a 400 instead of being run as database operator queries.
+5. Signature/secret comparisons are constant-time; OTPs use a secure random generator; preacher donor view no longer shows OTP hash fields; duplicate or overlapping webhook/reminder runs are race-safe (old code created duplicate donations, DCC pushes and WhatsApp sends); client `/api/revalidate` needs a staff login.
 
-## Restarting the local test infrastructure (it was stopped)
-```
-/Library/PostgreSQL/18/bin/pg_ctl -D /Users/giridhar/Developer/hkm-vizag/.localdb -o "-p 5433 -k /tmp" start
-mongod --dbpath /Users/giridhar/Developer/hkm-vizag/.localdb/mongo-data --port 27018 --bind_ip 127.0.0.1 --fork --logpath /Users/giridhar/Developer/hkm-vizag/.localdb/mongo.log
-cd hkmsite2.0-server && MOCKS=1 scripts/parity/env.sh up eq-payments 9510   # then append the RAZORPAY_TOUCHSTONE_* lines to the env files, restart, run writes-payments-flows.mjs
-```
+## Unavoidable differences
+Mongo `$group`/tie order is arbitrary (varies even between two Mongo runs); NUL characters in strings; dates before 1900 by clock offset; a few exotic PCRE regex constructs.
 
-## Intentional differences
-Admin-only `POST /donations` and whitelisted `PUT /donations/:id`; admin update whitelists (event, gallery, importantDate, volunteer, festival donation/showcase); blog HTML sanitization on save; payment verify binds signed order to donation; constant-time secret/signature checks; `crypto.randomInt` OTP; rate limits on `/payments/subscription` and `/payments/verify`; no OTP hash in preacher donor view; duplicate/overlapping `subscription.charged` and reminder passes are race-safe (old code created duplicates); client `/api/revalidate` needs staff login.
+## Not verifiable locally
+Real Razorpay/DCC/WhatsApp/R2/courier behavior: tested only against fakes built from the code and from real stored DCC responses (DCC duplicate-donor handling and courier payload shapes are guesses). The first real donation after the production cutover is the final check.
 
-## Unavoidable
-Mongo `$group`/tie order is arbitrary (varies on Mongo itself); NUL characters in strings; dates before 1900; a few exotic PCRE regex constructs.
-
-## Production steps (unchanged)
-Staging rehearsal on Railway Postgres, then `CUTOVER.md`. Two receipt numbers are duplicated in the data (`HKMI|2026|D/VSP|10374`, `...|10267`): resolve before adding a unique index. Delete `/Users/giridhar/Developer/hkm-vizag/.localdb` when finished (real donor data).
-
-## Update 19:02
-Payment-flow re-run on final code: 11 of 20 scenarios completed and all 11 PASS (one-time on all four Razorpay accounts, verify path, createOrder wrong types, Razorpay error, failed-payment webhooks, subscriptions x2, DCC down + sweep + resend + reconcile). The remaining 9 scenarios were still running when the session stopped: re-run `node scripts/parity/writes-payments-flows.mjs eq-payments 9510` to finish them.
+## Next (needs the owner)
+1. Create the Postgres service on Railway (same project and region as the API); connection string only into the environment.
+2. Staging rehearsal: fresh Atlas dump -> `db:init` -> `db:migrate-from-mongo` -> `db:verify` -> run the same parity suites against staging.
+3. Production cutover per `CUTOVER.md`, then end-to-end test on production data, then merge to `main`.
+4. Resolve two duplicated receipt numbers (`HKMI|2026|D/VSP|10374`, `...|10267`) before adding a unique index.
+5. Delete `/Users/giridhar/Developer/hkm-vizag/.localdb` when finished (real donor data).

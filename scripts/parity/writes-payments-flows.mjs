@@ -1032,8 +1032,8 @@ await scenario(
         },
       },
     });
-    for (const x of [a, b, c, d]) await setCreated(S, x.donationId, ago(90));
-    for (const x of [sub1, sub2]) await setCreated(S, x.donationId, ago(60 * 30));
+    for (const [i, x] of [a, b, c, d].entries()) await setCreated(S, x.donationId, ago(90 + i));
+    for (const [i, x] of [sub1, sub2].entries()) await setCreated(S, x.donationId, ago(60 * 30 + i));
     S.t.push({
       label: "job reconcile",
       result: runJob(S, "jobs/reconcilePendingDonations.js", "runReconciliation").slice(0, 100),
