@@ -1072,6 +1072,33 @@
   ]
  },
  {
+  "method": "GET",
+  "path": "/donations-admin/prasadam-requests",
+  "mw": [
+   "authMiddleware",
+   "donationsAdminMiddleware",
+   "listPrasadamRequests"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/donations-admin/prasadam-export",
+  "mw": [
+   "authMiddleware",
+   "donationsAdminMiddleware",
+   "exportPrasadamCsv"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/donations-admin/transactions/:id/prasadam-status",
+  "mw": [
+   "authMiddleware",
+   "donationsAdminMiddleware",
+   "updatePrasadamStatus"
+  ]
+ },
+ {
   "method": "POST",
   "path": "/donations-admin/upload-image",
   "mw": [

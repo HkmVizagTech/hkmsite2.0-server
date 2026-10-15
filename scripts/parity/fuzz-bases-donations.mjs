@@ -21,6 +21,7 @@ export default {
   "PUT /donations/:id/receipt-number": { receiptNumber: "HKMI|FZ|1" },
   "PUT /donations/:id/manual-complete": withUtr({ manualPaymentMode: "upi" }),
   "POST /donations/upi-dismiss": { donationId: "000000000000000000000000" },
+  "PUT /donations-admin/transactions/:id/prasadam-status": { prasadamStatus: "pending" },
   "PUT /donations-admin/transactions/:id/receipt-number": { receiptNumber: "HKMI|FZ|2" },
   "POST /donations-admin/manual-complete": { donationId: "000000000000000000000000", razorpayPaymentId: "pay_fz" },
   "PATCH /donor/me": { name: "Fuzz Donor" },

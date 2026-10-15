@@ -34,6 +34,7 @@ import {
   istDay,
   istMonth,
   IST_ZONE,
+  clampDate,
 } from "../domain/donationQuery.js";
 
 // The standalone /donations page family has its own admin and never shows in site-wide lists/stats.
@@ -42,11 +43,11 @@ function buildDateRangeMatch(from, to) {
   const createdAt = {};
   if (from) {
     const d = istDayStart(from);
-    if (d) createdAt.$gte = d;
+    if (d) createdAt.$gte = clampDate(d);
   }
   if (to) {
     const d = istDayEnd(to);
-    if (d) createdAt.$lte = d;
+    if (d) createdAt.$lte = clampDate(d);
   }
   return Object.keys(createdAt).length ? { createdAt } : {};
 }
@@ -365,12 +366,12 @@ const donationController = {
         return res.status(400).json({ success: false, message: "Invalid period." });
       }
 
-      const baseMatch = { ...EXCLUDE_DONATIONS_PAGE, createdAt: { $gte: start, $lte: end } };
+      const baseMatch = { ...EXCLUDE_DONATIONS_PAGE, createdAt: { $gte: clampDate(start), $lte: clampDate(end) } };
       const completedMatch = { ...baseMatch, status: "completed" };
       const prevCompletedMatch = {
         ...EXCLUDE_DONATIONS_PAGE,
         status: "completed",
-        createdAt: { $gte: prevStart, $lte: prevEnd },
+        createdAt: { $gte: clampDate(prevStart), $lte: clampDate(prevEnd) },
       };
       const bucket = granularity === "month" ? istMonth("created_at") : istDay("created_at");
 
@@ -635,20 +636,20 @@ const donationController = {
       if (date) {
         const start = istDayStart(date);
         const end = istDayEnd(date);
-        if (start && end) filter.date = { $gte: start, $lte: end };
+        if (start && end) filter.date = { $gte: clampDate(start), $lte: clampDate(end) };
       }
       if (from) {
         const d = istDayStart(from);
         if (d) {
           filter.date = filter.date || {};
-          filter.date.$gte = d;
+          filter.date.$gte = clampDate(d);
         }
       }
       if (to) {
         const d = istDayEnd(to);
         if (d) {
           filter.date = filter.date || {};
-          filter.date.$lte = d;
+          filter.date.$lte = clampDate(d);
         }
       }
       if (festivalId) filter.festivalId = festivalId;

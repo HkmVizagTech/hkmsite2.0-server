@@ -1,7 +1,7 @@
 import { donors as donorsTable, donations } from "../db/tables.js";
 import { many } from "../db/pg.js";
 import { istDayStart, istDayEnd } from "../config/timezone.js";
-import { aggregate, castId } from "../domain/donationQuery.js";
+import { aggregate, castId, clampDate } from "../domain/donationQuery.js";
 import { isWhatsAppConfigured } from "../services/whatsapp.service.js";
 import { sendDonationWhatsAppReceipt } from "../services/paymentCompletion.service.js";
 
@@ -164,11 +164,11 @@ const preacherController = {
         match.createdAt = {};
         if (from) {
           const d = istDayStart(from);
-          if (d) match.createdAt.$gte = d;
+          if (d) match.createdAt.$gte = clampDate(d);
         }
         if (to) {
           const d = istDayEnd(to);
-          if (d) match.createdAt.$lte = d;
+          if (d) match.createdAt.$lte = clampDate(d);
         }
         // Mongo matched createdAt == {} here, i.e. nothing.
         if (!Object.keys(match.createdAt).length) {

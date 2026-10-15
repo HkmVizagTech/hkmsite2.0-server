@@ -67,7 +67,7 @@ const castObjectId = (v, path, opts) => {
   let x = v;
   if (typeof x === "object" && !Array.isArray(x) && x._id != null) x = x._id;
   if (Array.isArray(x)) x = String(x);
-  if (typeof x === "string" && isId(x)) return x;
+  if (typeof x === "string" && isId(x)) return x.toLowerCase();
   throw castError("ObjectId", v, path, opts);
 };
 
@@ -171,6 +171,8 @@ export function castDonationForCreate(input, { model = "donation" } = {}) {
     if (path.startsWith("prasadamAddress.")) (doc.prasadamAddress ||= {})[path.slice(16)] = v;
     else doc[path] = v;
   }
+  if (addr === null) doc.prasadamAddress = null;
+  else if (addr !== undefined && !addrObj) doc.prasadamAddress = { $absent: true };
   return doc;
 }
 

@@ -3,6 +3,7 @@
 //   SRC_MONGO_URI=... DATABASE_URL=... node scripts/parity/writes-donations.mjs http://localhost:9400 http://localhost:9401
 // Run `env.sh reset donations` before each run.
 import crypto from "node:crypto";
+import { createRequire } from "node:module";
 import { MongoClient, ObjectId } from "mongodb";
 import fs from "node:fs";
 import { discover, sign, call, normalize, diff, orderOnly } from "./lib.mjs";
@@ -34,6 +35,15 @@ function mask(v) {
     if (ISO.test(v)) return "<ts>";
     if (/^TXN[0-9A-F]{6}$/.test(v)) return "<txn>";
     if (/^\d+s ago|filename=/.test(v)) return "<x>";
+    if (v.startsWith("Transaction ID,") || v.startsWith("Donor Name,Mobile,"))
+      return v
+        .split("\n")
+        .map((l) =>
+          l.includes(MARK)
+            ? l.replace(/TXN[0-9A-F]{6}/g, "<txn>").replace(/\d+\/\d+\/\d+, \d+:\d+:\d+ [ap]m/g, "<dt>")
+            : l
+        )
+        .join("\n");
   }
   return v;
 }
@@ -72,6 +82,16 @@ const save =
     side.ids[key] = pick(res.data);
   };
 
+// The push-all sweeps run in the background after the 202: wait until both servers finish before reading state.
+async function settleSweep() {
+  for (const side of [sides.A, sides.B])
+    for (let i = 0; i < 600; i++) {
+      const r = await call(side.base, { path: "/donations/dcc-status", token: adminTok });
+      if (!r.data?.running) break;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+}
+
 async function create(name, body, key) {
   const [a, b] = await step(name, req("POST", "/donations", body));
   sides.A.ids[key] = a.data?.donation?._id;
@@ -80,6 +100,7 @@ async function create(name, body, key) {
 const id = (key) => (side) => side.ids[key];
 
 const MARK = "ParityTest";
+const BASELINE = process.env.BASELINE || new URL("../../../.localdb/baseline", import.meta.url).pathname;
 const festivalSlug = (await mdb.collection("festivaldonations").findOne({}))?.slug;
 const MOBILE1 = "9000000011";
 const MOBILE2 = "9000000012";
@@ -354,6 +375,12 @@ for (const [label, extra] of [
   ["note + mode", { manualEntryNote: "  hello  ", manualPaymentMode: "cheque" }],
   ["mode invalid", { manualPaymentMode: "x" }],
   ["email only", { donorMobile: undefined, donorEmail: " Mixed@Case.COM " }],
+  ["devoteeId number", { devoteeId: 5 }],
+  ["devoteeId unknown valid id", { devoteeId: "000000000000000000000000" }],
+  ["devoteeId object", { devoteeId: { a: 1 } }],
+  ["devoteeId array", { devoteeId: ["000000000000000000000000"] }],
+  ["devoteeId uppercase", { devoteeId: "ABCDEFABCDEFABCDEFABCDEF" }],
+  ["devoteeId 12 chars", { devoteeId: "abcdefghijkl" }],
 ]) {
   mvn++;
   await step(`manual variant: ${label}`, req("POST", "/donations/manual", man(extra, mvn)));
@@ -597,6 +624,7 @@ await step(
   req("POST", "/donations/resend-recent-whatsapp", { hours: 24, limit: 3, send: true })
 );
 await step("dcc-push-all", req("POST", "/donations/dcc-push-all"));
+await settleSweep();
 await step("dcc-status after", req("GET", "/donations/dcc-status?includeOld=true"));
 await step("needs-manual-receipt after", req("GET", "/donations/needs-manual-receipt"));
 await step("needs-whatsapp after", req("GET", "/donations/needs-whatsapp"));
@@ -682,11 +710,106 @@ await step(
 await step("admin reconcile-pending", req("POST", "/donations-admin/reconcile-pending?limit=10&resetChecked=true"));
 await step("admin reconcile-pending again", req("POST", "/donations-admin/reconcile-pending?limit=10"));
 await step("admin dcc-push-all", req("POST", "/donations-admin/dcc-push-all"));
+await settleSweep();
 await step("admin dcc-status", req("GET", "/donations-admin/dcc-status"));
 await step("admin dashboard-stats", req("GET", "/donations-admin/dashboard-stats"));
 await step("admin report", req("GET", "/donations-admin/report?startDate=2026-01-01&endDate=2026-12-31"));
 await step("admin utm-stats", req("GET", "/donations-admin/utm-stats"));
 await step("admin export", req("GET", "/donations-admin/export?status=completed,pending"));
+if (process.env.DUMP_EXPORT) {
+  const [ea, eb] = [await req("GET", "/donations-admin/export?status=completed,pending")(sides.A), await req("GET", "/donations-admin/export?status=completed,pending")(sides.B)];
+  fs.writeFileSync(`${process.env.DUMP_EXPORT}.A.csv`, ea.data);
+  fs.writeFileSync(`${process.env.DUMP_EXPORT}.B.csv`, eb.data);
+}
+// ---------- prasadam dispatch module (donations admin) ----------
+const PAD = { doorNo: "1-2", house: " H ", street: "S", area: "A", city: "Vizag", state: "AP", pincode: "530002" };
+const px = (n, extra = {}) => ({
+  donorName: `${MARK} Prasad${n}`,
+  amount: 500 + n,
+  donorMobile: `90000002${10 + n}`,
+  wantPrasadam: true,
+  prasadamAddress: PAD,
+  sevaName: n % 2 ? "Seva Odd" : "Seva Even",
+  ...extra,
+});
+async function setStatusBoth(key, status) {
+  await mdb.collection("donations").updateOne({ _id: new ObjectId(sides.A.ids[key]) }, { $set: { status } });
+  await query("UPDATE donations SET status=$1 WHERE id=$2", [status, sides.B.ids[key]]);
+}
+for (const [key, n, extra, sourcePage, status] of [
+  ["p1", 1, {}, "donations", "completed"],
+  ["p2", 2, {}, "donations/janmashtami2", "completed"],
+  ["p3", 3, {}, "donations", "pending"],
+  ["p4", 4, { wantPrasadam: false, prasadamAddress: undefined }, "donations", "completed"],
+  ["p5", 5, {}, "admin-manual", "completed"],
+  ["p6", 6, {}, "donations", "completed"],
+  ["p7", 7, {}, "donations", "completed"],
+]) {
+  await create(`create ${key}`, px(n, extra), key);
+  await patchBoth(key, sourcePage);
+  await setStatusBoth(key, status);
+}
+const legacyScope = await mdb
+  .collection("donations")
+  .findOne({ sourcePage: /^donations/, wantPrasadam: true, status: "completed", prasadamStatus: { $exists: false } });
+if (legacyScope) for (const side of [sides.A, sides.B]) side.ids.legacy = String(legacyScope._id);
+const prList = (qs = "") => req("GET", `/donations-admin/prasadam-requests${qs}`);
+const prx = (qs = "") => req("GET", `/donations-admin/prasadam-export${qs}`);
+for (const qs of [
+  "",
+  `?q=${MARK}`,
+  `?q=${MARK}&status=pending`,
+  `?q=${MARK}&status=not_dispatched`,
+  `?q=${MARK}&seva=Seva%20Odd`,
+  `?q=${MARK}&sourcePage=donations/janmashtami2`,
+  "?q=530002&limit=5",
+  "?status=dispatched",
+  "?limit=1&page=2",
+]) {
+  await step(`prasadam list ${qs}`, prList(qs));
+  await step(`prasadam export ${qs}`, prx(qs));
+}
+const upd = (key, body) => req("PUT", (s) => `/donations-admin/transactions/${s.ids[key]}/prasadam-status`, body);
+await step("prasadam status: bad id", req("PUT", "/donations-admin/transactions/zz/prasadam-status", { prasadamStatus: "pending" }));
+await step("prasadam status: no body", upd("p1"));
+await step("prasadam status: bad status", upd("p1", { prasadamStatus: "shipped" }));
+await step("prasadam status: array status", upd("p1", { prasadamStatus: ["pending"] }));
+await step("prasadam status: unknown id", req("PUT", "/donations-admin/transactions/000000000000000000000000/prasadam-status", { prasadamStatus: "pending" }));
+await step("prasadam status: out of scope", upd("p5", { prasadamStatus: "dispatched" }));
+await step("prasadam status: no prasadam request", upd("p4", { prasadamStatus: "dispatched" }));
+await step("prasadam status: not completed", upd("p3", { prasadamStatus: "dispatched" }));
+await step("prasadam status: no auth", req("PUT", (s) => `/donations-admin/transactions/${s.ids.p1}/prasadam-status`, { prasadamStatus: "pending" }, { token: null }));
+await step("prasadam status: pending on legacy (no change)", upd("p1", { prasadamStatus: "pending" }));
+await step("p1 after pending", req("GET", (s) => `/donations-admin/transactions/${s.ids.p1}`));
+await step("prasadam status: dispatched", upd("p1", { prasadamStatus: "dispatched", prasadamCourier: "  DTDC ", prasadamTrackingNumber: " T123 ", prasadamNotes: " box " }));
+await step("p1 after dispatched", req("GET", (s) => `/donations-admin/transactions/${s.ids.p1}`));
+await step("prasadam status: dispatched again (same values)", upd("p1", { prasadamStatus: "dispatched" }));
+await step("prasadam status: delivered", upd("p1", { prasadamStatus: "delivered" }));
+await step("prasadam status: back to dispatched", upd("p1", { prasadamStatus: "dispatched", prasadamCourier: "" }));
+await step("prasadam status: cancelled", upd("p1", { prasadamStatus: "cancelled", prasadamNotes: null }));
+await step("prasadam status: pending after cancel", upd("p1", { prasadamStatus: "pending", prasadamTrackingNumber: 77 }));
+await step("prasadam status: delivered direct", upd("p2", { prasadamStatus: "delivered", prasadamCourier: { a: 1 }, prasadamNotes: ["x", "y"] }));
+await step("prasadam status: delivered again", upd("p2", { prasadamStatus: "delivered" }));
+await step("prasadam status: cancelled p2", upd("p2", { prasadamStatus: "cancelled" }));
+await step("prasadam status: uppercase id", req("PUT", (s) => `/donations-admin/transactions/${String(s.ids.p6).toUpperCase()}/prasadam-status`, { prasadamStatus: "dispatched", prasadamCourier: "X".repeat(5000) }));
+await step("prasadam status: extra fields ignored", upd("p7", { prasadamStatus: "dispatched", amount: 1, status: "pending", prasadamDispatchedAt: "2000-01-01" }));
+await step("prasadam status: unicode notes", upd("p7", { prasadamStatus: "delivered", prasadamNotes: "  हरे कृष्ण \n \"q\", c  " }));
+if (legacyScope) {
+  await step("legacy before", req("GET", (s) => `/donations-admin/transactions/${s.ids.legacy}`));
+  await step("legacy dispatched", upd("legacy", { prasadamStatus: "dispatched", prasadamCourier: "Delhivery", prasadamTrackingNumber: "D1" }));
+  await step("legacy after", req("GET", (s) => `/donations-admin/transactions/${s.ids.legacy}`));
+  await step("legacy delivered", upd("legacy", { prasadamStatus: "delivered" }));
+  await step("legacy cancelled", upd("legacy", { prasadamStatus: "cancelled" }));
+}
+for (const qs of ["", `?q=${MARK}`, "?status=dispatched", "?status=delivered", "?status=cancelled", "?status=pending", `?q=${MARK}&status=not_dispatched`, "?q=D1", "?q=DTDC"]) {
+  await step(`prasadam list after ${qs}`, prList(qs));
+  await step(`prasadam export after ${qs}`, prx(qs));
+}
+await step("admin transactions after prasadam", req("GET", "/donations-admin/transactions?search=ParityTest&limit=50"));
+await step("p6 detail uppercase id", req("GET", (s) => `/donations-admin/transactions/${String(s.ids.p6).toUpperCase()}`));
+await step("p6 receipt-number uppercase id", req("PUT", (s) => `/donations-admin/transactions/${String(s.ids.p6).toUpperCase()}/receipt-number`, { receiptNumber: "HKMI|PARITY|P6" }));
+await step("p6 dcc-push uppercase id", req("POST", (s) => `/donations-admin/transactions/${String(s.ids.p6).toUpperCase()}/dcc-push`));
+await step("p6 detail after", req("GET", (s) => `/donations-admin/transactions/${s.ids.p6}`));
 await step("admin upload-image: none", req("POST", "/donations-admin/upload-image", {}));
 await step("admin upload-image", async (side) => {
   const png = Buffer.from(
@@ -819,14 +942,11 @@ const recDoc = {
   paymentAccount: "default",
   sevaName: "Monthly Seva",
 };
-await mdb.collection("donations").insertOne({
-  _id: recId,
-  ...recDoc,
-  donorRecordId: new ObjectId(ctx.donorWithDonations),
-  createdAt: new Date(),
-  updatedAt: new Date(),
-  date: new Date(),
-});
+// Created through the old Mongoose model so the Mongo side carries the schema defaults like a real donation.
+const oldMongoose = createRequire(import.meta.url)(`${BASELINE}/node_modules/mongoose`);
+const { donationModel: oldDonationModel } = createRequire(import.meta.url)(`${BASELINE}/src/models/donation.model.js`);
+await oldMongoose.connect(MONGO);
+await oldDonationModel.create({ _id: recId, ...recDoc, donorRecordId: new ObjectId(ctx.donorWithDonations) });
 await pgDonations.insert({ _id: String(recId), ...recDoc, donorRecordId: ctx.donorWithDonations });
 await mdb
   .collection("donations")

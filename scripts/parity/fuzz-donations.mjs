@@ -102,6 +102,8 @@ const QUERY_PARAMS = [
   "tag",
   "festivalSlug",
   "sevaName",
+  "seva",
+  "sourcePage",
   "source",
   "medium",
   "campaign",
@@ -173,6 +175,8 @@ const ALL_BODY_FIELDS = [
   "panNumber",
   "donorName",
   "sevaName",
+  "seva",
+  "sourcePage",
   "eventId",
   "url",
 ];

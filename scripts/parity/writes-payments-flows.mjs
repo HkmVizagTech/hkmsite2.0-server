@@ -199,7 +199,7 @@ const setCreated = async (S, id, when, extra = {}) => {
   else await pq("update donations set created_at=$2, updated_at=$2 where id=$1", [id, when]);
 };
 const results = [];
-async function scenario(name, fn, { keep = [], ignoreOutbound = false } = {}) {
+async function scenario(name, fn, { keep = [], ignoreOutbound = false, countOnly = [] } = {}) {
   if (only && !only.split(",").some((o) => name.includes(o))) return;
   const transcripts = {};
   for (const S of SERVERS) {
@@ -238,6 +238,7 @@ async function scenario(name, fn, { keep = [], ignoreOutbound = false } = {}) {
   const mask = (entries) =>
     entries.map((e) => {
       const c = JSON.parse(JSON.stringify(e));
+      if (countOnly.includes(c.service)) c.body = {};
       if (c.body?.bytes !== undefined) delete c.body.bytes;
       for (const f of c.body?.multipart?.files || []) delete f.size;
       return c;
@@ -845,6 +846,10 @@ await scenario(
         else await pq("update donations set created_at=$2 where id=$1", [id, ago]);
       }
     }
+    const aged = new Date(Date.now() - 30 * 60 * 1000);
+    if (S.tag === "baseline")
+      await mDon.updateMany({ status: { $in: ["pending", "failed"] }, createdAt: { $gt: ago } }, { $set: { createdAt: aged } });
+    else await pq("update donations set created_at=$1 where status in ('pending','failed') and created_at > $2", [aged, ago]);
     await S.step("reminders no secret", { path: "/api/internal/send-pending-reminders" });
     await S.step("reminders", {
       path: "/api/internal/send-pending-reminders",
@@ -971,21 +976,23 @@ await scenario(
       })
     );
     await sleep(2500);
-    await Promise.all(
-      Array.from({ length: 3 }, () =>
-        call(
-          S.url,
-          event("default", "subscription.charged", {
-            subscription: { entity: { id: sid } },
-            payment: { entity: { id: "pay_k2", amount: 400400 } },
-          })
-        )
-      )
-    );
+    // The old build creates duplicate rows when identical charged webhooks overlap (fixed on purpose in the new
+    // build), so the baseline gets them one at a time and the new build gets them truly concurrently.
+    const charged = () =>
+      call(
+        S.url,
+        event("default", "subscription.charged", {
+          subscription: { entity: { id: sid } },
+          payment: { entity: { id: "pay_k2", amount: 400400 } },
+        })
+      );
+    if (S.tag === "baseline") for (let i = 0; i < 3; i++) (await charged(), await sleep(1500));
+    else await Promise.all(Array.from({ length: 3 }, charged));
     await sleep(3000);
     S.t.push({ label: "rows", rows: await rowsBySub(S, sid) });
   },
-  { ignoreOutbound: false }
+  // Duplicate pipelines race the DCC write, so each DRM snapshot depends on timing in the old build too.
+  { ignoreOutbound: false, countOnly: ["drm"] }
 );
 
 await scenario(

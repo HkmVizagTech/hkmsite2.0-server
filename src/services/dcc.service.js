@@ -1,5 +1,6 @@
 import { donations, claimUpdate } from "../domain/donationDb.js";
 import { donors } from "../db/tables.js";
+import { tx } from "../db/pg.js";
 import { IST } from "../config/timezone.js";
 import { toEnglish } from "../utils/toEnglish.js";
 import { notifyDrmOfDonation } from "./drmNotify.service.js";
@@ -585,29 +586,31 @@ async function syncDonationToDcc(donationOrId, gatewayPaymentId) {
     const receiptNumber = dccResponse?.ReceiptNumber || null;
     const recovered = /already exists/i.test(String(dccResponse?.Message || ""));
 
-    await donations.updateById(lock._id, {
-      ...(recovered ? { dccRecoveredAt: new Date() } : {}),
-      dccSyncStatus: "synced",
-      dccSyncedAt: new Date(),
-      dccSyncError: null,
-      dccPayload: payload,
-      dccResponse,
-      ...(receiptNumber
-        ? {
-            receiptNumber,
-            receiptGeneratedAt: new Date(),
-          }
-        : {}),
-    });
-
     const dccDonorNumber = dccResponse?.DonorNumber || null;
-    if (dccDonorNumber && lock.donorRecordId) {
-      try {
-        await donors.updateById(lock.donorRecordId, { dccDonorNumber });
-      } catch (e) {
-        console.error("Could not save dccDonorNumber to Donor record (non-fatal):", lock.donorRecordId, e.message);
+    await tx(async (client) => {
+      await donations.updateById(
+        lock._id,
+        {
+          ...(recovered ? { dccRecoveredAt: new Date() } : {}),
+          dccSyncStatus: "synced",
+          dccSyncedAt: new Date(),
+          dccSyncError: null,
+          dccPayload: payload,
+          dccResponse,
+          ...(receiptNumber ? { receiptNumber, receiptGeneratedAt: new Date() } : {}),
+        },
+        { client }
+      );
+      if (dccDonorNumber && lock.donorRecordId) {
+        await client.query("SAVEPOINT donor_number");
+        try {
+          await donors.updateById(lock.donorRecordId, { dccDonorNumber }, { client });
+        } catch (e) {
+          await client.query("ROLLBACK TO SAVEPOINT donor_number");
+          console.error("Could not save dccDonorNumber to Donor record (non-fatal):", lock.donorRecordId, e.message);
+        }
       }
-    }
+    });
 
     if (lock.manualEntry && receiptNumber) {
       try {

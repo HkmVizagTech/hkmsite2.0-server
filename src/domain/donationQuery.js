@@ -17,6 +17,9 @@ export const NEEDS_ATTENTION_OR = [{ dccSyncStatus: "failed" }, { whatsappReceip
 
 export { castId } from "./donationCast.js";
 
+// Postgres cannot store dates before year 1; as a filter bound they match everything / nothing, like Mongo.
+export const clampDate = (d) => (d.getTime() < -62135596800000 ? new Date(-62135596800000) : d);
+
 export const castNumber = (v) => {
   const n = Number(v);
   if (Number.isNaN(n)) throw new Error(`Cast to Number failed for value "${v}"`);

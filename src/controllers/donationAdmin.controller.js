@@ -25,6 +25,7 @@ import {
   countGroups,
   castId,
   istDay,
+  clampDate,
 } from "../domain/donationQuery.js";
 
 // Scope of the standalone /donations page family (plus two legacy shapes). Repo-style filter,
@@ -50,11 +51,11 @@ function buildDateRangeMatch(startDate, endDate) {
   const createdAt = {};
   if (startDate) {
     const d = istDayStart(startDate);
-    if (d) createdAt.$gte = d;
+    if (d) createdAt.$gte = clampDate(d);
   }
   if (endDate) {
     const d = istDayEnd(endDate);
-    if (d) createdAt.$lte = d;
+    if (d) createdAt.$lte = clampDate(d);
   }
   return Object.keys(createdAt).length ? { createdAt } : {};
 }
@@ -141,8 +142,8 @@ const donationAdminController = {
       }
 
       const baseMatch = sourcePage
-        ? { sourcePage, status: "completed", createdAt: { $gte: start, $lte: end } }
-        : { ...DONATIONS_PAGE_FILTER, status: "completed", createdAt: { $gte: start, $lte: end } };
+        ? { sourcePage, status: "completed", createdAt: { $gte: clampDate(start), $lte: clampDate(end) } }
+        : { ...DONATIONS_PAGE_FILTER, status: "completed", createdAt: { $gte: clampDate(start), $lte: clampDate(end) } };
 
       const [summary, byPageAgg, dailyAgg, sevaAgg] = await Promise.all([
         sumCount(baseMatch),
@@ -283,7 +284,7 @@ const donationAdminController = {
       if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
         return res.status(400).json({ success: false, message: "Invalid transaction ID" });
       }
-      const txn = await donations.findOne({ _id: id, ...DONATIONS_PAGE_FILTER }, { lean: true });
+      const txn = await donations.findOne({ _id: castId(id), ...DONATIONS_PAGE_FILTER }, { lean: true });
       if (!txn) return res.status(404).json({ success: false, message: "Transaction not found" });
       res.status(200).json({ success: true, transaction: txn });
     } catch (error) {
@@ -329,7 +330,7 @@ const donationAdminController = {
       const { id } = req.params;
       if (!id || !id.match(/^[0-9a-fA-F]{24}$/))
         return res.status(400).json({ success: false, message: "Invalid transaction ID" });
-      const txn = await donations.findOne({ _id: id, ...DONATIONS_PAGE_FILTER }, { fields: ["status"], lean: true });
+      const txn = await donations.findOne({ _id: castId(id), ...DONATIONS_PAGE_FILTER }, { fields: ["status"], lean: true });
       if (!txn) return res.status(404).json({ success: false, message: "Transaction not found" });
       if (txn.status !== "completed")
         return res.status(400).json({ success: false, message: "Only successful donations get a DCC receipt." });
@@ -337,7 +338,7 @@ const donationAdminController = {
       if (!isDccConfigured())
         return res.status(400).json({ success: false, message: "DCC is not configured on this server." });
 
-      const result = await pushAndSendReceipt(id);
+      const result = await pushAndSendReceipt(castId(id));
       const message = pushResultMessage(result);
       res.status(result.receiptNumber ? 200 : 502).json({
         success: !!result.receiptNumber,
@@ -358,10 +359,10 @@ const donationAdminController = {
       if (!id || !id.match(/^[0-9a-fA-F]{24}$/))
         return res.status(400).json({ success: false, message: "Invalid transaction ID" });
       if (!clean) return res.status(400).json({ success: false, message: "receiptNumber is required." });
-      const txn = await donations.findOne({ _id: id, ...DONATIONS_PAGE_FILTER }, { fields: ["_id"], lean: true });
+      const txn = await donations.findOne({ _id: castId(id), ...DONATIONS_PAGE_FILTER }, { fields: ["_id"], lean: true });
       if (!txn) return res.status(404).json({ success: false, message: "Transaction not found" });
 
-      const result = await setReceiptNumberAndSend(id, clean);
+      const result = await setReceiptNumberAndSend(castId(id), clean);
       res.status(200).json({ success: true, message: result.message, whatsapp: result.whatsapp });
     } catch (error) {
       console.error("donationAdmin.setReceiptNumber error:", error);
@@ -690,7 +691,7 @@ const donationAdminController = {
         });
       }
 
-      const donation = await donations.findOne({ _id: id, ...DONATIONS_PAGE_FILTER });
+      const donation = await donations.findOne({ _id: castId(id), ...DONATIONS_PAGE_FILTER });
       if (!donation) return res.status(404).json({ success: false, message: "Transaction not found" });
       if (!donation.wantPrasadam) {
         return res
