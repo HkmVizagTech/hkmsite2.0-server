@@ -16,7 +16,7 @@ const liveGet = async (path) => {
   return { status: r.status, data: ct.includes("json") ? await r.json().catch(() => null) : await r.text() };
 };
 const ctx = await discover(process.env.SRC_MONGO_URI);
-const localToken = sign({ userId: ctx.admin, role: "admin" });
+const localToken = sign({ userId: login.user._id, role: login.user.role });
 const localGet = async (path) => {
   const r = await fetch(LOCAL + path, { headers: { authorization: `Bearer ${localToken}` } });
   const ct = r.headers.get("content-type") || "";
