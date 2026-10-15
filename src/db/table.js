@@ -7,6 +7,11 @@ const qi = (c) => `"${c.replace(/"/g, '""')}"`;
 const columnDefaults = new Map();
 const tableColumns = new Map();
 
+const cleanJsonString = (str) => str.replace(/\u0000/g, "").toWellFormed();
+
+const stringifyJson = (value) =>
+  JSON.stringify(value, (key, val) => (typeof val === "string" ? cleanJsonString(val) : val));
+
 export async function loadDefaults() {
   const { rows } = await query(
     `SELECT table_name, column_name, column_default FROM information_schema.columns
@@ -133,7 +138,7 @@ function defineTable({
       const col = fieldToCol(field);
       if (!knownCol(col)) return;
       if (value === null) nulls.push(field);
-      cols[col] = jsonSet.has(field) && value !== null ? JSON.stringify(value) : value;
+      cols[col] = jsonSet.has(field) && value !== null ? stringifyJson(value) : value;
     };
     for (const [k, v] of Object.entries(patch)) {
       if (k === "$set") {

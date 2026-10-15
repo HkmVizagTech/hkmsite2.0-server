@@ -27,6 +27,7 @@ for (let i = 0; i < ids.length; i += 300) {
   const newH = new Map((await donations.find({ _id: { $in: chunk } })).map((d) => [d._id, d]));
   const newL = new Map((await donations.find({ _id: { $in: chunk } }, { lean: true })).map((d) => [d._id, d]));
   for (const id of chunk) {
+    if (!newH.has(id) || !oldH.has(id)) continue;
     total++;
     const gw = oldL.get(id)?.dccPayload?.gatewayPaymentId;
     for (const [mode, o, n] of [["hydrated", oldH, newH], ["lean", oldL, newL]]) {

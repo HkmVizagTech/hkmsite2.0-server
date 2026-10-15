@@ -11,7 +11,7 @@ export const liveCheckDonationOrder = async (donation) => {
   const created = createRazorpayInstance(donation.paymentAccount);
   if (!created) return NOT_CHECKED;
 
-  const { items = [] } = (await created.instance.orders.fetchPayments(donation.razorpayOrderId)) ?? {};
+  const items = (await created.instance.orders.fetchPayments(donation.razorpayOrderId))?.items ?? [];
   const captured = items.find((p) => p.status === "captured");
   if (captured) {
     await completeDonation({ orderId: donation.razorpayOrderId, paymentId: captured.id });

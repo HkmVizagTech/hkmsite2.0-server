@@ -291,6 +291,7 @@ async function runPendingReminders() {
   }
 
   const lockClient = await getPool().connect();
+  let unlockFailed = false;
   try {
     const { rows } = await lockClient.query("SELECT pg_try_advisory_lock(hashtext('pending-reminders')) AS ok");
     if (!rows[0].ok) {
@@ -299,10 +300,12 @@ async function runPendingReminders() {
     try {
       return await runPass(provider);
     } finally {
-      await lockClient.query("SELECT pg_advisory_unlock(hashtext('pending-reminders'))").catch(() => {});
+      await lockClient.query("SELECT pg_advisory_unlock(hashtext('pending-reminders'))").catch(() => {
+        unlockFailed = true;
+      });
     }
   } finally {
-    lockClient.release();
+    lockClient.release(unlockFailed);
   }
 }
 

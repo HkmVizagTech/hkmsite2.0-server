@@ -64,3 +64,21 @@ Real Razorpay/DCC/WhatsApp/R2/courier behavior: tested only against fakes built 
 3. Production cutover per `CUTOVER.md`, then end-to-end test on production data, then merge to `main`.
 4. Resolve two duplicated receipt numbers (`HKMI|2026|D/VSP|10374`, `...|10267`) before adding a unique index.
 5. Delete `/Users/giridhar/Developer/hkm-vizag/.localdb` when finished (real donor data).
+
+## Gateway audits (2026-10-15)
+
+Four independent read-only audits compared old and new code for DCC, Razorpay, WhatsApp (Gupshup/Flaxxa), Meta CAPI, DRM, R2, couriers and background jobs. No blockers. Receipts: 250 random PDFs byte-identical. DCC: 7,944/7,944 real donations produce an identical request (hydrated and lean).
+
+Fixed after the audits:
+- `bootstrap_runs` marker was migrated under the Mongo `_id`, not its `key`, so the blog-drafts import would re-run after cutover. The migration script now uses `key ?? name ?? _id`.
+- Uppercase-hex ids are lowercased in `castPaymentDonationId` (Mongo cast them to the same ObjectId).
+- `\u0000` and lone surrogates are cleaned before jsonb writes (Postgres rejects them, Mongo accepted them).
+- Pending-reminder advisory lock: the pooled connection is destroyed if the unlock fails, so reminders cannot get stuck on `already_running`.
+- `liveOrderCheck` tolerates `items: null`.
+
+Known, behaviour identical to old code and left as is:
+- Two completed donations already hold the same Razorpay payment id (`subscription.activated` followed by `/verify`).
+- `createOrder` calls Razorpay before the insert. Amounts above 2 decimals, and non-integer `legacySevaId`, would fail the insert; real data has none.
+- Gupshup `fetch` calls have no timeout (same as old).
+
+Cutover checklist additions: set `INTERNAL_SECRET` on Railway (the old code accepted requests without it when unset); use a direct (non-pooler) `DATABASE_URL`; consider `PG_POOL_MAX` 20-30 for webhook bursts; keep `RECONCILE_ENABLED` on.

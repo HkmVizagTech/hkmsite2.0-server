@@ -176,8 +176,8 @@ function castPaymentDonation(input) {
 
 // What findById / filters on _id threw for a malformed id.
 function castPaymentDonationId(value, path = "_id") {
-  if (value === undefined || value === null || (typeof value === "string" && /^[0-9a-f]{24}$/i.test(value)))
-    return value;
+  if (value === undefined || value === null) return value;
+  if (typeof value === "string" && /^[0-9a-f]{24}$/i.test(value)) return value.toLowerCase();
   const err = new Error(`${castMessage("ObjectId", value, path)} for model "donation"`);
   err.name = "CastError";
   throw err;

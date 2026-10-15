@@ -941,7 +941,7 @@ async function main() {
   if (existing.has("bootstrap_runs")) {
     for (const r of await mdb.collection("bootstrap_runs").find({}).toArray()) {
       await pg.query("INSERT INTO bootstrap_runs(name, ran_at) VALUES ($1,$2) ON CONFLICT DO NOTHING", [
-        String(r._id ?? r.name),
+        String(r.key ?? r.name ?? r._id),
         r.ranAt || r.at || new Date(),
       ]);
     }
