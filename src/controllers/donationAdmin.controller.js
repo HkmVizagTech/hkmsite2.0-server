@@ -143,7 +143,11 @@ const donationAdminController = {
 
       const baseMatch = sourcePage
         ? { sourcePage, status: "completed", createdAt: { $gte: clampDate(start), $lte: clampDate(end) } }
-        : { ...DONATIONS_PAGE_FILTER, status: "completed", createdAt: { $gte: clampDate(start), $lte: clampDate(end) } };
+        : {
+            ...DONATIONS_PAGE_FILTER,
+            status: "completed",
+            createdAt: { $gte: clampDate(start), $lte: clampDate(end) },
+          };
 
       const [summary, byPageAgg, dailyAgg, sevaAgg] = await Promise.all([
         sumCount(baseMatch),
@@ -330,7 +334,10 @@ const donationAdminController = {
       const { id } = req.params;
       if (!id || !id.match(/^[0-9a-fA-F]{24}$/))
         return res.status(400).json({ success: false, message: "Invalid transaction ID" });
-      const txn = await donations.findOne({ _id: castId(id), ...DONATIONS_PAGE_FILTER }, { fields: ["status"], lean: true });
+      const txn = await donations.findOne(
+        { _id: castId(id), ...DONATIONS_PAGE_FILTER },
+        { fields: ["status"], lean: true }
+      );
       if (!txn) return res.status(404).json({ success: false, message: "Transaction not found" });
       if (txn.status !== "completed")
         return res.status(400).json({ success: false, message: "Only successful donations get a DCC receipt." });
@@ -359,7 +366,10 @@ const donationAdminController = {
       if (!id || !id.match(/^[0-9a-fA-F]{24}$/))
         return res.status(400).json({ success: false, message: "Invalid transaction ID" });
       if (!clean) return res.status(400).json({ success: false, message: "receiptNumber is required." });
-      const txn = await donations.findOne({ _id: castId(id), ...DONATIONS_PAGE_FILTER }, { fields: ["_id"], lean: true });
+      const txn = await donations.findOne(
+        { _id: castId(id), ...DONATIONS_PAGE_FILTER },
+        { fields: ["_id"], lean: true }
+      );
       if (!txn) return res.status(404).json({ success: false, message: "Transaction not found" });
 
       const result = await setReceiptNumberAndSend(castId(id), clean);
