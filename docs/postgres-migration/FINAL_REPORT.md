@@ -18,6 +18,9 @@ Method: old build (upstream `origin/main`, MongoDB) and new build (Postgres) run
 | Response headers (CORS, cache, security) | identical, 144 combinations |
 | Client | production build passes (105 routes); 66 pages load clean on both stacks; 14 browser flows (contact form, admin login/donations/Prasadam tabs/blog editor/dashboard/shop, donor session, add to cart...) identical on Mongo stack, Postgres stack in Chromium and in Brave |
 
+## Live client comparison (2026-10-15)
+Our client (production build of branch `chore/hardening`) running locally against the Postgres server, loaded with a fresh copy of production data (9,995 donations), compared with `https://www.harekrishnavizag.org` (read-only visits): 39 pages (public pages plus a blog, event, festival and product detail page) x desktop and phone viewport = 78 checks. Same HTTP status 78/78; same page title and meta tags 78/78; same image, link and heading counts 78/78; every screenshot within 0.5% pixels (55 of 78 exactly 0%); no JavaScript errors on either side. Visible text identical on 70/78; the other 8 are live countdown timers a few seconds apart (6) and the festival detail date (2), which is a client-side time-zone effect (the live host renders in UTC; run locally with TZ=UTC the page is identical, and the API returns the same `eventDate` on both). Not compared against live: admin screens and anything that writes (needs real credentials and would change production data).
+
 ## Decisions by the owner (2026-10-15)
 - Protections stay on (they do not change behavior for normal use). The extra rate limits on `/payments/subscription` and `/payments/verify` were removed (not in the old code).
 - Everything else must behave exactly like the old APIs.
