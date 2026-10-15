@@ -70,6 +70,24 @@ donationAdminRouter.post(
   donationsAdminMiddleware,
   donationAdminController.reconcilePending
 );
+donationAdminRouter.get(
+  "/prasadam-requests",
+  authMiddleware,
+  donationsAdminMiddleware,
+  donationAdminController.listPrasadamRequests
+);
+donationAdminRouter.get(
+  "/prasadam-export",
+  authMiddleware,
+  donationsAdminMiddleware,
+  donationAdminController.exportPrasadamCsv
+);
+donationAdminRouter.put(
+  "/transactions/:id/prasadam-status",
+  authMiddleware,
+  donationsAdminMiddleware,
+  donationAdminController.updatePrasadamStatus
+);
 donationAdminRouter.post(
   "/upload-image",
   authMiddleware,

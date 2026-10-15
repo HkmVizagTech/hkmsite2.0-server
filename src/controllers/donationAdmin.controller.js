@@ -3,8 +3,9 @@ import { donations } from "../db/tables.js";
 import { uploadToR2 } from "../utils/r2.js";
 import { createRazorpayInstance } from "./payment.controller.js";
 import { completeDonation } from "../services/paymentCompletion.service.js";
-import { castFilter } from "../domain/donationCast.js";
-import { istDayStart, istDayEnd } from "../config/timezone.js";
+import { castFilter, defaultsToPersist } from "../domain/donationCast.js";
+import { IST, istDayStart, istDayEnd } from "../config/timezone.js";
+import * as prasadamService from "../services/prasadam.service.js";
 import {
   dccReceiptStatus,
   isSweepRunning,
@@ -31,6 +32,15 @@ import {
 const DONATIONS_PAGE_FILTER = {
   $or: [{ sourcePage: DONATIONS_DOMAIN_PATTERN }, { sourcePage: "/donations" }, { type: "Donation" }],
 };
+
+const PRASADAM_TRACKED = [
+  "prasadamStatus",
+  "prasadamCourier",
+  "prasadamTrackingNumber",
+  "prasadamNotes",
+  "prasadamDispatchedAt",
+  "prasadamDeliveredAt",
+];
 
 const SUCCESS_STATUSES = ["completed"];
 const BY_NEWEST = { createdAt: -1, _id: 1 };
@@ -240,6 +250,11 @@ const donationAdminController = {
           certificate: txn.certificate,
           wantPrasadam: txn.wantPrasadam,
           prasadamAddress: txn.prasadamAddress,
+          prasadamStatus: txn.prasadamStatus,
+          prasadamCourier: txn.prasadamCourier,
+          prasadamTrackingNumber: txn.prasadamTrackingNumber,
+          prasadamDispatchedAt: txn.prasadamDispatchedAt,
+          prasadamDeliveredAt: txn.prasadamDeliveredAt,
           receiptNumber: txn.receiptNumber,
           dccSyncStatus: txn.dccSyncStatus,
           razorpayPaymentId: txn.razorpayPaymentId,
@@ -644,6 +659,89 @@ const donationAdminController = {
     } catch (error) {
       console.error("donationAdmin.reconcilePending error:", error);
       res.status(500).json({ success: false, message: error.message || "Reconcile failed" });
+    }
+  },
+
+  listPrasadamRequests: async (req, res) => {
+    try {
+      const out = await prasadamService.listRequests({
+        scope: DONATIONS_PAGE_FILTER,
+        dateMatch: buildDateRangeMatch(req.query.from, req.query.to),
+        query: req.query,
+      });
+      res.status(200).json(out);
+    } catch (error) {
+      console.error("donationAdmin.listPrasadamRequests error:", error);
+      res.status(500).json({ success: false, message: "Failed to fetch prasadam requests" });
+    }
+  },
+
+  updatePrasadamStatus: async (req, res) => {
+    try {
+      const { id } = req.params;
+      if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
+        return res.status(400).json({ success: false, message: "Invalid transaction ID" });
+      }
+      const status = req.body && req.body.prasadamStatus;
+      if (!prasadamService.PRASADAM_STATUSES.includes(status)) {
+        return res.status(400).json({
+          success: false,
+          message: "prasadamStatus must be one of: pending, dispatched, delivered, cancelled",
+        });
+      }
+
+      const donation = await donations.findOne({ _id: id, ...DONATIONS_PAGE_FILTER });
+      if (!donation) return res.status(404).json({ success: false, message: "Transaction not found" });
+      if (!donation.wantPrasadam) {
+        return res
+          .status(400)
+          .json({ success: false, message: "This donation has no Maha Prasadam request to track." });
+      }
+      if (donation.status !== "completed") {
+        return res.status(400).json({ success: false, message: "Prasadam is only sent for completed donations." });
+      }
+
+      const next = prasadamService.applyStatusUpdate(donation, req.body);
+      // Mongoose save() validated the required paths and wrote only what changed.
+      if (!donation.donorName || donation.amount == null) throw new Error("donation validation failed");
+      const same = (a, b) => (a ?? null) === (b ?? null) || (a instanceof Date && b instanceof Date && +a === +b);
+      const patch = {};
+      const unset = [];
+      for (const k of PRASADAM_TRACKED) {
+        if (next[k] === undefined) {
+          if (donation[k] != null) unset.push(k);
+        } else if (!same(next[k], donation[k])) patch[k] = next[k];
+      }
+      let updated = donation;
+      if (unset.length || Object.keys(patch).length) {
+        const raw = await donations.findById(donation._id, { lean: true });
+        updated = await donations.updateById(donation._id, {
+          ...defaultsToPersist(raw, donation, ["utm", "prasadamAddress"]),
+          ...patch,
+          ...(unset.length ? { $unset: unset } : {}),
+        });
+      }
+      res.status(200).json({ success: true, message: `Prasadam request marked ${status}`, donation: updated });
+    } catch (error) {
+      console.error("donationAdmin.updatePrasadamStatus error:", error);
+      res.status(500).json({ success: false, message: "Failed to update prasadam status" });
+    }
+  },
+
+  exportPrasadamCsv: async (req, res) => {
+    try {
+      const csv = await prasadamService.buildCsv({
+        scope: DONATIONS_PAGE_FILTER,
+        dateMatch: buildDateRangeMatch(req.query.from, req.query.to),
+        query: req.query,
+      });
+      const stamp = new Date().toLocaleDateString("en-CA", { timeZone: IST });
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="donations-prasadam-dispatch-${stamp}.csv"`);
+      res.status(200).send(csv);
+    } catch (error) {
+      console.error("donationAdmin.exportPrasadamCsv error:", error);
+      res.status(500).json({ success: false, message: "Failed to export prasadam CSV" });
     }
   },
 };

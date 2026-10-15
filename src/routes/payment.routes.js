@@ -20,9 +20,8 @@ const orderRateLimit = rateLimit({
 });
 
 paymentRouter.post("/order", orderRateLimit, express.json(), paymentController.createOrder);
-paymentRouter.post("/subscription", orderRateLimit, express.json(), paymentController.createSubscription);
-const verifyRateLimit = rateLimit({ windowMs: 60 * 1000, max: 60, standardHeaders: true, legacyHeaders: false });
-paymentRouter.post("/verify", verifyRateLimit, express.json(), paymentController.verifyPayment);
+paymentRouter.post("/subscription", express.json(), paymentController.createSubscription);
+paymentRouter.post("/verify", express.json(), paymentController.verifyPayment);
 
 const upiFallbackRateLimit = rateLimit({ windowMs: 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false });
 paymentRouter.post("/upi-fallback/opened", upiFallbackRateLimit, express.json(), upiFallbackController.opened);
