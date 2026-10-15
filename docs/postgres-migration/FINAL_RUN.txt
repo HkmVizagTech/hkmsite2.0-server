@@ -1,12 +1,12 @@
-final verification run 2 started 10-15 12:08
+final verification run 2 started 10-15 12:46
 routes: 216
 1 shapes (all documents, strict nulls): All documents round-trip identically
-2 reads: parity reads: 462/470 identical | order-only differences (same rows, different order): 22
+2 reads: parity reads: 462/470 identical | order-only differences (same rows, different order): 24
 3 writes-shop exit=0 | 147 steps compared, 0 difference group(s) 
 3 writes-content exit=0 | write steps: 238/238 identical 
 3 writes-donations exit=0 | writes parity: 349 steps identical, 0 differing, 3 expected (intentional) differences 
-4 payment flows exit=1 | 19 pass, 1 fail | 1 scenario(s) differ
+4 payment flows exit=0 | 20 pass, 0 fail | all scenarios identical
 5 matrix: matrix: 2087/2120 identical (216 routes x 10 identities) | differing routes: 12
 6 headers: response headers identical for all sampled requests (4 origins x 2 encodings x 18 paths)
-7 generic fuzz (all routes, quick): 
-FINISHED 12:24
+7 generic fuzz (all routes, quick): fuzz /: 67471/69077 identical, 2365 order-only
+FINISHED 13:02

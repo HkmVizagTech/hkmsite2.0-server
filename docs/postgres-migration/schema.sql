@@ -1,6 +1,7 @@
 -- DRAFT Postgres schema for hkmsite2.0 (generated from src/models/*.js).
 -- Foreign keys are deliberately absent (except the two CASCADEs that mirror embedded arrays): MongoDB never enforced
 -- references, so deletes must keep succeeding and leave dangling ids exactly as before.
+-- `seq` remembers insertion order: unsorted reads return rows in the order MongoDB returned documents (natural order).
 -- `extra` holds any top-level field the old MongoDB documents had that the schema does not model (kept lossless).
 -- Columns that have a DEFAULT are nullable on purpose: NULL means "field was absent in the old MongoDB document",
 -- which keeps lean reads byte-identical. The repository fills defaults on normal reads like Mongoose did.
@@ -58,7 +59,8 @@ CREATE TABLE users (
   pref_weekly_report boolean DEFAULT false,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
-  extra jsonb
+  extra jsonb,
+  seq bigint GENERATED ALWAYS AS IDENTITY
 );
 
 -- ───────────── donors ─────────────
@@ -79,7 +81,8 @@ CREATE TABLE donors (
   otp_last_requested_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
-  extra jsonb
+  extra jsonb,
+  seq bigint GENERATED ALWAYS AS IDENTITY
 );
 CREATE INDEX donors_dcc_idx ON donors(dcc_donor_number) WHERE dcc_donor_number IS NOT NULL;
 CREATE INDEX donors_name_idx ON donors(name);
@@ -94,7 +97,8 @@ CREATE TABLE donor_issues (
   responded_by text,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
-  extra jsonb
+  extra jsonb,
+  seq bigint GENERATED ALWAYS AS IDENTITY
 );
 CREATE INDEX donor_issues_status_idx ON donor_issues(status, created_at DESC);
 
@@ -110,7 +114,8 @@ CREATE TABLE events (
   status text DEFAULT 'upcoming' CHECK (status IN ('upcoming','completed','cancelled')),
   created_by text,
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
-  extra jsonb
+  extra jsonb,
+  seq bigint GENERATED ALWAYS AS IDENTITY
 );
 
 CREATE TABLE event_registrations (
@@ -124,7 +129,8 @@ CREATE TABLE event_registrations (
   attendance_at timestamptz,
   attendance_scanned_by text,
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
-  extra jsonb
+  extra jsonb,
+  seq bigint GENERATED ALWAYS AS IDENTITY
 );
 CREATE INDEX event_registrations_event_idx ON event_registrations(event_id);
 
@@ -138,7 +144,8 @@ CREATE TABLE festival_donations (
   meta jsonb,
   created_by text,
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
-  extra jsonb
+  extra jsonb,
+  seq bigint GENERATED ALWAYS AS IDENTITY
 );
 
 CREATE TABLE festival_showcases (
@@ -157,7 +164,8 @@ CREATE TABLE festival_showcases (
   testimonials jsonb DEFAULT '[]',
   created_by text,
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
-  extra jsonb
+  extra jsonb,
+  seq bigint GENERATED ALWAYS AS IDENTITY
 );
 
 -- ───────────── campaigners ─────────────
@@ -167,7 +175,8 @@ CREATE TABLE temple_devotees (
   dcc_enrolled_by_id int,
   status text DEFAULT 'active' CHECK (status IN ('active','hidden')),
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
-  extra jsonb
+  extra jsonb,
+  seq bigint GENERATED ALWAYS AS IDENTITY
 );
 
 CREATE TABLE campaigners (
@@ -180,7 +189,8 @@ CREATE TABLE campaigners (
   message text CHECK (char_length(message) <= 300),
   status text DEFAULT 'pending' CHECK (status IN ('pending','active','hidden')),
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
-  extra jsonb
+  extra jsonb,
+  seq bigint GENERATED ALWAYS AS IDENTITY
 );
 CREATE INDEX campaigners_email_idx ON campaigners(email);
 CREATE INDEX campaigners_type_idx ON campaigners(campaign_type);
@@ -193,7 +203,8 @@ CREATE TABLE plans (
   plan_id text NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (amount, account),
-  extra jsonb
+  extra jsonb,
+  seq bigint GENERATED ALWAYS AS IDENTITY
 );
 
 -- ───────────── donations (the critical table) ─────────────
@@ -262,7 +273,8 @@ CREATE TABLE donations (
   meta_purchase_sent_at timestamptz,
   created_by text,
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
-  extra jsonb
+  extra jsonb,
+  seq bigint GENERATED ALWAYS AS IDENTITY
 );
 CREATE INDEX donations_festival_idx    ON donations(festival_id);
 CREATE INDEX donations_date_idx        ON donations(date DESC);
@@ -289,7 +301,8 @@ CREATE TABLE shop_categories (
   sort_order int DEFAULT 0,
   status text DEFAULT 'active' CHECK (status IN ('active','hidden')),
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
-  extra jsonb
+  extra jsonb,
+  seq bigint GENERATED ALWAYS AS IDENTITY
 );
 
 CREATE TABLE products (
@@ -310,7 +323,8 @@ CREATE TABLE products (
   search tsvector GENERATED ALWAYS AS (
     to_tsvector('simple', coalesce(name,'')||' '||coalesce(short_description,'')||' '||immutable_join(tags,' '))
   ) STORED,
-  extra jsonb
+  extra jsonb,
+  seq bigint GENERATED ALWAYS AS IDENTITY
 );
 CREATE INDEX products_search_idx ON products USING gin(search);
 CREATE INDEX products_name_idx ON products(name);
@@ -346,7 +360,8 @@ CREATE TABLE shop_orders (
   needs_attention boolean DEFAULT false,
   whatsapp_confirmation_sent_at timestamptz, whatsapp_confirmation_error text,
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
-  extra jsonb
+  extra jsonb,
+  seq bigint GENERATED ALWAYS AS IDENTITY
 );
 CREATE INDEX shop_orders_donor_idx ON shop_orders(donor_record_id);
 CREATE INDEX shop_orders_mobile_idx ON shop_orders(customer_mobile);
@@ -376,7 +391,8 @@ CREATE TABLE shop_settings (                      -- single row
   delivery_estimate text DEFAULT 'Usually dispatched in 3–5 working days',
   updated_by text,
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
-  extra jsonb
+  extra jsonb,
+  seq bigint GENERATED ALWAYS AS IDENTITY
 );
 
 -- ───────────── content / CMS ─────────────
@@ -400,7 +416,8 @@ CREATE TABLE blogs (
   search tsvector GENERATED ALWAYS AS (
     to_tsvector('simple', coalesce(title,'')||' '||coalesce(excerpt,'')||' '||coalesce(content,''))
   ) STORED,
-  extra jsonb
+  extra jsonb,
+  seq bigint GENERATED ALWAYS AS IDENTITY
 );
 CREATE INDEX blogs_search_idx ON blogs USING gin(search);
 CREATE INDEX blogs_status_pub_idx ON blogs(status, published_at DESC);
@@ -418,7 +435,8 @@ CREATE TABLE contact_messages (
   status text DEFAULT 'new' CHECK (status IN ('new','read','responded')),
   source text DEFAULT 'contact-page',
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
-  extra jsonb
+  extra jsonb,
+  seq bigint GENERATED ALWAYS AS IDENTITY
 );
 CREATE INDEX contact_messages_created_idx ON contact_messages(created_at DESC);
 
@@ -428,7 +446,8 @@ CREATE TABLE darshans (
   position int DEFAULT 0, status text DEFAULT 'active' CHECK (status IN ('active')),
   synced_at timestamptz NOT NULL DEFAULT now(),
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
-  extra jsonb
+  extra jsonb,
+  seq bigint GENERATED ALWAYS AS IDENTITY
 );
 CREATE INDEX darshans_position_idx ON darshans(position);
 
@@ -445,7 +464,8 @@ CREATE TABLE donation_pages (                     -- singleton CMS doc keyed by 
   bank_details jsonb, contact jsonb,
   updated_by text,
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
-  extra jsonb
+  extra jsonb,
+  seq bigint GENERATED ALWAYS AS IDENTITY
 );
 
 CREATE TABLE site_content (                       -- singleton; nested blocks kept as jsonb
@@ -456,7 +476,8 @@ CREATE TABLE site_content (                       -- singleton; nested blocks ke
   festival jsonb DEFAULT '{}', construction jsonb DEFAULT '{}',
   updated_by text,
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
-  extra jsonb
+  extra jsonb,
+  seq bigint GENERATED ALWAYS AS IDENTITY
 );
 
 CREATE TABLE galleries (
@@ -467,7 +488,8 @@ CREATE TABLE galleries (
   status text DEFAULT 'active' CHECK (status IN ('active','inactive')),
   created_by text,
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
-  extra jsonb
+  extra jsonb,
+  seq bigint GENERATED ALWAYS AS IDENTITY
 );
 
 CREATE TABLE hero_banners (
@@ -476,7 +498,8 @@ CREATE TABLE hero_banners (
   link_url text DEFAULT '', "order" int DEFAULT 0, active boolean DEFAULT true,
   created_by text,
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
-  extra jsonb
+  extra jsonb,
+  seq bigint GENERATED ALWAYS AS IDENTITY
 );
 CREATE INDEX hero_banners_idx ON hero_banners(active, "order");
 
@@ -486,7 +509,8 @@ CREATE TABLE important_dates (
   type text DEFAULT 'Other' CHECK (type IN ('Ekadashi','Festival','Other')),
   created_by text,
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
-  extra jsonb
+  extra jsonb,
+  seq bigint GENERATED ALWAYS AS IDENTITY
 );
 
 CREATE TABLE media (
@@ -496,7 +520,8 @@ CREATE TABLE media (
   folder text DEFAULT 'media-library', tags text,
   uploaded_by text,
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
-  extra jsonb
+  extra jsonb,
+  seq bigint GENERATED ALWAYS AS IDENTITY
 );
 CREATE INDEX media_created_idx ON media(created_at DESC);
 CREATE INDEX media_name_trgm ON media USING gin(name gin_trgm_ops);
@@ -514,7 +539,8 @@ CREATE TABLE volunteer_events (
   form_fields jsonb DEFAULT '[]',
   created_by text,
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
-  extra jsonb
+  extra jsonb,
+  seq bigint GENERATED ALWAYS AS IDENTITY
 );
 CREATE INDEX volunteer_events_idx ON volunteer_events(status, date);
 
@@ -524,7 +550,8 @@ CREATE TABLE volunteer_registrations (
   responses jsonb DEFAULT '{}',
   status text DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected','completed')),
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
-  extra jsonb
+  extra jsonb,
+  seq bigint GENERATED ALWAYS AS IDENTITY
 );
 CREATE INDEX volunteer_registrations_event_idx ON volunteer_registrations(event_id);
 
@@ -538,7 +565,8 @@ CREATE TABLE payment_downtimes (
   severity text, status text,
   "begin" timestamptz, "end" timestamptz,
   received_at timestamptz NOT NULL DEFAULT now(),
-  extra jsonb
+  extra jsonb,
+  seq bigint GENERATED ALWAYS AS IDENTITY
 );
 CREATE INDEX payment_downtimes_dtid_idx ON payment_downtimes(downtime_id);
 CREATE INDEX payment_downtimes_recv_idx ON payment_downtimes(received_at);

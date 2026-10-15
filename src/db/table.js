@@ -72,7 +72,7 @@ function defineTable({
         doc._id = val;
         continue;
       }
-      if (hiddenSet.has(col)) continue;
+      if (hiddenSet.has(col) || col === "seq") continue;
       if (col === "extra") {
         if (val) for (const [k, v] of Object.entries(val)) if (k !== "$nulls" && lean && !(k in doc)) extras[k] = v;
         continue;
@@ -266,13 +266,15 @@ function defineTable({
     }
     return list.join(", ");
   };
+  const hasSeq = () => tableColumns.get(table)?.has("seq") === true;
   const orderBy = (sort) => {
-    if (!sort) return "";
-    const items = Object.entries(sort).map(
+    const items = Object.entries(sort ?? {}).map(
       ([f, d]) => `${qi(fieldToCol(f))} ${d === -1 || d === "desc" ? "DESC NULLS LAST" : "ASC NULLS FIRST"}`
     );
+    if (hasSeq()) items.push('"seq" ASC');
     return items.length ? ` ORDER BY ${items.join(", ")}` : "";
   };
+
   const wherePart = (filter, params) => {
     const w = buildWhere(filter, params);
     return w.sql ? ` WHERE ${w.sql}` : "";

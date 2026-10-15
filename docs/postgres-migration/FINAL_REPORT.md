@@ -14,12 +14,19 @@ Method: old build (upstream `origin/main`, MongoDB) and new build (Postgres) run
 | Donations writes (incl. new Prasadam routes) | 349 steps identical, 0 differing, 3 intentional |
 | Payment flows with mocked outside services | 20/20 scenarios identical incl. exact outbound requests to Razorpay, DCC, Flaxxa/Gupshup, Meta, DRM, R2, couriers (one scenario was flaky from test row timestamps; fixed, 5/5) |
 | Role matrix, 216 routes x 10 identities | 2087/2120; the 12 differing routes are clock noise, tie order, or the intentional `POST /donations` change |
+| Broad fuzz, all 216 routes (page/limit/search/filter extremes, regex chars, injection strings, unicode, wrong-typed/null/huge bodies, invalid JSON, bad ids) | 67,471 of 69,077 identical, 2,365 more identical apart from row order; the 10 route groups with differences are all explained below |
 | Response headers (CORS, cache, security) | identical, 144 combinations |
 | Client | production build passes (105 routes); 66 pages load clean on both stacks; 14 browser flows (contact form, admin login/donations/Prasadam tabs/blog editor/dashboard/shop, donor session, add to cart...) identical on Mongo stack, Postgres stack in Chromium and in Brave |
 
 ## Decisions by the owner (2026-10-15)
 - Protections stay on (they do not change behavior for normal use). The extra rate limits on `/payments/subscription` and `/payments/verify` were removed (not in the old code).
 - Everything else must behave exactly like the old APIs.
+
+## What the last fuzz differences are (all explained)
+Timestamps 1-9 ms apart on records the test itself wrote (`PUT /users/update`, `GET /users/`, `PUT /donation-page/`, `PUT /site-content/`, `POST /temple-devotees/admin`, `send-pending-reminders` window); Mongo's arbitrary tie order (`/donations/payment-failures`, `/devotees` page boundaries); the blog view counter, which both builds increment fire-and-forget so the value seen depends on timing; `PUT /donations/:id` with a bad amount (intentional field whitelist).
+
+## Natural order
+Unsorted reads now return rows in the order MongoDB returned documents (insertion order) through a hidden `seq` column; this fixed `GET /preacher/search-donor`, which picked a different first donor because one donor record sits out of ID order in the real data.
 
 ## Intentional differences that remain (only for abusive or unusual input; normal flows are identical)
 1. `POST /donations` requires an admin login (was open to anyone); no client calls it.
