@@ -774,7 +774,7 @@ async function main() {
   const mongo = new MongoClient(SRC);
   await mongo.connect();
   const mdb = mongo.db();
-  const pg = new Client({ connectionString: DEST });
+  const pg = new Client({ connectionString: DEST, ssl: process.env.PGSSL === "true" ? { rejectUnauthorized: false } : undefined });
   await pg.connect();
 
   const existing = new Set((await mdb.listCollections().toArray()).map((c) => c.name));

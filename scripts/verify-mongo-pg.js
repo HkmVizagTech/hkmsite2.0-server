@@ -25,7 +25,7 @@ const check = (name, a, b) => {
   const m = new MongoClient(process.env.SRC_MONGO_URI);
   await m.connect();
   const db = m.db();
-  const pg = new Client({ connectionString: process.env.DEST_PG_URL });
+  const pg = new Client({ connectionString: process.env.DEST_PG_URL, ssl: process.env.PGSSL === "true" ? { rejectUnauthorized: false } : undefined });
   await pg.connect();
   const one = async (sql) => (await pg.query(sql)).rows[0].v;
 

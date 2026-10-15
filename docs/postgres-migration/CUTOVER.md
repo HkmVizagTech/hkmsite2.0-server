@@ -1,27 +1,29 @@
 # Production cutover runbook (MongoDB Atlas -> Railway Postgres)
 
-Not executed yet. Everything below was rehearsed locally against a copy of production data; the real run needs an explicit go-ahead.
+State: Railway Postgres service created in the production project, public TCP proxy on for the migration, schema created and rehearsed with a fresh copy (see FINAL_REPORT.md). The API service still runs the old Mongo build and is not connected to Postgres.
 
 ## Before the day
-1. Railway: add a Postgres service to the same project and region as the API (private networking, `DATABASE_URL` referenced from the API service). Turn on volume backups and schedule `pg_dump` to R2.
-2. Rehearse on a **staging** Railway Postgres with a fresh Atlas dump: `npm run db:init`, `npm run db:migrate-from-mongo`, `npm run db:verify`, then run the parity harness against a staging build. Time each step.
-3. Decide the two known data issues: two donations share a receipt number (`HKMI|2026|D/VSP|10374`, `...|10267`) and two reference deleted festivals. The unique index on `receipt_number` (commented in schema.sql) can only be enabled once the duplicates are resolved.
-4. Deploy-ready build: branch `postgres-migration`, Node 22, env vars from `.env.example` (`DATABASE_URL` new, `MONGO_URI` no longer used).
+1. Postgres service -> Backups tab: turn on scheduled backups. Optionally schedule a `pg_dump` to R2.
+2. Decide the build to deploy: the branch `postgres-migration` must be on GitHub for Railway to build it. Pushing a branch other than `main` does not change production. Recommended: API service -> Settings -> Source -> Branch: switch from `main` to `postgres-migration` only at cutover, and switch back if rolling back. Merge into `main` only after the production test below passes.
+3. Re-fetch upstream (`git fetch`), port anything new pushed to `main`, re-run `FINAL_RUN` checks.
+4. Prepare the API variables (do not set yet): `DATABASE_URL` = reference `${{Postgres.DATABASE_URL}}` (private network). Keep `MONGO_URI` and every other variable as they are (Mongo stays untouched for rollback). Check `PORT` is left to Railway.
+5. Choose a quiet hour. Expected downtime: a few minutes.
 
-## Cutover (target: a few minutes, quiet hour)
-The data set is small (about 22 MB), so the final sync is a full reload rather than a delta: re-running the migration without `--truncate` only adds new documents and would leave rows that changed in Mongo (for example a pending donation completed since the first copy) stale.
-1. Stop writes: scale the current API to zero (or put it in maintenance). Razorpay retries webhooks for about 24 h, so webhooks received during the pause are redelivered.
-2. `npm run db:init` (first time only).
-3. `SRC_MONGO_URI=<atlas> DEST_PG_URL=<railway public url> node scripts/migrate-mongo-to-pg.js --truncate`
-4. `npm run db:verify` with the same variables. Every check must pass (counts, per-status sums, monthly totals, receipt numbers, counters, sampled documents).
-5. Deploy the new build with `DATABASE_URL` set. Boot seeders are idempotent.
-6. Smoke test: `/health`, home page, a donation page, `/donor-auth/send-otp` flow, admin login and donations list, one low-value live donation end to end (order, pay, webhook, receipt number, WhatsApp).
-7. Re-enable jobs if they were paused (reconcile, DCC sweep, reminders, tracking).
+## Cutover
+1. Stop writes: API service -> Deployments -> remove/stop the running deployment (or scale to zero). Razorpay retries webhooks for about 24 h, so webhooks arriving during the pause are redelivered; WhatsApp/DCC steps resume afterwards.
+2. From the laptop (public proxy URL, `PGSSL=true`, `PG_POOL_MAX=2`): `SRC_MONGO_URI=<atlas uri> DEST_PG_URL=<railway public url> node scripts/migrate-mongo-to-pg.js --truncate` (takes about 15 seconds; a full reload, not a delta, so rows changed since the rehearsal are correct).
+3. `npm run db:verify` and `node scripts/parity/shapes.mjs` and `node scripts/parity/relcheck.mjs` with the same variables (REL_MONGO / REL_PG for relcheck). All must pass.
+4. Set the API variable `DATABASE_URL`, switch the source branch to `postgres-migration`, and deploy. The API starts on Postgres; the boot seeders are idempotent.
+5. Smoke test: `/health` (db connected), home page, a donation page, admin login, admin donations list and Prasadam tabs, then one low-value real donation end to end (order, payment, webhook, DCC receipt number, WhatsApp receipt). Compare the live site against the earlier read-only comparison scripts (`scripts/parity/live-api.mjs` needs the admin login; `pages.mjs`).
+6. Turn off the Postgres public access (Settings -> Networking -> remove the TCP proxy) once the API is verified on the private address.
+7. Merge `postgres-migration` into `main` (server) and `chore/hardening` into `main`/`dev` (client) following your branch workflow, then switch the Railway source branch back to `main`.
 
 ## Rollback
-- Within the first hours: redeploy the previous build (branch `main`, Mongo). Atlas is untouched and only frozen at step 1, so it is complete up to the freeze. Donations taken on Postgres after the cutover would be missing there; export them (`donations` where `created_at > <cutover time>`) and re-enter or script them.
-- Keep Atlas read-only for several weeks and do not delete it until the Postgres backups are proven.
+- Switch the API source branch back to `main` and remove (or unset) `DATABASE_URL`; redeploy. Atlas is untouched, so it is complete up to the freeze in step 1. Donations taken on Postgres after the cutover would be missing there: export them (`donations` where `created_at > <cutover time>`) and re-enter or script them.
+- Keep Atlas read-only for several weeks and do not delete it until Postgres backups are proven.
 
 ## After
-- Monitor Railway Postgres disk and memory; keep `PG_POOL_MAX` at 10-20 per instance.
-- `mongoose` and `mongodb` remain dev dependencies only for `scripts/migrate-mongo-to-pg.js`, `scripts/verify-mongo-pg.js` and `scripts/parity/`. Remove them once those are no longer needed.
+- Monitor Railway Postgres disk and memory. `PG_POOL_MAX` defaults to 15 per API instance.
+- `mongoose` and `mongodb` are dev dependencies used only by the migration and parity tools.
+- Resolve the two duplicated receipt numbers before adding a unique index.
+- Delete `/Users/giridhar/Developer/hkm-vizag/.localdb` (it holds copies of real donor data and the Railway connection string) and change the admin password that was shared in the chat.

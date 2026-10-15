@@ -1,8 +1,8 @@
 import { MongoClient } from "mongodb";
 import pg from "pg";
 
-const m = new MongoClient("mongodb://127.0.0.1:27018/m_cmp"); await m.connect(); const db = m.db();
-const p = new pg.Client({ connectionString: "postgres://hkm@localhost:5433/pg_cmp" }); await p.connect();
+const m = new MongoClient(process.env.REL_MONGO ?? "mongodb://127.0.0.1:27018/m_cmp"); await m.connect(); const db = m.db();
+const p = new pg.Client({ connectionString: process.env.REL_PG ?? "postgres://hkm@localhost:5433/pg_cmp", ssl: process.env.PGSSL === "true" ? { rejectUnauthorized: false } : undefined }); await p.connect();
 const q = async (sql) => (await p.query(sql)).rows;
 const eq = (name, a, b) => console.log(`${JSON.stringify(a) === JSON.stringify(b) ? "IDENTICAL" : "DIFFERENT "}  ${name}`);
 const S = (arr) => [...arr].sort();
