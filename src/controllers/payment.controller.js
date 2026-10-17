@@ -478,45 +478,85 @@ const paymentController = {
     }
   },
 
+  // SECURITY: the Razorpay signature only proves that the order (or
+  // subscription) and the payment belong together — not that they belong to
+  // the donation being completed. Before this check, a ₹100 payment on one
+  // order could be sent with the donationId of an unpaid ₹10,00,000
+  // donation and complete it (DCC 80G receipt + WhatsApp), reusable without
+  // limit; a `{"$ne": null}` donationId completed an arbitrary pending one.
+  // A donation's order/subscription is fixed when it is created and never
+  // reassigned, so a genuine payment always matches its own donation.
   verifyPayment: async (req, res) => {
     try {
-      const {
-        razorpay_order_id, razorpay_payment_id, razorpay_signature,
-        razorpay_subscription_id, donationId,
-      } = req.body;
-      if (!razorpay_payment_id || !razorpay_signature) {
+      // Plain strings only — an object here would be a Mongo query operator.
+      const str = (v) => (typeof v === 'string' ? v.trim() : '');
+      const orderId = str(req.body.razorpay_order_id);
+      const paymentId = str(req.body.razorpay_payment_id);
+      const signature = str(req.body.razorpay_signature);
+      const subscriptionId = str(req.body.razorpay_subscription_id);
+      const rawDonationId = req.body.donationId;
+      if (rawDonationId != null && rawDonationId !== '' && !(typeof rawDonationId === 'string' && /^[0-9a-f]{24}$/i.test(rawDonationId))) {
+        return res.status(400).json({ message: 'Invalid donation reference' });
+      }
+      const donationId = rawDonationId || null;
+
+      if (!paymentId || !signature) {
         return res.status(400).json({ message: 'Payment verification details missing' });
       }
-      const isSubscription = !!razorpay_subscription_id;
-      if (!isSubscription && !razorpay_order_id) {
+      const isSubscription = !!subscriptionId;
+      if (!isSubscription && !orderId) {
         return res.status(400).json({ message: 'Payment verification details missing' });
       }
 
       const query = donationId
         ? { _id: donationId }
         : isSubscription
-          ? { subscriptionId: razorpay_subscription_id }
-          : { razorpayOrderId: razorpay_order_id };
+          ? { subscriptionId }
+          : { razorpayOrderId: orderId };
       const donation = await donationModel.findOne(query);
       if (!donation) return res.status(404).json({ message: 'Donation not found' });
+
+      // The payment must be for THIS donation's own order / subscription.
+      const belongs = isSubscription
+        ? !!donation.subscriptionId && donation.subscriptionId === subscriptionId
+        : !!donation.razorpayOrderId && donation.razorpayOrderId === orderId;
+      if (!belongs) {
+        console.warn(
+          `verifyPayment: ${isSubscription ? 'subscription' : 'order'} ${isSubscription ? subscriptionId : orderId} ` +
+          `does not belong to donation ${String(donation._id)} — rejected`
+        );
+        return res.status(400).json({ message: 'This payment does not belong to this donation' });
+      }
 
       const account = resolveAccount(donation.paymentAccount);
       if (!account.key_secret) return res.status(500).json({ message: 'Razorpay keys not configured on server' });
 
       // Subscriptions sign as payment_id|subscription_id; one-time orders as
       // order_id|payment_id.
-      const signedBody = isSubscription
-        ? `${razorpay_payment_id}|${razorpay_subscription_id}`
-        : `${razorpay_order_id}|${razorpay_payment_id}`;
+      const signedBody = isSubscription ? `${paymentId}|${subscriptionId}` : `${orderId}|${paymentId}`;
       const expected = crypto.createHmac('sha256', account.key_secret).update(signedBody).digest('hex');
-      if (expected !== razorpay_signature) {
+      const sigOk = expected.length === signature.length &&
+        crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
+      if (!sigOk) {
         return res.status(400).json({ message: 'Invalid payment signature' });
+      }
+
+      // One payment completes one donation. A monthly charge the
+      // subscription.charged webhook already recorded on its own copy of this
+      // subscription is the donor's own payment: answer with that record.
+      const other = await donationModel.findOne({ razorpayPaymentId: paymentId, _id: { $ne: donation._id } });
+      if (other) {
+        if (isSubscription && other.subscriptionId === subscriptionId) {
+          return res.status(200).json({ message: 'Payment verified', donation: other });
+        }
+        console.warn(`verifyPayment: payment ${paymentId} already recorded on donation ${String(other._id)} — rejected for ${String(donation._id)}`);
+        return res.status(409).json({ message: 'This payment is already recorded against another donation' });
       }
 
       const updated = await markDonationCompleted({
         donationId: donation._id,
-        orderId: isSubscription ? undefined : razorpay_order_id,
-        paymentId: razorpay_payment_id,
+        orderId: isSubscription ? undefined : orderId,
+        paymentId,
       });
 
       res.status(200).json({ message: 'Payment verified', donation: updated });
@@ -527,7 +567,7 @@ const paymentController = {
       // Resend WhatsApp actions).
       if (updated) {
         setImmediate(() => {
-          runPostCompletionPipeline(updated._id, razorpay_payment_id).catch((err) => {
+          runPostCompletionPipeline(updated._id, paymentId).catch((err) => {
             console.error('Background pipeline error for donation', String(updated._id), err && err.message ? err.message : err);
           });
         });
