@@ -222,6 +222,14 @@ donationSchema.index({ festivalId: 1 });
 donationSchema.index({ date: -1 });
 donationSchema.index({ status: 1 });
 donationSchema.index({ razorpayOrderId: 1 });
+// One Razorpay payment completes one donation. Unique so that two copies of
+// the same subscription.charged webhook arriving at the same moment cannot
+// both record a month (the "already recorded?" check alone isn't atomic).
+// Partial: many records have no payment id at all.
+donationSchema.index(
+  { razorpayPaymentId: 1 },
+  { unique: true, name: "uniq_razorpayPaymentId", partialFilterExpression: { razorpayPaymentId: { $type: "string" } } }
+);
 donationSchema.index({ donorMobile: 1 });
 donationSchema.index({ utrNumber: 1 });
 donationSchema.index({ "upiFallback.status": 1, "upiFallback.claimedAt": -1 });
@@ -232,5 +240,12 @@ donationSchema.index({ wantPrasadam: 1, status: 1, "prasadamAddress.pincode": 1 
 donationSchema.index({ manualEnteredBy: 1 });
 
 const donationModel = mongoose.model("donation", donationSchema);
+
+// Index builds run in the background at startup and fail silently. The unique
+// payment-id index fails if older duplicate records already exist; say so in
+// the logs instead of quietly running without it.
+donationModel.on("index", (err) => {
+  if (err) console.error("donation indexes: build failed —", err && err.message ? err.message : err);
+});
 
 module.exports = { donationModel };

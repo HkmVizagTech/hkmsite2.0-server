@@ -2,6 +2,7 @@ const express = require("express");
 const { donationController } = require("../controllers/donation.controller");
 const { upiFallbackController } = require("../controllers/upiFallback.controller");
 const { paymentFailuresController } = require("../controllers/paymentFailures.controller");
+const { subscriptionsAdminController } = require("../controllers/subscriptionsAdmin.controller");
 const { authMiddleware, adminMiddleware, preacherModuleMiddleware } = require("../middlewares/auth.middleware");
 
 const donationRouter = express.Router();
@@ -17,6 +18,8 @@ donationRouter.get("/utm-transactions", authMiddleware, adminMiddleware, donatio
 donationRouter.get("/report", authMiddleware, adminMiddleware, donationController.getReport);
 donationRouter.get("/whatsapp-audit", authMiddleware, adminMiddleware, donationController.whatsappAudit);
 donationRouter.get("/needs-manual-receipt", authMiddleware, adminMiddleware, donationController.needsManualReceipt);
+// Monthly seva subscriptions (Admin → Donations → Monthly Seva). Above /:id.
+donationRouter.get("/subscriptions", authMiddleware, adminMiddleware, subscriptionsAdminController.list);
 // DCC receipts panel (Admin → Donations → DCC receipts). Above /:id.
 donationRouter.get("/dcc-status", authMiddleware, adminMiddleware, donationController.dccStatus);
 donationRouter.post("/dcc-push-all", authMiddleware, adminMiddleware, donationController.dccPushAll);

@@ -203,8 +203,18 @@ async function processWebhookEventInline(event) {
       break;
     }
     case 'subscription.activated': {
+      // Marks the unpaid sign-up record "active" (mandate approved, first
+      // charge on its way) — only while it is still pending. Razorpay can send
+      // this after the first charge was already confirmed; overwriting a
+      // completed record made the next charge look like a later month, which
+      // cloned a duplicate record and sent a second WhatsApp receipt.
       const sub = event.payload && event.payload.subscription && event.payload.subscription.entity;
-      if (sub) await donationModel.findOneAndUpdate({ subscriptionId: sub.id }, { status: 'active' });
+      if (sub) {
+        await donationModel.findOneAndUpdate(
+          { subscriptionId: sub.id, status: 'pending', razorpayPaymentId: { $in: [null, ''] } },
+          { status: 'active' }
+        );
+      }
       break;
     }
     case 'subscription.charged': {
