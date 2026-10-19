@@ -10,6 +10,7 @@ const { startDccSweepJob } = require("./src/jobs/dccReceiptSweep");
 const { ensureDefaultShopCategories } = require("./src/services/shopBootstrap.service");
 const { ensureDefaultFestivalDonations } = require("./src/services/festivalDonationBootstrap.service");
 const { ensureBlogDrafts } = require("./src/services/blogDraftsBootstrap.service");
+const { ensureEventSlugs } = require("./src/controllers/event.controller");
 const PORT = process.env.PORT || 8080;
 
 const startServer =async()=>{
@@ -35,6 +36,12 @@ const startServer =async()=>{
         // Recorded in bootstrap_runs after success, so it never re-runs.
         ensureBlogDrafts().catch((err) => {
             console.error("Blog drafts import failed (non-fatal):", err && err.message ? err.message : err);
+        });
+
+        // Every event gets a web address (/events/<slug>) made from its title.
+        // Idempotent: only events without one are touched.
+        ensureEventSlugs().catch((err) => {
+            console.error("Event slug bootstrap failed (non-fatal):", err && err.message ? err.message : err);
         });
 
         app.listen( PORT,()=>{
