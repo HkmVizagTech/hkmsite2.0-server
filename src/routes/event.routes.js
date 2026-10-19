@@ -7,12 +7,14 @@ const upload = require("../utils/multer");
 
 const eventRouter = express.Router();
 
-const { register, listRegistrations, markAttendance, publicCheckin } = require("../controllers/registration.controller");
+const { register, listRegistrations, markAttendance, publicCheckin, verifyRegistrationPayment } = require("../controllers/registration.controller");
 
 eventRouter.get("/", eventController.list);
 eventRouter.get("/:id", eventController.get);
 
 eventRouter.post("/:id/register", upload.any(), register);
+// Paid events: confirms the Razorpay payment for one registration.
+eventRouter.post("/:id/registrations/:regId/verify-payment", express.json(), verifyRegistrationPayment);
 
 eventRouter.post(
 	"/",

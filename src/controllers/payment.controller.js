@@ -125,7 +125,13 @@ async function processWebhookEventInline(event) {
             setImmediate(() => sendOrderWhatsApp(shopResult.order));
           }
         } else {
-          console.warn('No donation or shop order found for order:', orderId);
+          // An event registration fee (events with payment switched on) —
+          // marks the registration paid even when the visitor closed the
+          // page before the form's own confirmation call ran.
+          const { markRegistrationPaidByOrder } = require('./registration.controller');
+          const reg = await markRegistrationPaidByOrder({ orderId, paymentId: payment.id });
+          if (reg) console.log('Event registration paid for order', orderId);
+          else console.warn('No donation, shop order or event registration found for order:', orderId);
         }
       }
       break;
