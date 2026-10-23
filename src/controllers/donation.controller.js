@@ -460,7 +460,22 @@ const donationController = {
         // preachers keyed on the same numbers. Read below, after devoteeId,
         // which keeps its priority.
         dccEnrolledById: dccEnrolledByIdRaw,
+        // The seva DRM's caller picked, as DCC wants it (see cleanDccSeva).
+        dccSevaCategory,
+        dccSevaSubCategory,
+        dccSevaSubCategoryCode,
       } = req.body;
+
+      // Used only when the switch is on and the three values are well-formed; otherwise
+      // this is null and nothing below behaves any differently.
+      const dccSeva =
+        process.env.DCC_USE_DRM_SEVA === "true"
+          ? require("../services/dcc.service").cleanDccSeva({
+              category: dccSevaCategory,
+              subCategory: dccSevaSubCategory,
+              code: dccSevaSubCategoryCode,
+            })
+          : null;
 
       const name = String(donorName || "").trim();
       const amt = Number(amount);
@@ -515,6 +530,14 @@ const donationController = {
         amount: amt,
         type: type || "Manual Entry",
         sevaName: sevaName || undefined,
+        // Kept on the donation so a retry uses the same seva.
+        ...(dccSeva
+          ? {
+              dccSevaCategory: dccSeva.sevaCategory,
+              dccSevaSubCategory: dccSeva.sevaSubCategory,
+              dccSevaSubCategoryCode: String(dccSeva.sevaSubCategoryCode),
+            }
+          : {}),
         sourcePage: "admin-manual",
         status: "pending", // completeDonation flow below transitions this properly
         date: paymentDate ? new Date(paymentDate) : new Date(),
@@ -565,7 +588,7 @@ const donationController = {
       // Meta CAPI deliberately excluded (see comment above).
       try {
         const { syncDonationToDcc: dccSync } = require("../services/dcc.service");
-        await dccSync(await donationModel.findById(donation._id), utr);
+        await dccSync(await donationModel.findById(donation._id), utr, { seva: dccSeva });
       } catch (e) {
         console.error("Manual entry DCC sync failed:", e && e.message ? e.message : e);
       }
