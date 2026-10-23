@@ -35,6 +35,11 @@ const donationSchema = new mongoose.Schema({
   // order-creation time. When present, DCC sync uses this instead of the
   // env-based defaults, so the receipt is raised under that devotee.
   dccEnrolledById: { type: Number, default: null },
+  // The seva a caller (DRM) picked, as DCC takes it, kept so a retry after a DCC failure
+  // sends the same one. Absent on every other donation.
+  dccSevaCategory: { type: Number },
+  dccSevaSubCategory: { type: Number },
+  dccSevaSubCategoryCode: { type: String },
   utm: {
     source: { type: String, default: "" },
     medium: { type: String, default: "" },
