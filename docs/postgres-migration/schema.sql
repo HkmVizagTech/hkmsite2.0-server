@@ -652,3 +652,6 @@ CREATE INDEX IF NOT EXISTS event_registrations_order_idx ON event_registrations(
 ALTER TABLE donations ADD COLUMN IF NOT EXISTS dcc_seva_category double precision;
 ALTER TABLE donations ADD COLUMN IF NOT EXISTS dcc_seva_sub_category double precision;
 ALTER TABLE donations ADD COLUMN IF NOT EXISTS dcc_seva_sub_category_code text;
+
+-- Variant fields set to an explicit null (and unknown keys) are kept in extra, like the other tables.
+ALTER TABLE product_variants ADD COLUMN IF NOT EXISTS extra jsonb;

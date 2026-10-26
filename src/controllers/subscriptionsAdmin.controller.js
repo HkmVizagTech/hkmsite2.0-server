@@ -22,9 +22,9 @@ const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // Razorpay subscription states, in the words the screen uses.
 const LIVE_LABEL = {
   created: "Not authorised yet",
-  authenticated: "Authorised - first charge due",
+  authenticated: "Authorised — first charge due",
   active: "Active",
-  pending: "Charge failing - retrying",
+  pending: "Charge failing — retrying",
   halted: "Halted (charges failed)",
   cancelled: "Cancelled",
   completed: "Completed",

@@ -99,7 +99,7 @@ async function register(req, res) {
     await registrations.updateById(reg._id, { razorpayOrderId: order.id });
 
     return res.status(201).json({
-      message: "Registered - payment required",
+      message: "Registered — payment required",
       token: reg.token,
       id: reg._id,
       payment: {

@@ -101,8 +101,10 @@ async function replaceVariants(client, productId, variants) {
     [productId]
   );
   for (const [position, v] of variants.entries()) {
+    // An explicit null (Mongo kept `sku: null` apart from a missing sku) is remembered in extra.$nulls.
+    const nulls = ["label", "sku", "price", "mrp", "stock", "weightGrams"].filter((f) => v[f] === null);
     await client.query(
-      "INSERT INTO product_variants (id, product_id, label, sku, price, mrp, stock, weight_grams, position) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+      "INSERT INTO product_variants (id, product_id, label, sku, price, mrp, stock, weight_grams, position, extra) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
       [
         v._id,
         productId,
@@ -113,6 +115,7 @@ async function replaceVariants(client, productId, variants) {
         v.stock ?? null,
         v.weightGrams ?? null,
         position,
+        nulls.length ? JSON.stringify({ $nulls: nulls }) : null,
       ]
     );
   }

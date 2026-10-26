@@ -863,7 +863,14 @@ async function main() {
     if (mapName) maps[mapName] = await loadMap(pg, table);
     // child tables fed from embedded arrays
     if (coll === "products") {
-      const vcols = ["id", "product_id", "label", "sku", "price", "mrp", "stock", "weight_grams", "position"];
+      const vcols = ["id", "product_id", "label", "sku", "price", "mrp", "stock", "weight_grams", "position", "extra"];
+      const VKNOWN = new Set(["_id", "label", "sku", "price", "mrp", "stock", "weightGrams"]);
+      const variantExtra = (v) => {
+        const extra = Object.fromEntries(Object.entries(v).filter(([k]) => !VKNOWN.has(k)));
+        const nulls = ["label", "sku", "price", "mrp", "stock", "weightGrams"].filter((f) => v[f] === null);
+        if (nulls.length) extra.$nulls = nulls;
+        return Object.keys(extra).length ? JSON.stringify(extra) : null;
+      };
       const vrows = [];
       for (const p of docs) {
         const pid = String(p._id);
@@ -878,6 +885,7 @@ async function main() {
             I("stock", 0)(v),
             I("weightGrams")(v),
             i,
+            variantExtra(v),
           ])
         );
       }
