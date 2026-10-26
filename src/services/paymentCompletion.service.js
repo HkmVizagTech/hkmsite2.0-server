@@ -433,11 +433,13 @@ async function handleSubscriptionCharged(payload) {
     const original = await donations.findOne({ subscriptionId: subId }, { sort: { createdAt: 1, _id: 1 }, client });
     if (!original) return { early: { ok: false, reason: "no_original_donation_found" } };
 
-    // The sign-up record was never paid: still pending, or closed as failed
-    // ("never paid") by the reconcile job before this first charge arrived.
+    // The sign-up record was never paid: still pending, "active" (mandate approved - subscription.activated),
+    // or closed as failed ("never paid") by the reconcile job before this first charge arrived.
     const neverPaid =
-      original.status === "pending" ||
-      (original.status === "failed" && original.closedAsNotPaidAt && !original.razorpayPaymentId);
+      !original.razorpayPaymentId &&
+      (original.status === "pending" ||
+        original.status === "active" ||
+        (original.status === "failed" && original.closedAsNotPaidAt));
     if (neverPaid) {
       // First charge — complete the record created at signup rather than
       // creating a duplicate.
@@ -465,9 +467,24 @@ async function handleSubscriptionCharged(payload) {
       "dccPayload",
       "dccResponse",
       "dccSyncStatus",
+      "dccAttempts",
+      "dccRecoveredAt",
       "whatsappReceiptSentAt",
       "whatsappReceiptError",
       "whatsappSendStatus",
+      "whatsappThankYouSentAt",
+      "whatsappMessageId",
+      "whatsappDeliveryStatus",
+      "whatsappDeliveredAt",
+      "whatsappProvider",
+      "whatsappPendingReminderSent",
+      "whatsappPendingReminderAttempts",
+      "whatsappPendingReminderError",
+      "metaPurchaseSentAt",
+      "paymentError",
+      "failedAttempts",
+      "closedAsNotPaidAt",
+      "lastReconcileCheckAt",
     ].forEach((k) => delete src[k]);
     const clone = await donations.insert(
       {
@@ -475,6 +492,7 @@ async function handleSubscriptionCharged(payload) {
         amount: payment.amount ? payment.amount / 100 : original.amount,
         status: "pending",
         razorpayPaymentId: payment.id,
+        transactionId: payment.id,
       },
       { client }
     );

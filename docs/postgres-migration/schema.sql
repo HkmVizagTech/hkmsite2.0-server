@@ -629,3 +629,26 @@ ALTER TABLE media ALTER COLUMN width TYPE double precision, ALTER COLUMN height 
 ALTER TABLE donations ALTER COLUMN amount TYPE numeric, ALTER COLUMN legacy_seva_id TYPE double precision,
   ALTER COLUMN dcc_enrolled_by_id TYPE double precision;
 ALTER TABLE plans ALTER COLUMN amount TYPE numeric;
+
+-- ==== UPGRADES (idempotent; db-init re-applies everything below this line to an existing database) ====
+-- Upstream feat/events-slug (51b8681): the event's web address. Mongo: slug unique+sparse, previousSlugs array
+-- with no default (absent stays absent, so both columns have no DEFAULT).
+ALTER TABLE events ADD COLUMN IF NOT EXISTS slug text;
+ALTER TABLE events ADD COLUMN IF NOT EXISTS previous_slugs text[];
+CREATE UNIQUE INDEX IF NOT EXISTS events_slug_uq ON events(slug) WHERE slug IS NOT NULL;
+CREATE INDEX IF NOT EXISTS events_previous_slugs_idx ON events USING gin(previous_slugs);
+
+-- Upstream event registration fee (9a7adb5). Mongo: paymentStatus default 'not_required' (nullable here, like the
+-- other defaulted columns: NULL means the field was absent), amount a plain Number, no CHECK (parity).
+ALTER TABLE event_registrations ADD COLUMN IF NOT EXISTS payment_choice text;
+ALTER TABLE event_registrations ADD COLUMN IF NOT EXISTS amount numeric;
+ALTER TABLE event_registrations ADD COLUMN IF NOT EXISTS payment_status text DEFAULT 'not_required';
+ALTER TABLE event_registrations ADD COLUMN IF NOT EXISTS razorpay_order_id text;
+ALTER TABLE event_registrations ADD COLUMN IF NOT EXISTS razorpay_payment_id text;
+ALTER TABLE event_registrations ADD COLUMN IF NOT EXISTS paid_at timestamptz;
+CREATE INDEX IF NOT EXISTS event_registrations_order_idx ON event_registrations(razorpay_order_id);
+
+-- Upstream DRM seva for DCC receipts (55be194), used only when DCC_USE_DRM_SEVA=true.
+ALTER TABLE donations ADD COLUMN IF NOT EXISTS dcc_seva_category double precision;
+ALTER TABLE donations ADD COLUMN IF NOT EXISTS dcc_seva_sub_category double precision;
+ALTER TABLE donations ADD COLUMN IF NOT EXISTS dcc_seva_sub_category_code text;

@@ -9,7 +9,7 @@ import {
   sendDonationWhatsAppReceipt,
   resendRecentFailedReceipts,
 } from "../services/paymentCompletion.service.js";
-import { syncDonationToDcc as dccSync, isDccConfigured } from "../services/dcc.service.js";
+import { syncDonationToDcc as dccSync, isDccConfigured, cleanDccSeva } from "../services/dcc.service.js";
 import { notifyDrmOfDonation } from "../services/drmNotify.service.js";
 import {
   pushAndSendReceipt,
@@ -441,7 +441,18 @@ const donationController = {
         devoteeId,
         razorpayPaymentId: gatewayPaymentId,
         dccEnrolledById: dccEnrolledByIdRaw,
+        // The seva DRM's caller picked, as DCC wants it (see cleanDccSeva).
+        dccSevaCategory,
+        dccSevaSubCategory,
+        dccSevaSubCategoryCode,
       } = req.body;
+
+      // Used only when the switch is on and the three values are well-formed; otherwise this is null and
+      // nothing below behaves any differently.
+      const dccSeva =
+        process.env.DCC_USE_DRM_SEVA === "true"
+          ? cleanDccSeva({ category: dccSevaCategory, subCategory: dccSevaSubCategory, code: dccSevaSubCategoryCode })
+          : null;
 
       const name = String(donorName || "").trim();
       const amt = Number(amount);
@@ -496,6 +507,14 @@ const donationController = {
           amount: amt,
           type: type || "Manual Entry",
           sevaName: sevaName || undefined,
+          // Kept on the donation so a retry uses the same seva.
+          ...(dccSeva
+            ? {
+                dccSevaCategory: dccSeva.sevaCategory,
+                dccSevaSubCategory: dccSeva.sevaSubCategory,
+                dccSevaSubCategoryCode: String(dccSeva.sevaSubCategoryCode),
+              }
+            : {}),
           sourcePage: "admin-manual",
           status: "pending",
           date: paymentDate ? new Date(paymentDate) : new Date(),
@@ -534,7 +553,7 @@ const donationController = {
       await markDonationCompleted({ donationId: donation._id });
 
       try {
-        await dccSync(await donations.findById(donation._id), utr);
+        await dccSync(await donations.findById(donation._id), utr, { seva: dccSeva });
       } catch (e) {
         console.error("Manual entry DCC sync failed:", e && e.message ? e.message : e);
       }

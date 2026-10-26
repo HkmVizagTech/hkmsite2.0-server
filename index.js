@@ -8,6 +8,7 @@ import { startDccSweepJob } from "./src/jobs/dccReceiptSweep.js";
 import { ensureDefaultShopCategories } from "./src/services/shopBootstrap.service.js";
 import { ensureDefaultFestivalDonations } from "./src/services/festivalDonationBootstrap.service.js";
 import { ensureBlogDrafts } from "./src/services/blogDraftsBootstrap.service.js";
+import { ensureEventSlugs } from "./src/controllers/event.controller.js";
 import { runPendingReminders } from "./src/services/pendingReminder.service.js";
 const PORT = process.env.PORT || 8080;
 
@@ -27,6 +28,12 @@ const startServer = async () => {
     // Recorded in bootstrap_runs after success, so it never re-runs.
     ensureBlogDrafts().catch((err) => {
       console.error("Blog drafts import failed (non-fatal):", err && err.message ? err.message : err);
+    });
+
+    // Every event gets a web address (/events/<slug>) made from its title.
+    // Idempotent: only events without one are touched.
+    ensureEventSlugs().catch((err) => {
+      console.error("Event slug bootstrap failed (non-fatal):", err && err.message ? err.message : err);
     });
 
     app.listen(PORT, () => {

@@ -66,6 +66,12 @@ const A = (path) =>
     const v = get(d, path);
     return Array.isArray(v) ? v.filter((x) => x != null).map(String) : [];
   }, path);
+// Like A, but a field that is absent stays NULL (Mongo: `default: undefined`).
+const AN = (path) =>
+  tag((d) => {
+    const v = get(d, path);
+    return Array.isArray(v) ? v.filter((x) => x != null).map(String) : null;
+  }, path);
 const J = (path, dflt) =>
   tag((d) => {
     const v = get(d, path);
@@ -208,6 +214,8 @@ const SPECS = [
     [
       ...base,
       ["title", S("title", "")],
+      ["slug", S("slug")],
+      ["previous_slugs", AN("previousSlugs")],
       ["description", S("description", "")],
       ["date", TS("date")],
       ["banner_image", S("bannerImage")],
@@ -230,6 +238,12 @@ const SPECS = [
       ["data", J("data", {})],
       ["files", A("files")],
       ["paid", B("paid")],
+      ["payment_choice", S("paymentChoice")],
+      ["amount", N("amount")],
+      ["payment_status", S("paymentStatus")],
+      ["razorpay_order_id", S("razorpayOrderId")],
+      ["razorpay_payment_id", S("razorpayPaymentId")],
+      ["paid_at", T("paidAt")],
       ["attendance_present", B("attendance.present")],
       ["attendance_at", T("attendance.at")],
       ["attendance_scanned_by", FK("users", "attendance.scannedBy")],
@@ -402,6 +416,9 @@ const SPECS = [
       ["closed_as_not_paid_at", T("closedAsNotPaidAt")],
       ["dcc_synced_at", T("dccSyncedAt")],
       ["dcc_last_attempt_at", T("dccLastAttemptAt")],
+      ["dcc_seva_category", N("dccSevaCategory")],
+      ["dcc_seva_sub_category", N("dccSevaSubCategory")],
+      ["dcc_seva_sub_category_code", S("dccSevaSubCategoryCode")],
       ["dcc_attempts", I("dccAttempts", 0)],
       ["dcc_recovered_at", T("dccRecoveredAt")],
       ["dcc_sync_error", S("dccSyncError")],
@@ -759,7 +776,7 @@ async function insertBatch(pg, table, cols, rows) {
           .join(",")})`
     );
     await pg.query(
-      `INSERT INTO ${q(table)} (${cols.map(q).join(",")}) VALUES ${tuples.join(",")} ON CONFLICT (id) DO NOTHING`,
+      `INSERT INTO ${q(table)} (${cols.map(q).join(",")}) VALUES ${tuples.join(",")} ON CONFLICT DO NOTHING`,
       params
     );
   }

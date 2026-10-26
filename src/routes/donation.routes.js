@@ -2,6 +2,7 @@ import express from "express";
 import { donationController } from "../controllers/donation.controller.js";
 import { upiFallbackController } from "../controllers/upiFallback.controller.js";
 import { paymentFailuresController } from "../controllers/paymentFailures.controller.js";
+import { subscriptionsAdminController } from "../controllers/subscriptionsAdmin.controller.js";
 import { authMiddleware, adminMiddleware, preacherModuleMiddleware } from "../middlewares/auth.middleware.js";
 
 const donationRouter = express.Router();
@@ -22,6 +23,8 @@ donationRouter.get("/utm-transactions", authMiddleware, adminMiddleware, donatio
 donationRouter.get("/report", authMiddleware, adminMiddleware, donationController.getReport);
 donationRouter.get("/whatsapp-audit", authMiddleware, adminMiddleware, donationController.whatsappAudit);
 donationRouter.get("/needs-manual-receipt", authMiddleware, adminMiddleware, donationController.needsManualReceipt);
+// Monthly seva subscriptions (Admin → Donations → Monthly Seva). Above /:id.
+donationRouter.get("/subscriptions", authMiddleware, adminMiddleware, subscriptionsAdminController.list);
 // DCC receipts panel (Admin → Donations → DCC receipts). Above /:id.
 donationRouter.get("/dcc-status", authMiddleware, adminMiddleware, donationController.dccStatus);
 donationRouter.post("/dcc-push-all", authMiddleware, adminMiddleware, donationController.dccPushAll);

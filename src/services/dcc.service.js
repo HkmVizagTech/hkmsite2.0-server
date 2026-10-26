@@ -468,8 +468,42 @@ const resolveSevaMapping = (donation) => {
 const dccTransactionId = (donation, gatewayPaymentId) =>
   gatewayPaymentId || donation.utrNumber || donation.razorpayPaymentId || donation.transactionId || null;
 
-const buildDccPayload = (donation, gatewayPaymentId) => {
-  const sevaMapping = resolveSevaMapping(donation);
+/**
+ * A seva chosen explicitly by the caller - DRM sends the three values for the seva
+ * a person picked from its seva list. Returns the mapping DCC takes, or null when
+ * anything is missing or malformed, in which case the caller falls back to
+ * resolveSevaMapping and the receipt goes out exactly as it always has.
+ *
+ *   category / subCategory   whole numbers (Seva Category ID, Seva Sub Category ID)
+ *   code                     a whole number (the sub code ID) or a short Seva Code text
+ */
+const cleanDccSeva = ({ category, subCategory, code } = {}) => {
+  const asId = (v) => {
+    const n = typeof v === "string" && /^\d+$/.test(v.trim()) ? Number(v.trim()) : v;
+    return Number.isInteger(n) && n > 0 ? n : null;
+  };
+  const sevaCategory = asId(category);
+  const sevaSubCategory = asId(subCategory);
+  const rawCode = typeof code === "string" ? code.trim() : code;
+  const codeId = asId(rawCode);
+  const codeText = typeof rawCode === "string" && /^[A-Za-z0-9 ()&._-]{1,40}$/.test(rawCode) ? rawCode : null;
+  const sevaSubCategoryCode = codeId ?? codeText;
+  if (sevaCategory == null || sevaSubCategory == null || sevaSubCategoryCode == null) return null;
+  return { sevaCategory, sevaSubCategory, sevaSubCategoryCode };
+};
+
+/** The explicit seva stored on a donation when it was raised, if there is one. */
+const storedDccSeva = (donation) =>
+  cleanDccSeva({
+    category: donation?.dccSevaCategory,
+    subCategory: donation?.dccSevaSubCategory,
+    code: donation?.dccSevaSubCategoryCode,
+  });
+
+const buildDccPayload = (donation, gatewayPaymentId, sevaOverride = null) => {
+  // The seva the caller picked, if one was sent (this attempt's, or the one kept on the
+  // donation for a retry); otherwise the same name-based guess as ever.
+  const sevaMapping = sevaOverride || storedDccSeva(donation) || resolveSevaMapping(donation);
 
   return {
     donorName: toEnglish(donation.donorName),
@@ -545,7 +579,7 @@ async function postToDcc(payload) {
   return parsed;
 }
 
-async function syncDonationToDcc(donationOrId, gatewayPaymentId) {
+async function syncDonationToDcc(donationOrId, gatewayPaymentId, opts = {}) {
   const donation =
     typeof donationOrId === "object" && donationOrId !== null ? donationOrId : await donations.findById(donationOrId);
 
@@ -579,7 +613,7 @@ async function syncDonationToDcc(donationOrId, gatewayPaymentId) {
     return { ok: false, skipped: true, reason: "sync_in_progress" };
   }
 
-  const payload = buildDccPayload(lock, gatewayPaymentId);
+  const payload = buildDccPayload(lock, gatewayPaymentId, opts.seva || null);
 
   try {
     const dccResponse = await postToDcc(payload);
@@ -635,6 +669,7 @@ async function syncDonationToDcc(donationOrId, gatewayPaymentId) {
 export {
   DCC_PAYMENT_MODES,
   buildDccPayload,
+  cleanDccSeva,
   dccTransactionId,
   isDccConfigured,
   resolveEnrolledBy,

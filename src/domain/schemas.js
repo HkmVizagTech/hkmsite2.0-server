@@ -34,6 +34,10 @@ export const blogSchema = defineModel("blog", {
 
 export const eventSchema = defineModel("event", {
   title: { type: String, required: true },
+  // The event's web address: /events/<slug> (made from the title, unique, editable by admin). Old slugs stay in
+  // previousSlugs so links shared before an edit still resolve.
+  slug: { type: String },
+  previousSlugs: { type: [String], default: undefined },
   description: { type: String, required: true },
   date: { type: Date, required: true },
   bannerImage: { type: String },
@@ -51,6 +55,14 @@ export const registrationSchema = defineModel("registration", {
   data: { type: Object, default: {} },
   files: [{ type: String }],
   paid: { type: Boolean, default: false },
+  // Events with a registration fee: the option chosen (student | job | general), the amount charged (always
+  // taken from the event) and the Razorpay order. not_required = free event; pending = payment not completed.
+  paymentChoice: { type: String },
+  amount: { type: Number },
+  paymentStatus: { type: String, enum: ["not_required", "pending", "paid"], default: "not_required" },
+  razorpayOrderId: { type: String },
+  razorpayPaymentId: { type: String },
+  paidAt: { type: Date },
   attendance: {
     present: { type: Boolean, default: false },
     at: { type: Date },

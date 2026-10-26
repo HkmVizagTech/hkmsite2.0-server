@@ -104,7 +104,12 @@ async function processWebhookEventInline(event) {
             setImmediate(() => sendOrderWhatsApp(shopResult.order));
           }
         } else {
-          console.warn("No donation or shop order found for order:", orderId);
+          // An event registration fee (events with payment switched on): marks the registration paid even when
+          // the visitor closed the page before the form's own confirmation call ran.
+          const { markRegistrationPaidByOrder } = await import("./registration.controller.js");
+          const reg = await markRegistrationPaidByOrder({ orderId, paymentId: payment.id });
+          if (reg) console.log("Event registration paid for order", orderId);
+          else console.warn("No donation, shop order or event registration found for order:", orderId);
         }
       }
       break;
@@ -174,8 +179,10 @@ async function processWebhookEventInline(event) {
     case "subscription.activated": {
       const sub = event.payload && event.payload.subscription && event.payload.subscription.entity;
       if (sub)
+        // Only while the sign-up record is still pending and unpaid: Razorpay can send this after the first
+        // charge was confirmed, and overwriting a completed record cloned a duplicate on the next charge.
         await donations.updateOne(
-          { subscriptionId: sub.id ?? null },
+          { subscriptionId: sub.id ?? null, status: "pending", razorpayPaymentId: { $in: [null, ""] } },
           { status: "active" },
           { sort: { createdAt: 1, _id: 1 } }
         );
@@ -462,69 +469,88 @@ const paymentController = {
     }
   },
 
+  // SECURITY: the Razorpay signature only proves that the order (or subscription) and the payment belong
+  // together, not that they belong to the donation being completed (see the upstream fix 3750026).
   verifyPayment: async (req, res) => {
     try {
-      let { razorpay_order_id, razorpay_payment_id, razorpay_signature, razorpay_subscription_id } = req.body;
-      const { donationId } = req.body;
-      if (!razorpay_payment_id || !razorpay_signature) {
+      // Plain strings only; anything else is treated as missing.
+      const str = (v) => (typeof v === "string" ? v.trim() : "");
+      const orderId = str(req.body.razorpay_order_id);
+      const paymentId = str(req.body.razorpay_payment_id);
+      const signature = str(req.body.razorpay_signature);
+      const subscriptionId = str(req.body.razorpay_subscription_id);
+      const rawDonationId = req.body.donationId;
+      if (
+        rawDonationId != null &&
+        rawDonationId !== "" &&
+        !(typeof rawDonationId === "string" && /^[0-9a-f]{24}$/i.test(rawDonationId))
+      ) {
+        return res.status(400).json({ message: "Invalid donation reference" });
+      }
+      const donationId = rawDonationId || null;
+
+      if (!paymentId || !signature) {
         return res.status(400).json({ message: "Payment verification details missing" });
       }
-      const fields = [razorpay_order_id, razorpay_payment_id, razorpay_signature, razorpay_subscription_id, donationId];
-      // Objects/arrays would have been run as Mongo operator queries; scalars were cast to strings by Mongoose.
-      if (fields.some((v) => v !== null && typeof v === "object")) {
+      const isSubscription = !!subscriptionId;
+      if (!isSubscription && !orderId) {
         return res.status(400).json({ message: "Payment verification details missing" });
       }
-      const isSubscription = !!razorpay_subscription_id;
-      if (!isSubscription && !razorpay_order_id) {
-        return res.status(400).json({ message: "Payment verification details missing" });
-      }
-      const asText = (v) => (typeof v === "number" || typeof v === "boolean" ? String(v) : v);
-      razorpay_order_id = asText(razorpay_order_id);
-      razorpay_payment_id = asText(razorpay_payment_id);
-      razorpay_signature = asText(razorpay_signature);
-      razorpay_subscription_id = asText(razorpay_subscription_id);
 
       const query = donationId
         ? { _id: castPaymentDonationId(donationId) }
         : isSubscription
-          ? { subscriptionId: razorpay_subscription_id }
-          : { razorpayOrderId: razorpay_order_id };
+          ? { subscriptionId }
+          : { razorpayOrderId: orderId };
       const donation = await donations.findOne(query, { sort: { createdAt: 1, _id: 1 } });
       if (!donation) return res.status(404).json({ message: "Donation not found" });
+
+      // The payment must be for THIS donation's own order / subscription.
+      const belongs = isSubscription
+        ? !!donation.subscriptionId && donation.subscriptionId === subscriptionId
+        : !!donation.razorpayOrderId && donation.razorpayOrderId === orderId;
+      if (!belongs) {
+        console.warn(
+          `verifyPayment: ${isSubscription ? "subscription" : "order"} ${isSubscription ? subscriptionId : orderId} ` +
+            `does not belong to donation ${String(donation._id)} - rejected`
+        );
+        return res.status(400).json({ message: "This payment does not belong to this donation" });
+      }
 
       const account = resolveAccount(donation.paymentAccount);
       if (!account.key_secret) return res.status(500).json({ message: "Razorpay keys not configured on server" });
 
-      // Subscriptions sign as payment_id|subscription_id; one-time orders as
-      // order_id|payment_id.
-      const signedBody = isSubscription
-        ? `${razorpay_payment_id}|${razorpay_subscription_id}`
-        : `${razorpay_order_id}|${razorpay_payment_id}`;
+      // Subscriptions sign as payment_id|subscription_id; one-time orders as order_id|payment_id.
+      const signedBody = isSubscription ? `${paymentId}|${subscriptionId}` : `${orderId}|${paymentId}`;
       const expected = crypto.createHmac("sha256", account.key_secret).update(signedBody).digest("hex");
-      if (!safeEqual(expected, razorpay_signature)) {
+      if (!safeEqual(expected, signature)) {
         return res.status(400).json({ message: "Invalid payment signature" });
       }
 
-      // The signature only proves the signed order/subscription was paid; the donation being
-      // completed must be the one that order/subscription belongs to.
-      const belongsToPayment = isSubscription
-        ? donation.subscriptionId === razorpay_subscription_id
-        : donation.razorpayOrderId === razorpay_order_id;
-      if (!belongsToPayment) {
-        return res.status(400).json({ message: "Payment does not match this donation" });
+      // One payment completes one donation. A monthly charge the subscription.charged webhook already
+      // recorded on its own copy of this subscription is the donor's own payment: answer with that record.
+      const other = await donations.findOne({ razorpayPaymentId: paymentId, _id: { $ne: donation._id } });
+      if (other) {
+        if (isSubscription && other.subscriptionId === subscriptionId) {
+          return res.status(200).json({ message: "Payment verified", donation: other });
+        }
+        console.warn(
+          `verifyPayment: payment ${paymentId} already recorded on donation ${String(other._id)} - rejected for ${String(donation._id)}`
+        );
+        return res.status(409).json({ message: "This payment is already recorded against another donation" });
       }
 
       const updated = await markDonationCompleted({
         donationId: donation._id,
-        orderId: isSubscription ? undefined : razorpay_order_id,
-        paymentId: razorpay_payment_id,
+        orderId: isSubscription ? undefined : orderId,
+        paymentId,
       });
 
       res.status(200).json({ message: "Payment verified", donation: updated });
 
       if (updated) {
         setImmediate(() => {
-          runPostCompletionPipeline(updated._id, razorpay_payment_id).catch((err) => {
+          runPostCompletionPipeline(updated._id, paymentId).catch((err) => {
             console.error(
               "Background pipeline error for donation",
               String(updated._id),
