@@ -149,13 +149,11 @@ await step(
     sevakName: "S",
   })
 );
-await step(
-  "create: no auth (baseline route was public / new route is admin-only)",
-  req("POST", "/donations", { donorName: `${MARK} NoAuth`, amount: 5 }, { token: null }),
-  { expectDiff: "route change by lead: create is admin-only" }
-);
-// the baseline accepted the request above; remove what it created so the state comparison stays aligned
+// Public on purpose (DRM creates donations without a login), exactly as in production.
+await step("create: no auth (public route)", req("POST", "/donations", { donorName: `${MARK} NoAuth`, amount: 5 }, { token: null }));
+// both builds created a row; remove them so the state comparison stays aligned
 await mdb.collection("donations").deleteMany({ donorName: `${MARK} NoAuth` });
+await query("DELETE FROM donations WHERE donor_name = $1", [`${MARK} NoAuth`]);
 await create(
   "create D1 (prasadam)",
   {

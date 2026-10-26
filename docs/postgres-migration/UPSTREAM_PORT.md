@@ -31,7 +31,7 @@ production (10,184 donations, 6,886 donors), Razorpay/DCC/WhatsApp/Meta/DRM/R2 r
 | `db:verify` (counts, sums, receipt numbers, counters, 200 sampled donations) | all pass |
 | Every stored document round-trips (`shapes.mjs`), 33 relationship checks (`relcheck.mjs`) | identical |
 | Reads (470) | 464 identical; the 6 left are Mongo tie order (payment-failures) and a 1 ms blog view-counter timestamp |
-| Role matrix, 216 routes x 10 identities | 2087/2120 (rest: clock noise, tie order, `POST /donations` admin-only on purpose) |
+| Role matrix, 216 routes x 10 identities | 2087/2120 (rest: clock noise, tie order, `POST /donations` is public again, as in production) |
 | New: events slug, registration fee + verify-payment + webhook + check-in 402, Monthly Seva list (9 filter combos), `/payments/verify` edge cases (`writes-upstream.mjs`) | 73/73 identical |
 | DRM seva for DCC with `DCC_USE_DRM_SEVA=true` (`writes-dcc-seva.mjs`) | identical DCC requests |
 | Content/admin writes | 238/238 steps, 18/18 tables identical |

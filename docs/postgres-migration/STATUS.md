@@ -6,7 +6,7 @@ Updated 2026-10-14. Everything below is local: branches `postgres-migration` (se
 - Data: every stored document in all tables round-trips identically, including explicit nulls, unknown legacy fields, and product variants / order items (`scripts/parity/shapes.mjs`).
 - Content/admin routes: about 210k differential requests, no unexplained differences. Shop routes: 35k+ requests, none. Payments: full flows through mocked outside services, identical outbound requests and rows (16 of 20 scenarios; the other 4 explained in the agent report: a race fix, a cascade of it, a null-field item now fixed, a full-run-only reminder count).
 - Reads: 296 of 304 identical; the 8 left are Mongo tie-order and 1 ms blog timestamps.
-- Role matrix: who can do what is identical on every route (the only difference: `POST /donations` is now admin-only, on purpose).
+- Role matrix: who can do what is identical on every route (`POST /donations` stays public, as in production).
 - Response headers identical (CORS, caching, security headers). Client production build passes. Browser tests (Chromium and Brave): 13 flows identical.
 
 ## Still running
@@ -14,7 +14,7 @@ Updated 2026-10-14. Everything below is local: branches `postgres-migration` (se
 
 ## Intentional differences (security fixes, kept on purpose)
 - Payment verify checks the signed order belongs to that donation (old code let a cheap payment complete an expensive donation).
-- `POST /donations` admin-only; admin update endpoints whitelist fields; blog HTML sanitized on save; constant-time secret checks; OTP via crypto.randomInt; rate limits on `/payments/subscription` and `/payments/verify`; preacher donor view no longer includes OTP hashes; client `/api/revalidate` requires staff login.
+- Admin update endpoints whitelist fields; blog HTML sanitized on save; constant-time secret checks; OTP via crypto.randomInt; rate limits on `/payments/subscription` and `/payments/verify`; preacher donor view no longer includes OTP hashes; client `/api/revalidate` requires staff login.
 
 ## Unavoidable
 - Mongo returns tied rows in arbitrary order (not reproducible even on Mongo itself); NUL characters in strings; a few exotic regex constructs.

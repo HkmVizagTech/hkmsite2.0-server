@@ -13,7 +13,7 @@ Method: old build (upstream `origin/main`, MongoDB) and new build (Postgres) run
 | Content/admin writes | 238/238 identical, 18/18 tables identical (+ ~210k fuzz requests) |
 | Donations writes (incl. new Prasadam routes) | 349 steps identical, 0 differing, 3 intentional |
 | Payment flows with mocked outside services | 20/20 scenarios identical incl. exact outbound requests to Razorpay, DCC, Flaxxa/Gupshup, Meta, DRM, R2, couriers (one scenario was flaky from test row timestamps; fixed, 5/5) |
-| Role matrix, 216 routes x 10 identities | 2087/2120; the 12 differing routes are clock noise, tie order, or the intentional `POST /donations` change |
+| Role matrix, 216 routes x 10 identities | the differing routes are clock noise or tie order |
 | Broad fuzz, all 216 routes (page/limit/search/filter extremes, regex chars, injection strings, unicode, wrong-typed/null/huge bodies, invalid JSON, bad ids) | 67,471 of 69,077 identical, 2,365 more identical apart from row order; the 10 route groups with differences are all explained below |
 | Response headers (CORS, cache, security) | identical, 144 combinations |
 | Client | production build passes (105 routes); 66 pages load clean on both stacks; 14 browser flows (contact form, admin login/donations/Prasadam tabs/blog editor/dashboard/shop, donor session, add to cart...) identical on Mongo stack, Postgres stack in Chromium and in Brave |
@@ -46,7 +46,7 @@ Timestamps 1-9 ms apart on records the test itself wrote (`PUT /users/update`, `
 Unsorted reads now return rows in the order MongoDB returned documents (insertion order) through a hidden `seq` column; this fixed `GET /preacher/search-donor`, which picked a different first donor because one donor record sits out of ID order in the real data.
 
 ## Intentional differences that remain (only for abusive or unusual input; normal flows are identical)
-1. `POST /donations` requires an admin login (was open to anyone); no client calls it.
+1. `POST /donations` stays public, exactly as in production (DRM creates donations through it). It was briefly admin-only during the migration and was reverted on request.
 2. `PUT /donations/:id` and admin updates for events, galleries, important dates, volunteers, festival donations/showcases accept only the fields the admin forms send.
 3. Blog `content` is sanitized on create/update (scripts, event handlers, `javascript:` URLs, non-YouTube/Vimeo iframes removed).
 4. `/payments/verify`: the signed order must belong to the donation being verified (old code let a cheap payment complete a different, expensive donation); verify fields sent as arrays/objects get a 400 instead of being run as database operator queries.
