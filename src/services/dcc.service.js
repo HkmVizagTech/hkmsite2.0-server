@@ -60,6 +60,32 @@ const DCC_SEVA_MAPPINGS = parseJsonEnv("DCC_SEVA_MAPPINGS", []);
 // the real DCC configuration and override via DCC_SEVA_MAPPINGS if they
 // differ, no code deploy needed to fix.
 const DEFAULT_NAME_BASED_SEVA_MAPPINGS = [
+  // ---- Kartik Maas (Damodar month) sevas: Cultural Program (3) -> Deepotsava (5, code DEEP) ----
+  // Real DCC codes from the temple's SevaCodes sheet (SevaSubCategoryCodeId column). Scoped to festivalSlug
+  // "kartik-maas" so no other page is affected. Vastrabharana is NOT mapped yet: it was not in the part of the
+  // sheet we were given, so it still falls through to the default until the real code is supplied.
+  {
+    sevaNameIncludes: ["annadana", "anna daan", "anna-daan", "annadaan"],
+    festivalSlug: "kartik-maas",
+    sevaCategory: 3,
+    sevaSubCategory: 5,
+    sevaSubCategoryCode: 1,
+  },
+  {
+    sevaNameIncludes: ["gau seva", "go seva", "cow", "goshala"],
+    festivalSlug: "kartik-maas",
+    sevaCategory: 3,
+    sevaSubCategory: 5,
+    sevaSubCategoryCode: 130,
+  },
+  {
+    sevaNameIncludes: ["pushpalankara", "pushpa alankara", "pushpanjali"],
+    festivalSlug: "kartik-maas",
+    sevaCategory: 3,
+    sevaSubCategory: 5,
+    sevaSubCategoryCode: 3,
+  },
+
   // ---- Sri Radhashtami festival sevas (FIRST — must match before
   // Janmashtami/generic, since several seva names overlap) ----
   // Real DCC codes from the temple's SevaCodes sheet (uploaded 2026-09-13).
