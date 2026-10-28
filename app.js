@@ -48,6 +48,13 @@ const allowedOrigins = new Set([
   'https://hkmsite2-0-client-9fyg.vercel.app',
   'https://harekrishnavizag.org',
   'https://www.harekrishnavizag.org',
+  // Alternate temple domains (same site, served on each address).
+  'https://iskconvisakhapatnam.org',
+  'https://www.iskconvisakhapatnam.org',
+  'https://iskconvisakhapatnam.in',
+  'https://www.iskconvisakhapatnam.in',
+  'https://iskconvisakhapatnam.com',
+  'https://www.iskconvisakhapatnam.com',
   'http://localhost:3000',
   'http://localhost:8080',
 ].filter(Boolean));
