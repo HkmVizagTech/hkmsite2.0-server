@@ -65,6 +65,23 @@ const DEFAULT_NAME_BASED_SEVA_MAPPINGS = [
   // "kartik-maas" so no other page is affected. Vastrabharana is NOT mapped yet: it was not in the part of the
   // sheet we were given, so it still falls through to the default until the real code is supplied.
   {
+    // Deep Daan for 1 Month + 108 Deep Daan -> "Deeparadhana Seva" (DEEP) row of the sheet
+    sevaNameIncludes: ["deep daan", "deepa daan", "deepdaan"],
+    festivalSlug: "kartik-maas",
+    sevaCategory: 3,
+    sevaSubCategory: 5,
+    sevaSubCategoryCode: 90,
+  },
+  {
+    // Vaishnav Bhojan -> Annadanam / "Brahamana Vaishnava Seva" (ANVS); the sheet has no SevaSubCategoryCodeId
+    // for this row, so the text Seva Code is sent (same way ANGE/GOSE are for category 1).
+    sevaNameIncludes: ["vaishnav bhojan", "vaishnava bhojan"],
+    festivalSlug: "kartik-maas",
+    sevaCategory: 1,
+    sevaSubCategory: 85,
+    sevaSubCategoryCode: "ANVS",
+  },
+  {
     sevaNameIncludes: ["annadana", "anna daan", "anna-daan", "annadaan"],
     festivalSlug: "kartik-maas",
     sevaCategory: 3,
