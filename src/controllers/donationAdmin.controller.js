@@ -260,6 +260,7 @@ const donationAdminController = {
         transactions: transactions.map((txn) => ({
           _id: txn._id.toString(),
           id: txn.razorpayPaymentId || `TXN${txn._id.toString().slice(-6).toUpperCase()}`,
+          serialNo: txn.serialNo,
           donorName: txn.donorName,
           donorEmail: txn.donorEmail,
           donorMobile: txn.donorMobile,
