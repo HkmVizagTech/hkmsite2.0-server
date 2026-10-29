@@ -780,7 +780,7 @@ const donationController = {
         transactionId: 1, razorpayOrderId: 1, razorpayPaymentId: 1,
         receiptNumber: 1, dccSyncStatus: 1, whatsappReceiptSentAt: 1, whatsappReceiptError: 1,
         sevaName: 1, type: 1, sourcePage: 1, utm: 1, createdAt: 1,
-        manualEntry: 1, utrNumber: 1, manualPaymentMode: 1, manualEntryNote: 1,
+        manualEntry: 1, utrNumber: 1, manualPaymentMode: 1, manualEntryNote: 1, serialNo: 1,
       };
 
       const [total, donations, totalAmountAgg] = await Promise.all([

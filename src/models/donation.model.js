@@ -1,10 +1,17 @@
 const mongoose = require("mongoose");
+const { getNextSequence } = require("../utils/counter");
 
 
 const donationSchema = new mongoose.Schema({
   donorName: { type: String, required: true },
   donorEmail: { type: String },
   donorMobile: { type: String },
+  // Permanent running number for the admin donations list ("S.No"): 1 for the oldest donation, counting up
+  // in the order donations were created. Assigned once, when the record is first saved (see the pre-save
+  // hook below); older records were numbered by scripts/backfill-donation-serial.js. It never changes, so
+  // filtering, searching or new donations arriving do not renumber anything. A failed save can leave a
+  // gap in the numbers, but a number is never reused.
+  serialNo: { type: Number },
   amount: { type: Number, required: true },
   date: { type: Date, default: Date.now },
   type: { type: String, default: "General" }, // e.g., "Anna Daan", "Seva", etc.
@@ -243,6 +250,23 @@ donationSchema.index({ donorRecordId: 1 });
 // index keeps the courier list fast as the request volume grows.
 donationSchema.index({ wantPrasadam: 1, status: 1, "prasadamAddress.pincode": 1 });
 donationSchema.index({ manualEnteredBy: 1 });
+// Unique, and sparse so records that don't have a number yet (before the backfill has run) are not indexed.
+donationSchema.index({ serialNo: 1 }, { unique: true, sparse: true, name: "uniq_serialNo" });
+
+// Numbers a new donation. Two safeguards so this can never get in the way of taking a donation:
+//  - it only starts once scripts/backfill-donation-serial.js has set up the counter, so deploying this code
+//    before the backfill can't hand new donations small numbers ahead of the older ones;
+//  - if the counter can't be read for any reason, the donation is still saved (without a number) and the
+//    next run of the backfill script numbers it.
+donationSchema.pre("save", async function () {
+  if (!this.isNew || this.serialNo != null) return;
+  try {
+    const started = await mongoose.connection.db.collection("counters").findOne({ _id: "donation" }, { projection: { _id: 1 } });
+    if (started) this.serialNo = await getNextSequence("donation");
+  } catch (err) {
+    console.error("donation serialNo: could not assign a number —", err && err.message ? err.message : err);
+  }
+});
 
 const donationModel = mongoose.model("donation", donationSchema);
 
