@@ -668,7 +668,10 @@ const buildDccPayload = (donation, gatewayPaymentId, sevaOverride = null) => {
     },
     PAN: donation.panNumber || null,
     amount: String(Number(donation.amount)),
-    accountType: Number(process.env.DCC_ACCOUNT_TYPE || 4),
+    // 5 for a TSC seva (set by DRM with the seva), otherwise the usual 4.
+    accountType: [4, 5].includes(Number(donation.dccAccountType))
+      ? Number(donation.dccAccountType)
+      : Number(process.env.DCC_ACCOUNT_TYPE || 4),
     sevaCategory: sevaMapping.sevaCategory,
     sevaSubCategory: sevaMapping.sevaSubCategory,
     sevaSubCategoryCode: sevaMapping.sevaSubCategoryCode,

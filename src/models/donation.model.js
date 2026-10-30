@@ -50,6 +50,9 @@ const donationSchema = new mongoose.Schema({
   dccSevaCategory: { type: Number },
   dccSevaSubCategory: { type: Number },
   dccSevaSubCategoryCode: { type: String },
+  // The DCC account type that seva belongs to: 4 (HKMI) or 5 (TSC). Absent means the
+  // default (DCC_ACCOUNT_TYPE, 4). Only ever set alongside the seva above.
+  dccAccountType: { type: Number },
   utm: {
     source: { type: String, default: "" },
     medium: { type: String, default: "" },

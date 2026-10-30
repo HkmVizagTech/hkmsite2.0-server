@@ -37,6 +37,14 @@ check("Brick Seva from the list: 2 / 103 / BSC", pick(buildDccPayload(brickStore
 check("junk stored values are ignored, the old guess is used", pick(buildDccPayload({ ...drmOld, dccSevaCategory: "abc", dccSevaSubCategory: 5, dccSevaSubCategoryCode: "1" }, "u1")), { cat: 1, sub: 1, code: "ANGE" });
 check("everything else in the DCC request is untouched", (({ donorName, donorPhone, amount, accountType, modeOfPayment, gatewayPaymentId }) => ({ donorName, donorPhone, amount, accountType, modeOfPayment, gatewayPaymentId }))(buildDccPayload(drmOld, "u1", chosen)), { donorName: "T", donorPhone: "9000000000", amount: "100", accountType: 4, modeOfPayment: 1, gatewayPaymentId: "u1" });
 
+// TSC: account type 5 comes with the seva DRM picked; everything else stays 4.
+const tscSeva = cleanDccSeva({ category: 8, subCategory: 25, code: "ANGE" });
+const tscDonation = { ...drmOld, sevaName: "Annadanam General", dccAccountType: 5 };
+check("a TSC seva: account type 5 with category 8 / sub 25 / code ANGE", (({ accountType, sevaCategory, sevaSubCategory, sevaSubCategoryCode }) => ({ accountType, sevaCategory, sevaSubCategory, sevaSubCategoryCode }))(buildDccPayload(tscDonation, "u1", tscSeva)), { accountType: 5, sevaCategory: 8, sevaSubCategory: 25, sevaSubCategoryCode: "ANGE" });
+check("a donation with no account type: 4, as before", buildDccPayload(drmOld, "u1", chosen).accountType, 4);
+check("an account type that is not 4 or 5 is ignored", buildDccPayload({ ...drmOld, dccAccountType: 7 }, "u1", chosen).accountType, 4);
+check("a stored TSC donation retried: still 5", buildDccPayload({ ...tscDonation, dccSevaCategory: 8, dccSevaSubCategory: 25, dccSevaSubCategoryCode: "ANGE" }, "u1").accountType, 5);
+
 if (failures) { console.error(`\n${failures} FAILED`); process.exit(1); }
 console.log("\nall passed");
 process.exit(0);

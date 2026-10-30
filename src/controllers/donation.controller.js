@@ -464,6 +464,8 @@ const donationController = {
         dccSevaCategory,
         dccSevaSubCategory,
         dccSevaSubCategoryCode,
+        // 4 (HKMI) or 5 (TSC), for the seva above.
+        dccAccountType: dccAccountTypeRaw,
       } = req.body;
 
       // Used only when the switch is on and the three values are well-formed; otherwise
@@ -476,6 +478,12 @@ const donationController = {
               code: dccSevaSubCategoryCode,
             })
           : null;
+
+      // The account type belongs to the seva, so it is used only when DRM's seva was
+      // (switch on, values well-formed) and is 4 or 5. Anything else leaves the
+      // default in place - a stray 5 must never go to DCC against a guessed seva.
+      const dccAccountType =
+        dccSeva && [4, 5].includes(Number(dccAccountTypeRaw)) ? Number(dccAccountTypeRaw) : null;
 
       const name = String(donorName || "").trim();
       const amt = Number(amount);
@@ -536,6 +544,7 @@ const donationController = {
               dccSevaCategory: dccSeva.sevaCategory,
               dccSevaSubCategory: dccSeva.sevaSubCategory,
               dccSevaSubCategoryCode: String(dccSeva.sevaSubCategoryCode),
+              ...(dccAccountType ? { dccAccountType } : {}),
             }
           : {}),
         sourcePage: "admin-manual",
