@@ -5,6 +5,7 @@ const { planModel } = require('../models/plan.model');
 const { sanitizeBannerImage } = require('../services/pageBanner.service');
 const { recordPaymentFailure, recordDowntime } = require('../services/paymentFailure.service');
 
+const { cleanMobile, isValidMobile, MOBILE_MESSAGE } = require('../utils/mobile');
 const { completeDonation, markDonationCompleted, runPostCompletionPipeline, handleSubscriptionCharged } = require('../services/paymentCompletion.service');
 
 // Smallest donation we will take, in rupees. Anything under this costs
@@ -281,6 +282,14 @@ const paymentController = {
         return res.status(400).send(MIN_AMOUNT_MESSAGE);
       }
 
+      // A mobile that was sent must be a real one. A "+91 ..." form is cleaned first, so the donor's own number is
+      // what gets stored and what the WhatsApp receipt goes to. Not sent at all: unchanged (the forms always send it).
+      const mobileGiven = mobile || req.body.donorMobile;
+      if (mobileGiven) {
+        const cleaned = cleanMobile(mobileGiven);
+        if (!isValidMobile(cleaned)) return res.status(400).send(MOBILE_MESSAGE);
+      }
+
       const razorpay = createRazorpayInstance(req.body.account);
       if (!razorpay) return res.status(500).json({ message: 'Razorpay keys not configured on server' });
       const { account, instance } = razorpay;
@@ -315,7 +324,7 @@ const paymentController = {
       const donation = await donationModel.create({
         donorName: name || req.body.donorName || 'Anonymous',
         donorEmail: email || req.body.donorEmail,
-        donorMobile: mobile || req.body.donorMobile,
+        donorMobile: cleanMobile(mobile || req.body.donorMobile) || undefined,
         amount,
         type: req.body.type || (sourcePage === 'donations' ? 'Donation' : undefined),
         sourcePage,
@@ -407,6 +416,14 @@ const paymentController = {
         return res.status(400).send(MIN_AMOUNT_MESSAGE);
       }
 
+      // A mobile that was sent must be a real one. A "+91 ..." form is cleaned first, so the donor's own number is
+      // what gets stored and what the WhatsApp receipt goes to. Not sent at all: unchanged (the forms always send it).
+      const mobileGiven = mobile || req.body.donorMobile;
+      if (mobileGiven) {
+        const cleaned = cleanMobile(mobileGiven);
+        if (!isValidMobile(cleaned)) return res.status(400).send(MOBILE_MESSAGE);
+      }
+
       const razorpay = createRazorpayInstance(req.body.account);
       if (!razorpay) return res.status(500).json({ message: 'Razorpay keys not configured on server' });
       const { account, instance } = razorpay;
@@ -458,7 +475,7 @@ const paymentController = {
       const donation = await donationModel.create({
         donorName: name || req.body.donorName || 'Anonymous',
         donorEmail: email || req.body.donorEmail,
-        donorMobile: mobile || req.body.donorMobile,
+        donorMobile: cleanMobile(mobile || req.body.donorMobile) || undefined,
         amount,
         type: req.body.type,
         sourcePage,
