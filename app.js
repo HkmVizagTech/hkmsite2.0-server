@@ -55,6 +55,9 @@ const allowedOrigins = new Set([
   'https://www.iskconvisakhapatnam.in',
   'https://iskconvisakhapatnam.com',
   'https://www.iskconvisakhapatnam.com',
+  // harekrishnavaikuntham.org serves the site too (the .in and .com versions only redirect to it).
+  'https://harekrishnavaikuntham.org',
+  'https://www.harekrishnavaikuntham.org',
   'http://localhost:3000',
   'http://localhost:8080',
 ].filter(Boolean));
