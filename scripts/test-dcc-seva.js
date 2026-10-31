@@ -45,6 +45,14 @@ check("a donation with no account type: 4, as before", buildDccPayload(drmOld, "
 check("an account type that is not 4 or 5 is ignored", buildDccPayload({ ...drmOld, dccAccountType: 7 }, "u1", chosen).accountType, 4);
 check("a stored TSC donation retried: still 5", buildDccPayload({ ...tscDonation, dccSevaCategory: 8, dccSevaSubCategory: 25, dccSevaSubCategoryCode: "ANGE" }, "u1").accountType, 5);
 
+// Payment modes, as DCC's ModeOfPayment table has them: 1 Cash, 2 Card, 3 Online, 4 Cheque/DD, 5 Others.
+const modeOf = (m) => buildDccPayload({ ...drmOld, manualPaymentMode: m }, "u1", chosen).modeOfPayment;
+check("cash is 1 (Cash)", modeOf("cash"), 1);
+check("cheque is 4 (Cheque/DD), not 2 (Card)", modeOf("cheque"), 4);
+check("a bank transfer is 3 (Online): UTR and date", modeOf("bank"), 3);
+check("UPI is 3 (Online)", modeOf("upi"), 3);
+check("no mode given: Online", buildDccPayload({ ...drmOld, manualPaymentMode: undefined }, "u1", chosen).modeOfPayment, 3);
+
 if (failures) { console.error(`\n${failures} FAILED`); process.exit(1); }
 console.log("\nall passed");
 process.exit(0);

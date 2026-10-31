@@ -17,12 +17,20 @@ const normalizeDccPhone = (raw) => {
   return digits.slice(-10);
 };
 
+// DCC's own ModeOfPayment table (DCC_DB lookup data): 1 Cash, 2 Card, 3 Online,
+// 4 Cheque/DD, 5 Others. (The comment on SocialMediaPayload.modeOfPayment in the DCC
+// source lists them in a different order; the table and the DCC screens are the truth.)
+//
+// A bank transfer is "Online": DCC's Online section asks for a Transaction Number and
+// Transaction Date, which is the UTR and the day. Cheque is 4, NOT 2 - 2 is Card. These
+// were cheque 2 and bank 4, which put a cheque in DCC as a Card and a bank transfer as
+// Cheque/DD. Each can still be overridden by its DCC_MODE_* setting.
 const DCC_PAYMENT_MODES = {
   online: Number(process.env.DCC_MODE_ONLINE || 3),
   cash: Number(process.env.DCC_MODE_CASH || 1),
-  cheque: Number(process.env.DCC_MODE_CHEQUE || 2),
+  cheque: Number(process.env.DCC_MODE_CHEQUE || 4),
   upi: Number(process.env.DCC_MODE_UPI || 3),
-  bank: Number(process.env.DCC_MODE_BANK || 4),
+  bank: Number(process.env.DCC_MODE_BANK || 3),
 };
 
 const DEFAULT_SEVA_MAPPING = {
