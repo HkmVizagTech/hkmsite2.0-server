@@ -16,6 +16,8 @@ const { PDFDocument, StandardFonts, rgb } = require("pdf-lib");
 
 // How a hand-entered donation was paid, as printed after "by" on the receipt.
 const MODE_WORDS = { cash: "Cash", cheque: "Cheque", upi: "UPI", bank: "Bank" };
+// DCC account type of Touchstone Charities (4 is HKMI, the default).
+const TSC_ACCOUNT_TYPE = 5;
 const numToWord = require("number-to-words");
 const { donationModel } = require("../models/donation.model");
 const { campaignerModel } = require("../models/campaigner.model");
@@ -192,7 +194,16 @@ async function generateReceiptBuffer(donationId) {
   // this receipt a 23MB font embed.
   const needsUnicode = Object.values(fieldValues).some((v) => !isAsciiOnly(stripAstral(v)));
 
-  const templatePath = path.join(process.cwd(), "receipt-template.pdf");
+  // A donation raised under DCC account type 5 (a TSC seva picked in DRM) gets the
+  // Touchstone Charities receipt; everything else keeps the HKMI one, unchanged.
+  // The TSC template is built by scripts/build-tsc-receipt-template.js and has one extra
+  // field, paymentMode, because it prints the real payment mode instead of the HKMI
+  // template's fixed "Online" (which is covered over for hand-entered donations below).
+  const isTsc = Number(donation.dccAccountType) === TSC_ACCOUNT_TYPE;
+  if (isTsc) {
+    fieldValues.paymentMode = (donation.manualEntry && MODE_WORDS[donation.manualPaymentMode]) || "Online";
+  }
+  const templatePath = path.join(process.cwd(), isTsc ? "receipt-template-tsc.pdf" : "receipt-template.pdf");
   const existingPdf = fs.readFileSync(templatePath);
 
   // The whole document is built inside this function so it can be retried
@@ -266,7 +277,7 @@ async function generateReceiptBuffer(donationId) {
   // hand (here or from DRM) - an 80G receipt the donor files must say how
   // they actually paid. Covered and rewritten only for those; a website
   // receipt is left exactly as the template draws it.
-  if (donation.manualEntry && MODE_WORDS[donation.manualPaymentMode]) {
+  if (!isTsc && donation.manualEntry && MODE_WORDS[donation.manualPaymentMode]) {
     try {
       const page = pdfDoc.getPages()[0];
       const h = page.getHeight();
