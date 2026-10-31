@@ -5,6 +5,8 @@ import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 
 // How a hand-entered donation was paid, as printed after "by" on the receipt.
 const MODE_WORDS = { cash: "Cash", cheque: "Cheque", upi: "UPI", bank: "Bank" };
+// DCC account type of Touchstone Charities (4 is HKMI, the default).
+const TSC_ACCOUNT_TYPE = 5;
 import numToWord from "number-to-words";
 import { donations, campaigners, donors } from "../db/tables.js";
 import { IST } from "../config/timezone.js";
@@ -137,7 +139,15 @@ async function generateReceiptBuffer(donationId) {
 
   const needsUnicode = Object.values(fieldValues).some((v) => !isAsciiOnly(stripAstral(v)));
 
-  const templatePath = path.join(process.cwd(), "receipt-template.pdf");
+  // A donation raised under DCC account type 5 (a TSC seva picked in DRM) gets the
+  // Touchstone Charities receipt; everything else keeps the HKMI one, unchanged.
+  // See scripts/build-tsc-receipt-template.cjs. NOTE: this port does not store
+  // dccAccountType yet (upstream does), so isTsc stays false until it is ported.
+  const isTsc = Number(donation.dccAccountType) === TSC_ACCOUNT_TYPE;
+  if (isTsc) {
+    fieldValues.paymentMode = (donation.manualEntry && MODE_WORDS[donation.manualPaymentMode]) || "Online";
+  }
+  const templatePath = path.join(process.cwd(), isTsc ? "receipt-template-tsc.pdf" : "receipt-template.pdf");
   const existingPdf = fs.readFileSync(templatePath);
 
   const render = async ({ allowSubset }) => {
@@ -197,7 +207,7 @@ async function generateReceiptBuffer(donationId) {
       console.warn(`receipt.service: could not flatten the form (${err.message}) — saving with fields intact`);
     }
 
-    if (donation.manualEntry && MODE_WORDS[donation.manualPaymentMode]) {
+    if (!isTsc && donation.manualEntry && MODE_WORDS[donation.manualPaymentMode]) {
       try {
         const page = pdfDoc.getPages()[0];
         const h = page.getHeight();
