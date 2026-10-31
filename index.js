@@ -7,6 +7,7 @@ const { connectDb } = require("./src/config/db");
 const { startReconciliationJob } = require("./src/jobs/reconcilePendingDonations");
 const { startTrackingSyncJob } = require("./src/jobs/trackingSync");
 const { startDccSweepJob } = require("./src/jobs/dccReceiptSweep");
+const { startAirtableLaxmiJob } = require("./src/services/airtableLaxmi.service");
 const { ensureDefaultShopCategories } = require("./src/services/shopBootstrap.service");
 const { ensureDefaultFestivalDonations } = require("./src/services/festivalDonationBootstrap.service");
 const { ensureBlogDrafts } = require("./src/services/blogDraftsBootstrap.service");
@@ -53,6 +54,10 @@ const startServer =async()=>{
         // Every successful donation gets pushed to DCC until it has a receipt
         // number; the WhatsApp receipt follows. Disable with DCC_SWEEP_ENABLED=false.
         startDccSweepJob();
+
+        // Daily Laxmi Points row in Airtable (yesterday's confirmed donations / 10, unique donor contacts).
+        // Off unless AIRTABLE_TOKEN is set. Disable with AIRTABLE_LAXMI_ENABLED=false.
+        startAirtableLaxmiJob();
 
         // Auto-tracking sync: watch courier feeds (Delhivery / DTDC /
         // Bluedart / India Post) for shipped orders and flip them to
