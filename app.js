@@ -62,6 +62,8 @@ const allowedOrigins = new Set([
   'http://localhost:8080',
 ].filter(Boolean));
 
+const blockedOriginLog = new Map();
+
 app.use(
   cors({
     origin: (origin, callback) => {
@@ -77,6 +79,13 @@ app.use(
 
       }
 
+      // Say which site was refused (once per origin every 10 minutes, so a bot cannot flood the log).
+      const lastLogged = blockedOriginLog.get(origin) || 0;
+      if (Date.now() - lastLogged > 10 * 60 * 1000) {
+        if (blockedOriginLog.size > 500) blockedOriginLog.clear();
+        blockedOriginLog.set(origin, Date.now());
+        console.warn(`[cors] blocked origin: ${String(origin).slice(0, 200)}`);
+      }
       return callback(new Error('CORS policy: Origin not allowed'));
     },
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
