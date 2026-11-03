@@ -269,6 +269,12 @@ function dedicationFromBody(body) {
   return { dedicationOccasion: occasion, dedicationDate: date, dedicationNote: note };
 }
 
+// Optional gotra: a short plain string, kept only for offerings above Rs 1,000.
+function cleanGotram(v) {
+  const t = String(v || "").trim().replace(/\s+/g, " ").slice(0, 60);
+  return t || undefined;
+}
+
 const paymentController = {
   createOrder: async (req, res) => {
     try {
@@ -353,6 +359,7 @@ const paymentController = {
         sevaDate: sevaDate || req.body.sevaDate || undefined,
         dob: dob || req.body.dob || undefined,
         ...dedicationFromBody(req.body),
+        gotram: Number(amount) > 1000 ? cleanGotram(req.body.gotram) : undefined,
         wantPrasadam: mahaprasadam || req.body.wantPrasadam,
         prasadamAddress: prasadamAddress || req.body.prasadamAddress,
         festivalSlug: req.body.festivalSlug || undefined,

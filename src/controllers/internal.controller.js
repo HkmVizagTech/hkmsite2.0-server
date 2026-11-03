@@ -52,6 +52,7 @@ const DONATION_FIELDS = [
   "dedicationOccasion",
   "dedicationDate",
   "dedicationNote",
+  "gotram",
 ].join(" ");
 
 // DRM works in English, so names and addresses typed in Telugu, Hindi or any
@@ -92,6 +93,7 @@ function mapDonation(d) {
     dedicationOccasion: d.dedicationOccasion || null,
     dedicationDate: d.dedicationDate || null,
     dedicationNote: d.dedicationNote || null,
+    gotram: d.gotram || null,
     prasadam: d.wantPrasadam
       ? {
           status: d.prasadamStatus || "pending",

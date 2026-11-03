@@ -73,6 +73,8 @@ const donationSchema = new mongoose.Schema({
   dedicationDate: { type: String },
   // What the donor typed when the occasion is "other".
   dedicationNote: { type: String },
+  // The family's gotra, optionally given on offerings above Rs 1,000 (the sankalpa is taken in it).
+  gotram: { type: String },
   wantPrasadam: { type: Boolean, default: false },
   prasadamAddress: {
     doorNo: String,
