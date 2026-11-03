@@ -40,6 +40,10 @@ internalRouter.put("/donations/:id/prasadam-status", internalController.updatePr
 // temple can ring. Read-only; nothing on this site is changed by it.
 internalRouter.get("/abandoned", internalController.getAbandonedDonations);
 
+// "Become a Patron" form submissions from /patron, for DRM to turn into call
+// leads. Read-only, newest first, paginated; nothing here is changed by it.
+internalRouter.get("/patron-requests", internalController.getPatronRequests);
+
 internalRouter.get("/donations/:id/receipt.pdf", internalController.getReceiptPdf);
 internalRouter.post("/donations/:id/resend-receipt", internalController.resendReceipt);
 
