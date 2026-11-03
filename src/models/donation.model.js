@@ -65,6 +65,14 @@ const donationSchema = new mongoose.Schema({
   sevakName: { type: String },
   sevaDate: { type: String },
   dob: { type: String },
+  // Why the seva was offered, as picked on the Brick / Square Foot Seva form:
+  // birthday | wedding_anniversary | death_anniversary | other. The date is that
+  // occasion's own date (birth, wedding or passing, YYYY-MM-DD); `dob` is kept
+  // for real dates of birth only, because DRM reads it as the donor's birthday.
+  dedicationOccasion: { type: String },
+  dedicationDate: { type: String },
+  // What the donor typed when the occasion is "other".
+  dedicationNote: { type: String },
   wantPrasadam: { type: Boolean, default: false },
   prasadamAddress: {
     doorNo: String,

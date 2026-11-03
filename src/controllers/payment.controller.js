@@ -257,6 +257,18 @@ async function processWebhookEventInline(event) {
   }
 }
 
+// The occasion a seva is offered for (Brick / Square Foot Seva form). Only the four known
+// occasions are kept, the date must be a real YYYY-MM-DD, and the donor's own wording for
+// "other" is trimmed - so nothing arbitrary is stored from a public endpoint.
+const DEDICATION_OCCASIONS = ["birthday", "wedding_anniversary", "death_anniversary", "other"];
+function dedicationFromBody(body) {
+  const occasion = DEDICATION_OCCASIONS.includes(body.dedicationOccasion) ? body.dedicationOccasion : undefined;
+  if (!occasion) return {};
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(String(body.dedicationDate || "")) ? String(body.dedicationDate) : undefined;
+  const note = occasion === "other" ? String(body.dedicationNote || "").trim().slice(0, 80) || undefined : undefined;
+  return { dedicationOccasion: occasion, dedicationDate: date, dedicationNote: note };
+}
+
 const paymentController = {
   createOrder: async (req, res) => {
     try {
@@ -340,6 +352,7 @@ const paymentController = {
         sevakName: sevakName || req.body.sevakName || undefined,
         sevaDate: sevaDate || req.body.sevaDate || undefined,
         dob: dob || req.body.dob || undefined,
+        ...dedicationFromBody(req.body),
         wantPrasadam: mahaprasadam || req.body.wantPrasadam,
         prasadamAddress: prasadamAddress || req.body.prasadamAddress,
         festivalSlug: req.body.festivalSlug || undefined,

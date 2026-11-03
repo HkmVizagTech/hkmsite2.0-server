@@ -48,6 +48,10 @@ const DONATION_FIELDS = [
   "dob",
   "sevaDate",
   "sevakName",
+  // Why the seva was offered (birthday, wedding or death anniversary, other) and its date.
+  "dedicationOccasion",
+  "dedicationDate",
+  "dedicationNote",
 ].join(" ");
 
 // DRM works in English, so names and addresses typed in Telugu, Hindi or any
@@ -85,6 +89,9 @@ function mapDonation(d) {
     sevaDate: d.sevaDate || null,
     sevakName: toEnglish(d.sevakName) || null,
     dob: d.dob || null,
+    dedicationOccasion: d.dedicationOccasion || null,
+    dedicationDate: d.dedicationDate || null,
+    dedicationNote: d.dedicationNote || null,
     prasadam: d.wantPrasadam
       ? {
           status: d.prasadamStatus || "pending",
