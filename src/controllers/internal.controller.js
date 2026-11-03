@@ -489,6 +489,52 @@ const internalController = {
     }
   },
 
+  // GET /api/internal/drm/patron-requests?since=&page=&limit=
+  //
+  // "Become a Patron" submissions, oldest-first within the window so DRM can
+  // page forward with `since` and never skip one. Read-only. DRM de-duplicates
+  // on externalId and on mobile, so re-sending the same rows is harmless.
+  getPatronRequests: async (req, res) => {
+    try {
+      const { patronRequestModel } = require("../models/patronRequest.model");
+      const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+      const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 200));
+      const filter = {};
+      if (req.query.since) {
+        const since = new Date(req.query.since);
+        if (!Number.isNaN(since.getTime())) filter.createdAt = { $gte: since };
+      }
+      const [rows, total] = await Promise.all([
+        patronRequestModel.find(filter).sort({ createdAt: 1 }).skip((page - 1) * limit).limit(limit).lean(),
+        patronRequestModel.countDocuments(filter),
+      ]);
+      res.status(200).json({
+        success: true,
+        page,
+        limit,
+        total,
+        hasMore: page * limit < total,
+        requests: rows.map((r) => ({
+          externalId: String(r._id),
+          name: r.name,
+          firstName: r.firstName,
+          lastName: r.lastName || null,
+          mobile: r.mobile,
+          email: r.email || null,
+          city: r.city || null,
+          state: r.state || null,
+          message: r.message || null,
+          authorization: !!r.authorization,
+          requestedAt: r.createdAt,
+          sourceSite: "hkmv",
+        })),
+      });
+    } catch (err) {
+      console.error("internal.getPatronRequests error:", err);
+      res.status(500).json({ success: false, message: err.message || "Failed to list patron requests" });
+    }
+  },
+
   // GET /api/internal/donations/:id/receipt.pdf
   // Streams the same 80G receipt PDF a logged-in donor would get from
   // GET /donor/receipt/:donationId, so DRM can show/download the real
