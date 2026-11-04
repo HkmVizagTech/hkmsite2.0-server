@@ -155,7 +155,7 @@ async function buildCsv({ scope, dateMatch, query }) {
 
   const istTime = (d) => (d ? new Date(d).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) : "");
   const headers = [
-    "Donor Name", "Mobile", "Email", "Amount", "Delivery Address",
+    "Donor Name", "Mobile", "Email", "Amount", "Delivery Address", "Pin Code",
     "Seva", "Source Page", "Prasadam Status", "Courier", "Tracking Number",
     "Dispatched At", "Delivered At", "Donated On", "Notes", "Receipt Number", "Payment ID",
   ];
@@ -168,6 +168,7 @@ async function buildCsv({ scope, dateMatch, query }) {
         r.donorEmail || "",
         r.amount,
         formatAddress(r.prasadamAddress),
+        r.prasadamAddress?.pincode || "",
         r.sevaName || r.type || "",
         r.sourcePage || "",
         r.prasadamStatus || "pending",

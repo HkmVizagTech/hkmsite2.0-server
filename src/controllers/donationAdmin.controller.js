@@ -471,7 +471,7 @@ const donationAdminController = {
       const headers = [
         "Transaction ID", "Donor Name", "Email", "Mobile", "Date", "Amount", "Status",
         "Seva", "Occasion / Note", "80G Certificate", "PAN Number",
-        "Mahaprasadam Requested", "Prasadam Address",
+        "Mahaprasadam Requested", "Prasadam Address", "Pin Code",
         "Receipt Number", "DCC Sync Status", "WhatsApp Receipt Sent", "WhatsApp Error",
         "Campaign", "UTM Source", "UTM Medium", "UTM Content", "UTM Term",
         "Razorpay Order ID", "Razorpay Payment ID",
@@ -503,6 +503,7 @@ const donationAdminController = {
         txn.panNumber || "",
         txn.wantPrasadam ? "Yes" : "No",
         formatAddress(txn.prasadamAddress),
+        txn.prasadamAddress?.pincode || "",
         txn.receiptNumber || "",
         txn.dccSyncStatus || "",
         txn.whatsappReceiptSentAt ? new Date(txn.whatsappReceiptSentAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) : "",
