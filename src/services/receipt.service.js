@@ -16,12 +16,18 @@ const { PDFDocument, StandardFonts, rgb } = require("pdf-lib");
 
 // How a hand-entered donation was paid, as printed after "by" on the receipt.
 const MODE_WORDS = { cash: "Cash", cheque: "Cheque", upi: "UPI", bank: "Bank" };
+// The short form printed after "Enrolled by" and "CDC" on the receipt. DCC itself is sent the devotee ID
+// only (see dcc.service.js); the codes are for the printed receipt alone. A donation raised under DCC ID
+// 25 (the /donations page) prints SMED; every other donation prints MKGD.
+const ENROLLED_BY_SMED_ID = 25;
+const ENROLLED_BY_SMED = "SMED";
+const ENROLLED_BY_DEFAULT_CODE = "MKGD";
 // DCC account type of Touchstone Charities (4 is HKMI, the default).
 const TSC_ACCOUNT_TYPE = 5;
 const numToWord = require("number-to-words");
 const { donationModel } = require("../models/donation.model");
-const { campaignerModel } = require("../models/campaigner.model");
 const { IST } = require("../config/timezone");
+const { resolveEnrolledBy } = require("./dcc.service");
 
 const resolveFontPath = (fontPath) => {
   if (!fontPath) return null;
@@ -136,13 +142,8 @@ async function generateReceiptBuffer(donationId) {
   const address = buildAddress(donation.prasadamAddress);
   const seva = donation.sevaName || donation.type || "General Seva";
 
-  // "Enrolled by" — best-effort: the campaigner's name if this donation
-  // came through a P2P Square Foot Seva link, otherwise blank.
-  let enrolledByName = "---";
-  if (donation.campaignerSlug) {
-    const campaigner = await campaignerModel.findOne({ slug: donation.campaignerSlug }).lean();
-    if (campaigner?.name) enrolledByName = campaigner.name;
-  }
+  // "Enrolled by" (and CDC, drawn from the same value): SMED for DCC ID 25, MKGD for everything else.
+  const enrolledByName = resolveEnrolledBy(donation) === ENROLLED_BY_SMED_ID ? ENROLLED_BY_SMED : ENROLLED_BY_DEFAULT_CODE;
 
   // DCC's own DonorNumber (e.g. "D49822") is the real, authoritative donor
   // ID once it exists — donation.donorId is only a denormalized copy of
@@ -270,6 +271,26 @@ async function generateReceiptBuffer(donationId) {
     // Flattening is cosmetic (it makes the fields non-editable). A receipt
     // with live form fields is still a correct, complete receipt.
     console.warn(`receipt.service: could not flatten the form (${err.message}) — saving with fields intact`);
+  }
+
+  // CDC, printed beside "Enrolled by" exactly as DCC's own receipt does, with the same code. The
+  // template has no CDC box (the gap between "Enrolled by" and "Towards" is empty), so it is drawn
+  // here on the flattened page. It shrinks to fit that gap; a long campaigner name would otherwise
+  // run into "Towards".
+  try {
+    const page = pdfDoc.getPages()[0];
+    const h = page.getHeight();
+    const cdcText = prep(fieldValues.enrolledBy, sanitize);
+    const cdcFont = isAsciiOnly(stripAstral(cdcText)) ? helvetica : font;
+    const labelX = 225;
+    const valueX = 256;
+    const room = 293 - valueX; // up to the "Towards :" label at x 297
+    let size = 9.8;
+    while (size > 6.5 && cdcFont.widthOfTextAtSize(cdcText, size) > room) size -= 0.3;
+    page.drawText("CDC :", { x: labelX, y: 370.4, size: 9.8, font: helvetica, color: rgb(0, 0, 0) });
+    page.drawText(cdcText, { x: valueX, y: 370.4, size, font: cdcFont, color: rgb(0, 0, 0), maxWidth: room });
+  } catch (err) {
+    console.warn(`receipt.service: could not print CDC (${err.message})`);
   }
 
   // The template prints "by Online" as fixed text. That is true for a
