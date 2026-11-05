@@ -40,6 +40,7 @@ const { volunteerRouter } = require("./src/routes/volunteer.routes");
 const { whatsappWebhookRouter } = require("./src/routes/whatsappWebhook.routes");
 const { shopRouter } = require("./src/routes/shop.routes");
 const { shopAdminRouter } = require("./src/routes/shopAdmin.routes");
+const { bhajanRouter } = require("./src/routes/bhajan.routes");
 const { internalRouter } = require("./src/routes/internal.routes");
 const app = express();
 app.set('trust proxy', 1);
@@ -161,6 +162,7 @@ app.use("/hero-banners", heroBannerRouter);
 app.use("/campaigners", campaignerRouter);
 app.use("/temple-devotees", require("./src/routes/templeDevotee.routes").templeDevoteeRouter);
 app.use("/media", mediaRouter);
+app.use("/bhajans", bhajanRouter);
 app.use("/seva-stats", sevaStatsRouter);
 
 app.use("/important-dates", importantDateRouter);
