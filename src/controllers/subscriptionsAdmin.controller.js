@@ -221,4 +221,4 @@ const subscriptionsAdminController = {
   },
 };
 
-module.exports = { subscriptionsAdminController };
+module.exports = { subscriptionsAdminController, liveSubscriptions };

@@ -19,6 +19,8 @@ const DONATION_FIELDS = [
   "createdAt",
   "isRecurring",
   "subscriptionId",
+  // Which Razorpay account the subscription lives in, to ask Razorpay what state it is really in.
+  "paymentAccount",
   "receiptNumber",
   "receiptGeneratedAt",
   "wantPrasadam",
@@ -135,6 +137,7 @@ function collapseSubscriptions(donations) {
     if (!bySubscription.has(key)) {
       bySubscription.set(key, {
         subscriptionId: key,
+        paymentAccount: d.paymentAccount || "default",
         sevaName: d.sevaName || d.type || "Monthly Seva",
         amount: d.amount,
         status: d.status,
@@ -155,6 +158,44 @@ function collapseSubscriptions(donations) {
   return Array.from(bySubscription.values());
 }
 
+// What Razorpay itself says each subscription is (active, authenticated, halted, cancelled, completed ...),
+// added to each entry as `liveStatus` (plus `paidCount` and `nextChargeAt`).
+//
+// WHY: the entries above are built from our own donation rows, and a paid row looks the same whether the
+// subscription is still running or was cancelled yesterday - "latest charge completed" cannot tell them
+// apart. This site's own Monthly Seva screen counts what is worth counting from Razorpay's live state, so
+// DRM was showing a bigger number than this site. Sending the live state lets DRM count exactly what this
+// site counts. It reuses that screen's five-minute copy of Razorpay's list, so it does not hit Razorpay per
+// donor; if Razorpay cannot be reached the entries go out without it and DRM falls back to the charge dates.
+// Never throws, never holds a snapshot up for more than a few seconds.
+async function withLiveStatus(subs) {
+  if (!subs.length) return subs;
+  try {
+    const { liveSubscriptions } = require("./subscriptionsAdmin.controller");
+    const accounts = [...new Set(subs.map((s) => s.paymentAccount || "default"))];
+    const live = {};
+    await Promise.all(
+      accounts.map(async (acc) => {
+        const map = await Promise.race([
+          liveSubscriptions(acc, false),
+          new Promise((resolve) => setTimeout(() => resolve(null), 8000)),
+        ]).catch(() => null);
+        if (map) live[acc] = map;
+      })
+    );
+    for (const s of subs) {
+      const l = live[s.paymentAccount || "default"] && live[s.paymentAccount || "default"][s.subscriptionId];
+      if (!l) continue;
+      s.liveStatus = l.status;
+      s.paidCount = l.paidCount;
+      s.nextChargeAt = l.nextChargeAt;
+    }
+  } catch (err) {
+    console.error("withLiveStatus:", err && err.message);
+  }
+  return subs;
+}
+
 // Builds the donor snapshot payload DRM consumes. Exported because
 // drmNotify.service.js pushes this exact same shape to DRM the moment a
 // donation completes - so DRM has ONE idempotent upsert path that handles
@@ -169,7 +210,7 @@ async function buildDonorSnapshot(donor) {
   return {
     donor: mapDonor(donor, donations),
     donations: donations.map(mapDonation),
-    subscriptions: collapseSubscriptions(donations),
+    subscriptions: await withLiveStatus(collapseSubscriptions(donations)),
   };
 }
 
@@ -193,14 +234,16 @@ async function buildDonorSnapshots(donors) {
     byDonor.get(key).push(d);
   }
 
-  return donors.map((donor) => {
-    const own = byDonor.get(String(donor._id)) || [];
-    return {
-      donor: mapDonor(donor, own),
-      donations: own.map(mapDonation),
-      subscriptions: collapseSubscriptions(own),
-    };
-  });
+  return Promise.all(
+    donors.map(async (donor) => {
+      const own = byDonor.get(String(donor._id)) || [];
+      return {
+        donor: mapDonor(donor, own),
+        donations: own.map(mapDonation),
+        subscriptions: await withLiveStatus(collapseSubscriptions(own)),
+      };
+    })
+  );
 }
 
 const internalController = {
@@ -655,4 +698,4 @@ const internalController = {
   },
 };
 
-module.exports = { internalController, buildDonorSnapshot };
+module.exports = { internalController, buildDonorSnapshot, withLiveStatus, collapseSubscriptions };
