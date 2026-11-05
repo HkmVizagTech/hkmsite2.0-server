@@ -59,6 +59,8 @@ const allowedOrigins = new Set([
   // harekrishnavaikuntham.org serves the site too (the .in and .com versions only redirect to it).
   'https://harekrishnavaikuntham.org',
   'https://www.harekrishnavaikuntham.org',
+  'https://hkmvizag.org',
+  'https://www.hkmvizag.org',
   'http://localhost:3000',
   'http://localhost:8080',
 ].filter(Boolean));
@@ -76,6 +78,12 @@ app.use(
         const hostname = new URL(origin).hostname;
         if (hostname.endsWith('.vercel.app')) return callback(null, true);
         if (hostname === 'harekrishnavizag.org' || hostname.endsWith('.harekrishnavizag.org')) return callback(null, true);
+        // Google Translate serves our pages from <domain-with-dots-as-hyphens>.translate.goog; allow it only for our own domains.
+        if (hostname.endsWith('.translate.goog')) {
+          const original = hostname.slice(0, -'.translate.goog'.length).replace(/--/g, '\u0000').replace(/-/g, '.').replace(/\u0000/g, '-');
+          if (allowedOrigins.has(`https://${original}`) || /(^|\.)(harekrishnavizag|hkmvizag)\.org$/.test(original)) return callback(null, true);
+        }
+        if (hostname === 'hkmvizag.org' || hostname.endsWith('.hkmvizag.org')) return callback(null, true);
       } catch (e) {
 
       }
