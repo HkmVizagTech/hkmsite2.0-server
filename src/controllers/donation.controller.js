@@ -71,6 +71,7 @@ const donationController = {
         monthlyAgg,
         sevaAgg,
         needsAttentionCount,
+        todayAgg,
       ] = await Promise.all([
         // Total collected (completed only)
         donationModel.aggregate([
@@ -132,6 +133,11 @@ const donationController = {
           { $sort: { value: -1 } },
         ]),
         donationModel.countDocuments(needsAttentionFilter),
+        // Today (IST day, completed only)
+        donationModel.aggregate([
+          { $match: { ...completedBase, createdAt: { $gte: istDayStart(new Intl.DateTimeFormat("en-CA", { timeZone: IST }).format(now)) } } },
+          { $group: { _id: null, total: { $sum: "$amount" }, count: { $sum: 1 } } },
+        ]),
       ]);
 
       const totalCollected = totalAgg[0]?.total || 0;
@@ -167,6 +173,7 @@ const donationController = {
           totalTransactions,
           totalDonors: donorIdentities[0]?.count || 0,
           thisMonth: { value: thisMonthTotal, changePct, label: currentMonthLabel },
+          today: { value: todayAgg[0]?.total || 0, count: todayAgg[0]?.count || 0 },
           needsAttentionCount,
           monthly,
           sevaWise,
