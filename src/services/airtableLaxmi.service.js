@@ -7,7 +7,8 @@
 //   Number of Contacts distinct donor mobile numbers among those donations (the same number donating twice counts once)
 //   Devotees           a fixed Airtable record link (the same every day)
 //
-// "Confirmed" means status "completed", counted by the day the donation was created. Donations with no usable mobile
+// "Confirmed" means status "completed", counted by the day the donation was created. Donations made on the standalone
+// /donations page (sourcePage "donations" or "donations/...") are left out, matching the admin Donations dashboard. Donations with no usable mobile
 // number add to the points but not to the contacts. It never posts twice for a date: each date is claimed in the
 // airtable_laxmi_syncs collection (unique _id) before the request, so restarts, several instances and retries are safe.
 //
@@ -21,6 +22,9 @@ const { cleanMobile, isValidMobile } = require("../utils/mobile");
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const POINTS_DIVISOR = 10;
+// Same rule as the admin Donations dashboard: the standalone /donations page (and /donations/...) is its own thing and
+// never counts toward Laxmi points.
+const EXCLUDE_DONATIONS_PAGE = { sourcePage: { $not: /^donations(\/|$)/ } };
 const MAX_ATTEMPTS = 12;
 const STALE_CLAIM_MS = 10 * 60 * 1000;
 const CHECK_INTERVAL_MS = 5 * 60 * 1000;
@@ -54,7 +58,7 @@ const yesterdayIst = (now = new Date()) => istDateOf(new Date(now.getTime() - DA
 async function computeDay(dateStr) {
   const { start, end } = istDayRange(dateStr);
   const [row] = await donationModel.aggregate([
-    { $match: { status: "completed", createdAt: { $gte: start, $lt: end } } },
+    { $match: { ...EXCLUDE_DONATIONS_PAGE, status: "completed", createdAt: { $gte: start, $lt: end } } },
     { $group: { _id: null, total: { $sum: "$amount" }, donations: { $sum: 1 }, mobiles: { $push: "$donorMobile" } } },
   ]);
   const total = row ? row.total : 0;
