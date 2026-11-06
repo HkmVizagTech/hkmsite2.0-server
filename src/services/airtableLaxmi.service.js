@@ -24,8 +24,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const POINTS_DIVISOR = 10;
 // Same rule as the admin Donations dashboard: the standalone /donations page (and /donations/...) is its own thing and
 // never counts toward Laxmi points.
-// Covers every spelling the other page's donations use: "donations", "/donations", "donations/...", type "Donation".
-const EXCLUDE_DONATIONS_PAGE = { sourcePage: { $not: /^\/?donations(\/|$)/ }, type: { $ne: "Donation" } };
+// Only the /donations family is excluded ("donations", "/donations", "donations/...", e.g. /donations/admin). Every other
+// page is ours and counts.
+const EXCLUDE_DONATIONS_PAGE = { sourcePage: { $not: /^\/?donations(\/|$)/ } };
 const MAX_ATTEMPTS = 12;
 const STALE_CLAIM_MS = 10 * 60 * 1000;
 const CHECK_INTERVAL_MS = 5 * 60 * 1000;
