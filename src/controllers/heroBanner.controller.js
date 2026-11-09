@@ -2,12 +2,30 @@ const fs = require("fs");
 const { heroBannerModel } = require("../models/heroBanner.model");
 const { uploadToR2 } = require("../utils/r2");
 
+// "" / null clears a date; anything else must parse to a real date. Returns undefined when the field was not sent.
+const parseDate = (v) => {
+  if (v === undefined) return undefined;
+  if (v === null || v === "" || v === "null") return null;
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? "invalid" : d;
+};
+
 const heroBannerController = {
   // PUBLIC - active banners in display order
   list: async (req, res) => {
     try {
       const includeInactive = req.query.all === "true";
-      const filter = includeInactive ? {} : { active: true };
+      const now = new Date();
+      // Public: active, already started (or no start) and not yet ended (or no end). Admin (?all=true) sees everything.
+      const filter = includeInactive
+        ? {}
+        : {
+            active: true,
+            $and: [
+              { $or: [{ startsAt: null }, { startsAt: { $exists: false } }, { startsAt: { $lte: now } }] },
+              { $or: [{ endsAt: null }, { endsAt: { $exists: false } }, { endsAt: { $gt: now } }] },
+            ],
+          };
       const banners = await heroBannerModel.find(filter).sort({ order: 1, createdAt: 1 }).lean();
       res.status(200).json({ banners });
     } catch (err) {
@@ -45,8 +63,15 @@ const heroBannerController = {
         return res.status(400).json({ message: "Both desktop and mobile images are required" });
       }
 
+      const startsAt = parseDate(req.body.startsAt);
+      const endsAt = parseDate(req.body.endsAt);
+      if (startsAt === "invalid" || endsAt === "invalid") return res.status(400).json({ message: "Invalid start or end date" });
+      if (startsAt && endsAt && endsAt <= startsAt) return res.status(400).json({ message: "The end date must be after the start date" });
+
       const count = await heroBannerModel.countDocuments();
       const banner = await heroBannerModel.create({
+        startsAt: startsAt || null,
+        endsAt: endsAt || null,
         title: title || `Banner ${count + 1}`,
         desktopImage,
         mobileImage,
@@ -78,6 +103,15 @@ const heroBannerController = {
       if (req.body.order !== undefined) patch.order = Number(req.body.order);
       if (req.body.active !== undefined) patch.active = req.body.active === "true" || req.body.active === true;
       if (req.body.linkUrl !== undefined) patch.linkUrl = String(req.body.linkUrl).trim();
+
+      const startsAt = parseDate(req.body.startsAt);
+      const endsAt = parseDate(req.body.endsAt);
+      if (startsAt === "invalid" || endsAt === "invalid") return res.status(400).json({ message: "Invalid start or end date" });
+      if (startsAt !== undefined) patch.startsAt = startsAt;
+      if (endsAt !== undefined) patch.endsAt = endsAt;
+      const nextStart = patch.startsAt !== undefined ? patch.startsAt : existing.startsAt;
+      const nextEnd = patch.endsAt !== undefined ? patch.endsAt : existing.endsAt;
+      if (nextStart && nextEnd && nextEnd <= nextStart) return res.status(400).json({ message: "The end date must be after the start date" });
 
       if (desktopFile) {
         const up = await uploadToR2(desktopFile.path, "hero-banners");
