@@ -12,6 +12,10 @@ const { IST, istDayStart, istDayEnd } = require("../config/timezone");
 // needing this list updated by hand each time.
 const DONATIONS_DOMAIN_PATTERN = /^donations(\/|$)/;
 const EXCLUDE_DONATIONS_PAGE = { sourcePage: { $not: DONATIONS_DOMAIN_PATTERN } };
+// The admin Donations views (list, stats, reports, UTM) show only the temple's own donations, whose DCC receipt
+// goes under the default ID 36 (or no ID set). Donations credited to a preacher (preacher link, campaigner, or a
+// manual entry with a devotee) belong to the Preachers module instead. Prasadam requests are not affected.
+const ADMIN_DONATIONS_SCOPE = { ...EXCLUDE_DONATIONS_PAGE, dccEnrolledById: { $in: [null, 36] } };
 
 // Shared helper: builds a { createdAt: {...} } match clause from optional
 // YYYY-MM-DD from/to query params, interpreted as IST calendar days. `to`
@@ -49,11 +53,11 @@ const donationController = {
       // 12 months ago for the bar chart
       const twelveMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 11, 1);
 
-      const completedBase = { ...EXCLUDE_DONATIONS_PAGE, status: "completed" };
+      const completedBase = { ...ADMIN_DONATIONS_SCOPE, status: "completed" };
 
       // Completed donations where DCC sync failed or WhatsApp receipt wasn't sent
       const needsAttentionFilter = {
-        ...EXCLUDE_DONATIONS_PAGE,
+        ...ADMIN_DONATIONS_SCOPE,
         status: "completed",
         $or: [
           { dccSyncStatus: "failed" },
@@ -89,7 +93,7 @@ const donationController = {
           { $group: { _id: null, total: { $sum: "$amount" } } },
         ]),
         // Total transaction count (all statuses)
-        donationModel.countDocuments(EXCLUDE_DONATIONS_PAGE),
+        donationModel.countDocuments(ADMIN_DONATIONS_SCOPE),
         // Unique donors — union of email + mobile
         donationModel.aggregate([
           { $match: completedBase },
@@ -235,7 +239,7 @@ const donationController = {
     try {
       const { from, to } = req.query;
       const dateMatch = buildDateRangeMatch(from, to);
-      const baseMatch = { ...EXCLUDE_DONATIONS_PAGE, status: "completed", ...dateMatch };
+      const baseMatch = { ...ADMIN_DONATIONS_SCOPE, status: "completed", ...dateMatch };
 
       const stats = await donationModel.aggregate([
         { $match: baseMatch },
@@ -294,7 +298,7 @@ const donationController = {
   getUtmTransactions: async (req, res) => {
     try {
       const { campaign, source, medium, sourcePage, from, to } = req.query;
-      const match = { ...EXCLUDE_DONATIONS_PAGE, status: "completed", ...buildDateRangeMatch(from, to) };
+      const match = { ...ADMIN_DONATIONS_SCOPE, status: "completed", ...buildDateRangeMatch(from, to) };
       if (campaign) match["utm.campaign"] = campaign === "direct" ? { $in: [null, ""] } : campaign;
       if (source) match["utm.source"] = source === "direct" ? { $in: [null, ""] } : source;
       if (medium) match["utm.medium"] = medium === "none" ? { $in: [null, ""] } : medium;
@@ -376,9 +380,9 @@ const donationController = {
         return res.status(400).json({ success: false, message: "Invalid period." });
       }
 
-      const baseMatch = { ...EXCLUDE_DONATIONS_PAGE, createdAt: { $gte: start, $lte: end } };
+      const baseMatch = { ...ADMIN_DONATIONS_SCOPE, createdAt: { $gte: start, $lte: end } };
       const completedMatch = { ...baseMatch, status: "completed" };
-      const prevCompletedMatch = { ...EXCLUDE_DONATIONS_PAGE, status: "completed", createdAt: { $gte: prevStart, $lte: prevEnd } };
+      const prevCompletedMatch = { ...ADMIN_DONATIONS_SCOPE, status: "completed", createdAt: { $gte: prevStart, $lte: prevEnd } };
 
       // timezone is required on both: $dateToString runs inside MongoDB,
       // which never sees this process's TZ. Without it the chart series
@@ -711,7 +715,7 @@ const donationController = {
   list: async (req, res) => {
     try {
       const { type, status, date, festivalId, festivalSlug, q, from, to, minAmount, maxAmount } = req.query;
-      let filter = { ...EXCLUDE_DONATIONS_PAGE };
+      let filter = { ...ADMIN_DONATIONS_SCOPE };
       if (type) filter.type = type;
       if (status === 'needs_attention') {
         filter.status = 'completed';

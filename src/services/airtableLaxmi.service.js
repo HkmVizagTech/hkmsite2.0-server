@@ -26,7 +26,9 @@ const POINTS_DIVISOR = 10;
 // never counts toward Laxmi points.
 // Only the /donations family is excluded ("donations", "/donations", "donations/...", e.g. /donations/admin). Every other
 // page is ours and counts.
-const EXCLUDE_DONATIONS_PAGE = { sourcePage: { $not: /^\/?donations(\/|$)/ } };
+// Same scope as the admin Donations views: not the /donations family, and not credited to a preacher (only the
+// temple's default receipt ID 36, or none).
+const EXCLUDE_DONATIONS_PAGE = { sourcePage: { $not: /^\/?donations(\/|$)/ }, dccEnrolledById: { $in: [null, 36] } };
 const MAX_ATTEMPTS = 12;
 const STALE_CLAIM_MS = 10 * 60 * 1000;
 const CHECK_INTERVAL_MS = 5 * 60 * 1000;

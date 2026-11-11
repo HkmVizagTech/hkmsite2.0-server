@@ -364,24 +364,13 @@ const paymentController = {
         prasadamAddress: prasadamAddress || req.body.prasadamAddress,
         festivalSlug: req.body.festivalSlug || undefined,
         campaignerSlug: req.body.campaignerSlug || undefined,
-        // Attribute the donation to the campaigner's selected temple devotee
-        // for DCC receipt purposes — snapshot the devotee's enrolledBy ID now
-        // so later devotee edits don't retroactively change attribution.
-        dccEnrolledById: await (async () => {
-          if (!req.body.campaignerSlug) return undefined;
-          try {
-            const { campaignerModel } = require('../models/campaigner.model');
-            const camp = await campaignerModel
-              .findOne({ slug: String(req.body.campaignerSlug), status: 'active' })
-              .populate('referredByDevotee', 'dccEnrolledById')
-              .lean();
-            const id = camp?.referredByDevotee?.dccEnrolledById;
-            return Number.isFinite(Number(id)) && id != null ? Number(id) : undefined;
-          } catch (e) {
-            console.warn('campaigner devotee lookup failed:', e.message);
-            return undefined;
-          }
-        })(),
+        // Receipt attribution: the campaigner's temple devotee, or the preacher whose seva-page link
+        // (/anna-daan-seva/ABRD) the donor came through. Snapshot now so later devotee edits don't change it.
+        ...(await require('../utils/preacherRef').attributionFor({
+          sourcePage,
+          campaignerSlug: req.body.campaignerSlug,
+          preacherRef: req.body.preacherRef || (req.body.utm && req.body.utm.ref),
+        })),
         festivalId: resolvedFestivalId,
         razorpayOrderId: order.id,
         status: 'pending',
@@ -507,6 +496,11 @@ const paymentController = {
         isRecurring: true,
         status: 'pending',
         campaignerSlug: req.body.campaignerSlug || undefined,
+        ...(await require('../utils/preacherRef').attributionFor({
+          sourcePage,
+          campaignerSlug: req.body.campaignerSlug,
+          preacherRef: req.body.preacherRef || (req.body.utm && req.body.utm.ref),
+        })),
         utm: req.body.utm && typeof req.body.utm === 'object' ? {
           source: String(req.body.utm.source || '').slice(0, 100),
           medium: String(req.body.utm.medium || '').slice(0, 100),
