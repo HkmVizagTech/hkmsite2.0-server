@@ -156,6 +156,7 @@ app.use("/donations-admin", donationAdminRouter);
 app.use("/blogs", blogRouter);
 app.use("/contact-messages", contactMessageRouter);
 app.use("/gita-course", gitaCourseRouter);
+app.use("/preacher-portal", require("./src/routes/preacherPortal.routes").preacherPortalRouter);
 app.use("/patron-requests", patronRequestRouter);
 app.use("/dashboard", dashboardRouter);
 app.use("/devotees", devoteeRouter);

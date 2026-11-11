@@ -3,6 +3,7 @@ const jwt = require("jsonwebtoken");
 const { getJwtSecret } = require("../utils/utils");
 const { donorModel } = require("../models/donor.model");
 const { sendDonorOtp, isWhatsAppConfigured } = require("../services/whatsapp.service");
+const { sendOtpSms, isSmsConfigured } = require("../services/sms.service");
 
 const OTP_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const OTP_RESEND_COOLDOWN_MS = 60 * 1000; // 1 minute between requests
@@ -59,7 +60,20 @@ async function issueOtpForDonor(donor, res) {
   // only once the provider has actually accepted it, and any failure comes
   // back on THIS response where the UI can show it. The couple of seconds is
   // worth that. The timeout inside whatsapp.service keeps the wait bounded.
-  await sendDonorOtp(donor.mobile, otpCode);
+  // SMS first (works on every phone); WhatsApp is the fallback if SMS is not set up or fails.
+  let via = "SMS";
+  if (isSmsConfigured()) {
+    try {
+      await sendOtpSms(donor.mobile, otpCode);
+    } catch (smsErr) {
+      console.warn("donor OTP SMS failed, trying WhatsApp:", smsErr && smsErr.message);
+      via = "WhatsApp";
+      await sendDonorOtp(donor.mobile, otpCode);
+    }
+  } else {
+    via = "WhatsApp";
+    await sendDonorOtp(donor.mobile, otpCode);
+  }
 
   // Only persist the OTP after a confirmed send — a failed/rejected send
   // (see whatsapp.service.js's assertDelivered) throws before reaching here,
@@ -71,7 +85,7 @@ async function issueOtpForDonor(donor, res) {
     otpLastRequestedAt: new Date(),
   });
 
-  return res.status(200).json({ success: true, message: "OTP sent via WhatsApp." });
+  return res.status(200).json({ success: true, via, message: `OTP sent by ${via}.` });
 }
 
 // A failed send is nearly always one of two things, and they need different
@@ -94,8 +108,8 @@ const otpFailureMessage = (err) => {
     raw.includes("cloudflare");
 
   return providerDown
-    ? "Our WhatsApp provider isn't responding right now, so the code couldn't be sent. Please try again in a few minutes."
-    : "We couldn't send the code to this number on WhatsApp. Please check the number, or contact us if it keeps failing.";
+    ? "Our messaging provider isn't responding right now, so the code couldn't be sent. Please try again in a few minutes."
+    : "We couldn't send the code to this number. Please check the number, or contact us if it keeps failing.";
 };
 
 const donorAuthController = {
