@@ -689,8 +689,20 @@ const buildDccPayload = (donation, gatewayPaymentId, sevaOverride = null) => {
     gatewayPaymentId: dccTransactionId(donation, gatewayPaymentId),
     transactionDate: formatDateForDcc(donation.date || donation.createdAt || new Date()),
     enrolledBy: resolveEnrolledBy(donation),
+    // Optional CDC (the devotee the donation is assigned to in the DCC portal). Off until the DCC team confirms
+    // the field: set DCC_CDC_FIELD to its name (e.g. "cdc") and DCC_CDC_VALUE to "id" (send the enrolled-by ID,
+    // e.g. 37) or "code" (send the devotee code, e.g. "MGVD"). Only sent for donations credited to a preacher.
+    ...cdcField(donation),
   };
 };
+
+function cdcField(donation) {
+  const field = String(process.env.DCC_CDC_FIELD || "").trim();
+  if (!field || donation.dccEnrolledById == null || Number(donation.dccEnrolledById) === 36) return {};
+  const mode = String(process.env.DCC_CDC_VALUE || "id").toLowerCase();
+  if (mode === "code") return donation.preacherCode ? { [field]: String(donation.preacherCode).toUpperCase() } : {};
+  return { [field]: Number(donation.dccEnrolledById) };
+}
 
 const isDccConfigured = () => Boolean(process.env.DCC_API_KEY);
 
