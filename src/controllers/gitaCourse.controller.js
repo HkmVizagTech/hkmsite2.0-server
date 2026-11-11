@@ -108,7 +108,11 @@ const gitaCourseController = {
       if (!LANGUAGES.includes(language)) return res.status(400).json({ message: "Please choose the class language: English or Telugu." });
       if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ message: "Please enter a valid email, or leave it blank." });
 
-      const batch = await findOpenBatch(ageGroup, language);
+      // Someone registering again keeps the batch they are already in (if it has not ended); otherwise the next open batch.
+      let batch = null;
+      const mine = await gitaCourseRegistrationModel.find({ mobile, batch: ageGroup, batchId: { $ne: null } }).populate("batchId").lean();
+      const current = mine.map((r) => r.batchId).find((b) => b && b.language === language && b.endDate >= todayIst());
+      batch = current || (await findOpenBatch(ageGroup, language));
       // One row per person per batch: registering again for the same batch just updates their details.
       const doc = await gitaCourseRegistrationModel.findOneAndUpdate(
         { mobile, batch: ageGroup, batchId: batch ? batch._id : null },
