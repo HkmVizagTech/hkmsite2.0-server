@@ -18,7 +18,8 @@ const { PDFDocument, StandardFonts, rgb } = require("pdf-lib");
 const MODE_WORDS = { cash: "Cash", cheque: "Cheque", upi: "UPI", bank: "Bank" };
 // The short form printed after "Enrolled by" and "CDC" on the receipt. DCC itself is sent the devotee ID
 // only (see dcc.service.js); the codes are for the printed receipt alone. A donation raised under DCC ID
-// 25 (the /donations page) prints SMED; every other donation prints MKGD.
+// 25 (the /donations page) prints SMED; a donation credited to a preacher prints that preacher's code (e.g.
+// MGVD); everything else prints MKGD.
 const ENROLLED_BY_SMED_ID = 25;
 const ENROLLED_BY_SMED = "SMED";
 const ENROLLED_BY_DEFAULT_CODE = "MKGD";
@@ -28,6 +29,21 @@ const numToWord = require("number-to-words");
 const { donationModel } = require("../models/donation.model");
 const { IST } = require("../config/timezone");
 const { resolveEnrolledBy } = require("./dcc.service");
+const { templeDevoteeModel } = require("../models/templeDevotee.model");
+
+// Code printed for the DCC enrolled-by ID this donation was (or will be) sent with.
+async function enrolledByCode(donation) {
+  const id = resolveEnrolledBy(donation);
+  if (id === ENROLLED_BY_SMED_ID) return ENROLLED_BY_SMED;
+  if (donation.dccEnrolledById != null && Number(donation.dccEnrolledById) === id) {
+    if (donation.preacherCode) return String(donation.preacherCode).toUpperCase();
+    try {
+      const d = await templeDevoteeModel.findOne({ dccEnrolledById: id }).select("code").lean();
+      if (d && d.code) return d.code;
+    } catch {}
+  }
+  return ENROLLED_BY_DEFAULT_CODE;
+}
 
 const resolveFontPath = (fontPath) => {
   if (!fontPath) return null;
@@ -142,8 +158,10 @@ async function generateReceiptBuffer(donationId) {
   const address = buildAddress(donation.prasadamAddress);
   const seva = donation.sevaName || donation.type || "General Seva";
 
-  // "Enrolled by" (and CDC, drawn from the same value): SMED for DCC ID 25, MKGD for everything else.
-  const enrolledByName = resolveEnrolledBy(donation) === ENROLLED_BY_SMED_ID ? ENROLLED_BY_SMED : ENROLLED_BY_DEFAULT_CODE;
+  // "Enrolled by" (and CDC, drawn from the same value) is the code of the devotee whose ID was sent to DCC as
+  // enrolledBy: the preacher's code (e.g. MGVD for 37) when the donation is credited to a preacher, SMED for
+  // DCC ID 25 (the /donations page), MKGD for the temple default.
+  const enrolledByName = await enrolledByCode(donation);
 
   // DCC's own DonorNumber (e.g. "D49822") is the real, authoritative donor
   // ID once it exists — donation.donorId is only a denormalized copy of
