@@ -12,7 +12,8 @@ const gitaCourseRegistrationSchema = new mongoose.Schema(
     preferredTime: { type: String, trim: true, default: "", maxlength: 60 },
     kidName: { type: String, trim: true, default: "", maxlength: 120 },
     note: { type: String, trim: true, default: "", maxlength: 500 },
-    status: { type: String, enum: ["new", "contacted", "added"], default: "new" },
+    status: { type: String, enum: ["new", "contacted", "added", "completed", "dropped"], default: "new" },
+    batchId: { type: mongoose.Schema.Types.ObjectId, ref: "GitaBatch", default: null, index: true },
   },
   { timestamps: true, collection: "gita_course_registrations" }
 );
