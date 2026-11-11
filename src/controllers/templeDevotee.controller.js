@@ -123,6 +123,13 @@ const templeDevoteeController = {
       });
       const totals = preachers.reduce((a, p) => ({ count: a.count + p.count, total: a.total + p.total }), { count: 0, total: 0 });
 
+      // Today (IST), regardless of the chosen range: for one preacher when ?id= is given, else for all preachers.
+      const todayStr = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
+      const todayMatch = { ...PREACHER_SCOPE, status: "completed", ...rangeMatch(todayStr, todayStr) };
+      if (id !== undefined && id !== "" && Number.isFinite(Number(id))) todayMatch.dccEnrolledById = Number(id);
+      const [t] = await donationModel.aggregate([{ $match: todayMatch }, { $group: { _id: null, count: { $sum: 1 }, total: { $sum: "$amount" } } }]);
+      const today = { count: t ? t.count : 0, total: t ? t.total : 0 };
+
       let donations = null;
       if (id !== undefined && id !== "" && Number.isFinite(Number(id))) {
         const pageNum = Math.max(1, parseInt(page, 10) || 1);
@@ -140,7 +147,7 @@ const templeDevoteeController = {
         ]);
         donations = { items, total, page: pageNum, totalPages: Math.ceil(total / lim), daily };
       }
-      res.status(200).json({ success: true, preachers, totals, devotees: devotees.filter((d) => d.dccEnrolledById != null && Number(d.dccEnrolledById) !== 36), donations });
+      res.status(200).json({ success: true, preachers, totals, today, devotees: devotees.filter((d) => d.dccEnrolledById != null && Number(d.dccEnrolledById) !== 36), donations });
     } catch (err) {
       console.error("templeDevotee.analytics error:", err);
       res.status(500).json({ success: false, message: "Server error" });
