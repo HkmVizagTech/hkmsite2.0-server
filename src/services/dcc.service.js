@@ -68,6 +68,23 @@ const DCC_SEVA_MAPPINGS = parseJsonEnv("DCC_SEVA_MAPPINGS", []);
 // the real DCC configuration and override via DCC_SEVA_MAPPINGS if they
 // differ, no code deploy needed to fix.
 const DEFAULT_NAME_BASED_SEVA_MAPPINGS = [
+  // ---- Srila Prabhupada Disappearance Day (/srila-prabhupada): Cultural Program (3) -> SPDD (74) ----
+  // Real codes from the temple's SevaCodes sheet (rows 106-107). Scoped to the page so no other page is affected.
+  {
+    sevaNameIncludes: ["abhisheka", "abhishekam"],
+    festivalSlug: "srila-prabhupada",
+    sevaCategory: 3,
+    sevaSubCategory: 74,
+    sevaSubCategoryCode: 69,
+  },
+  {
+    sevaNameIncludes: ["annadana", "anna daan", "anna-daan", "annadaan"],
+    festivalSlug: "srila-prabhupada",
+    sevaCategory: 3,
+    sevaSubCategory: 74,
+    sevaSubCategoryCode: 68,
+  },
+
   // ---- Kartik Maas (Damodar month) sevas: Cultural Program (3) -> Deepotsava (5, code DEEP) ----
   // Real DCC codes from the temple's SevaCodes sheet (SevaSubCategoryCodeId column). Scoped to festivalSlug
   // "kartik-maas" so no other page is affected. Vastrabharana is NOT mapped yet: it was not in the part of the
