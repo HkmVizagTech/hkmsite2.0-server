@@ -8,6 +8,11 @@ const preacherOtpSchema = new mongoose.Schema(
     expiresAt: { type: Date, required: true },
     attempts: { type: Number, default: 0 },
     lastSentAt: { type: Date, required: true },
+    // how the last code went out (for tracing a late or missing SMS with the provider)
+    smsAckId: { type: String, default: null },
+    smsError: { type: String, default: null },
+    whatsappSent: { type: Boolean, default: false },
+    whatsappError: { type: String, default: null },
   },
   { versionKey: false, collection: "preacher_otps" }
 );

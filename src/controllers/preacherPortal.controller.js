@@ -6,7 +6,8 @@ const { getJwtSecret } = require("../utils/utils");
 const { templeDevoteeModel } = require("../models/templeDevotee.model");
 const { preacherOtpModel } = require("../models/preacherOtp.model");
 const { donationModel } = require("../models/donation.model");
-const { sendOtpSms } = require("../services/sms.service");
+const { sendOtpSms, isSmsConfigured } = require("../services/sms.service");
+const { sendDonorOtp, isWhatsAppConfigured } = require("../services/whatsapp.service");
 const { istDayStart, istDayEnd } = require("../config/timezone");
 
 const OTP_TTL_MS = 10 * 60 * 1000;
@@ -58,16 +59,35 @@ const preacherPortalController = {
         return res.status(429).json({ success: false, message: `Please wait ${wait} seconds before asking for a new code.` });
       }
       const otp = String(crypto.randomInt(100000, 1000000));
-      await sendOtpSms(mobile, otp);
+      // The same code goes by SMS and WhatsApp together. The SMS provider accepts every message, but its delivery of the
+      // first one is often late or lost; WhatsApp arrives reliably, so the preacher gets the code on the first try.
+      const errMsg = (e) => String((e && e.message) || e).slice(0, 300);
+      const [sms, wa] = await Promise.allSettled([
+        isSmsConfigured() ? sendOtpSms(mobile, otp) : Promise.reject(new Error("SMS not configured")),
+        isWhatsAppConfigured() ? sendDonorOtp(mobile, otp) : Promise.reject(new Error("WhatsApp not configured")),
+      ]);
+      if (sms.status === "rejected") console.warn("preacherPortal.sendOtp SMS failed:", errMsg(sms.reason));
+      if (wa.status === "rejected") console.warn("preacherPortal.sendOtp WhatsApp failed:", errMsg(wa.reason));
+      if (sms.status === "rejected" && wa.status === "rejected") throw new Error("Neither SMS nor WhatsApp accepted the code");
       await preacherOtpModel.findByIdAndUpdate(
         mobile,
-        { codeHash: hash(otp), expiresAt: new Date(Date.now() + OTP_TTL_MS), attempts: 0, lastSentAt: new Date() },
+        {
+          codeHash: hash(otp),
+          expiresAt: new Date(Date.now() + OTP_TTL_MS),
+          attempts: 0,
+          lastSentAt: new Date(),
+          smsAckId: sms.status === "fulfilled" ? (sms.value && sms.value.ackid) || null : null,
+          smsError: sms.status === "rejected" ? errMsg(sms.reason) : null,
+          whatsappSent: wa.status === "fulfilled",
+          whatsappError: wa.status === "rejected" ? errMsg(wa.reason) : null,
+        },
         { upsert: true }
       );
-      res.status(200).json({ success: true, message: "We sent a 6-digit code by SMS." });
+      const via = [sms.status === "fulfilled" && "SMS", wa.status === "fulfilled" && "WhatsApp"].filter(Boolean);
+      res.status(200).json({ success: true, via, message: `We sent a 6-digit code by ${via.join(" and ")}.` });
     } catch (err) {
       console.error("preacherPortal.sendOtp error:", err && err.message ? err.message : err);
-      res.status(502).json({ success: false, message: "We couldn't send the SMS right now. Please try again in a few minutes." });
+      res.status(502).json({ success: false, message: "We couldn't send the code right now. Please try again in a few minutes." });
     }
   },
 
