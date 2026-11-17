@@ -18,6 +18,15 @@ const SEVA_TTL = Number(process.env.STATS_CACHE_TTL_SECONDS || 60);
 // smaller limit becomes free.
 const MAX_DONOR_WALL = 50;
 
+// The donor names on a seva page come only from the donations shown in Admin → Donations: that list leaves out
+// the standalone /donations page (it has its own admin at /donations/admin) and donations credited to a preacher
+// (those live in the Preachers module). Same scope as ADMIN_DONATIONS_SCOPE in donation.controller.js.
+// The count and total still cover every completed donation for the seva.
+const ADMIN_DONATIONS_WALL_SCOPE = {
+  sourcePage: { $not: /^donations(\/|$)/ },
+  dccEnrolledById: { $in: [null, 36] },
+};
+
 // First name + last initial only, e.g. "Ramesh K." — never expose full PII
 // (email/phone/full surname) on a public donor wall.
 const toDisplayName = (fullName) => {
@@ -77,7 +86,7 @@ const sevaStatsController = {
       const load = async () => {
         const [recent, agg] = await Promise.all([
           donationModel
-            .find(filter)
+            .find({ ...filter, ...ADMIN_DONATIONS_WALL_SCOPE })
             .sort({ date: -1 })
             .limit(MAX_DONOR_WALL)
             .select("donorName amount date")
