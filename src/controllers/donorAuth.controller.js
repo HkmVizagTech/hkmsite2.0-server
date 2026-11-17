@@ -60,19 +60,15 @@ async function issueOtpForDonor(donor, res) {
   // only once the provider has actually accepted it, and any failure comes
   // back on THIS response where the UI can show it. The couple of seconds is
   // worth that. The timeout inside whatsapp.service keeps the wait bounded.
-  // SMS first (works on every phone); WhatsApp is the fallback if SMS is not set up or fails.
-  let via = "SMS";
-  if (isSmsConfigured()) {
-    try {
-      await sendOtpSms(donor.mobile, otpCode);
-    } catch (smsErr) {
-      console.warn("donor OTP SMS failed, trying WhatsApp:", smsErr && smsErr.message);
-      via = "WhatsApp";
-      await sendDonorOtp(donor.mobile, otpCode);
-    }
-  } else {
-    via = "WhatsApp";
+  // WhatsApp first (as it was originally); SMS is only the fallback if WhatsApp fails.
+  let via = "WhatsApp";
+  try {
     await sendDonorOtp(donor.mobile, otpCode);
+  } catch (waErr) {
+    if (!isSmsConfigured()) throw waErr;
+    console.warn("donor OTP WhatsApp failed, trying SMS:", waErr && waErr.message);
+    via = "SMS";
+    await sendOtpSms(donor.mobile, otpCode);
   }
 
   // Only persist the OTP after a confirmed send — a failed/rejected send
