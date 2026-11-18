@@ -28,7 +28,7 @@ const TSC_ACCOUNT_TYPE = 5;
 const numToWord = require("number-to-words");
 const { donationModel } = require("../models/donation.model");
 const { IST } = require("../config/timezone");
-const { resolveEnrolledBy, resolveDccAccountType } = require("./dcc.service");
+const { resolveEnrolledBy, isSubhojanamDonation } = require("./dcc.service");
 const { templeDevoteeModel } = require("../models/templeDevotee.model");
 
 // Code printed for the DCC enrolled-by ID this donation was (or will be) sent with.
@@ -213,13 +213,14 @@ async function generateReceiptBuffer(donationId) {
   // this receipt a 23MB font embed.
   const needsUnicode = Object.values(fieldValues).some((v) => !isAsciiOnly(stripAstral(v)));
 
-  // A donation raised under DCC account type 5 (a TSC seva picked in DRM, or a payment into
-  // the Touchstone Razorpay account from /subhojanam) gets the
+  // A donation raised under DCC account type 5 (a TSC seva picked in DRM) gets the
   // Touchstone Charities receipt; everything else keeps the HKMI one, unchanged.
   // The TSC template is built by scripts/build-tsc-receipt-template.js and has one extra
   // field, paymentMode, because it prints the real payment mode instead of the HKMI
   // template's fixed "Online" (which is covered over for hand-entered donations below).
-  const isTsc = resolveDccAccountType(donation) === TSC_ACCOUNT_TYPE;
+  // Subhojanam (website or hand-entered) also gets the TSC receipt, unless DRM set another account type.
+  const isTsc = Number(donation.dccAccountType) === TSC_ACCOUNT_TYPE ||
+    (donation.dccAccountType == null && isSubhojanamDonation(donation));
   if (isTsc) {
     fieldValues.paymentMode = (donation.manualEntry && MODE_WORDS[donation.manualPaymentMode]) || "Online";
   }
