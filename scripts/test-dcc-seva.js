@@ -51,9 +51,10 @@ const subhoPayload = buildDccPayload(subho, "pay_s1");
 check("a /subhojanam payment: account type 5", subhoPayload.accountType, 5);
 check("a /subhojanam payment: TSC seva 8 / 25 / ANGE", pick(subhoPayload), { cat: 8, sub: 25, code: "ANGE" });
 check("a /subhojanam payment: receipt picks TSC", resolveDccAccountType(subho), 5);
-check("the same seva name on the HKMI account stays 4", buildDccPayload({ ...subho, paymentAccount: "default" }, "pay_s2").accountType, 4);
 check("a website brick donation is still 4", buildDccPayload(website, "pay_1").accountType, 4);
 check("DRM's own 4 on a touchstone record still wins", buildDccPayload({ ...subho, dccAccountType: 4 }, "u1").accountType, 4);
+check("a hand-entered Subhojanam receipt: 5 with the TSC seva", (({ accountType, sevaCategory, sevaSubCategory, sevaSubCategoryCode }) => ({ accountType, sevaCategory, sevaSubCategory, sevaSubCategoryCode }))(buildDccPayload({ ...base, sourcePage: "admin-manual", sevaName: "Subhojanam" }, "u1")), { accountType: 5, sevaCategory: 8, sevaSubCategory: 25, sevaSubCategoryCode: "ANGE" });
+check("every other seva stays HKMI (4)", ["Anna Daan Seva", "Gau Seva", "Gita Daan Seva", "Deepotsava - Annadana Seva", "Subhojanam Special"].map((n) => buildDccPayload({ ...base, sevaName: n, sourcePage: "/anna-daan-seva" }, "u1").accountType), [4, 4, 4, 4, 4]);
 check("a stored TSC donation retried: still 5", buildDccPayload({ ...tscDonation, dccSevaCategory: 8, dccSevaSubCategory: 25, dccSevaSubCategoryCode: "ANGE" }, "u1").accountType, 5);
 
 // Payment modes, as DCC's ModeOfPayment table has them: 1 Cash, 2 Card, 3 Online, 4 Cheque/DD, 5 Others.

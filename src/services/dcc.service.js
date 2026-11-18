@@ -627,11 +627,15 @@ const mappingMatchesDonation = (mapping, donation) => {
   return true;
 };
 
-// Touchstone Charities (TSC). A donation paid into the Touchstone Razorpay account (the
-// /subhojanam page) belongs to TSC, so it goes to DCC as account type 5 under a TSC seva and
-// gets the TSC receipt -- the same as a TSC seva raised from DRM.
+// Touchstone Charities (TSC). Subhojanam is the only seva that belongs to TSC: a Subhojanam
+// donation -- paid on /subhojanam (Touchstone Razorpay account) or entered by hand as the
+// "Subhojanam" seva -- goes to DCC as account type 5 under a TSC seva and gets the TSC receipt.
+// Every other seva stays HKMI (account type 4, HKMI receipt).
 const TSC_ACCOUNT_TYPE = 5;
-const isTouchstoneDonation = (donation) => normalizeString(donation?.paymentAccount) === "touchstone";
+const isTouchstoneDonation = (donation) =>
+  normalizeString(donation?.paymentAccount) === "touchstone" ||
+  normalizeString(donation?.sevaName) === "subhojanam" ||
+  normalizeString(donation?.sourcePage).replace(/^\/+/, "") === "subhojanam";
 // The TSC seva website Touchstone donations are sent under (TSC "Annadanam General" by default).
 const TSC_SEVA_MAPPING = {
   sevaCategory: Number(process.env.DCC_TSC_SEVA_CATEGORY || 8),
