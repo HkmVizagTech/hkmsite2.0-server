@@ -627,7 +627,37 @@ const mappingMatchesDonation = (mapping, donation) => {
   return true;
 };
 
+// Touchstone Charities (TSC). A donation paid into the Touchstone Razorpay account (the
+// /subhojanam page) belongs to TSC, so it goes to DCC as account type 5 under a TSC seva and
+// gets the TSC receipt -- the same as a TSC seva raised from DRM.
+const TSC_ACCOUNT_TYPE = 5;
+const isTouchstoneDonation = (donation) => normalizeString(donation?.paymentAccount) === "touchstone";
+// The TSC seva website Touchstone donations are sent under (TSC "Annadanam General" by default).
+const TSC_SEVA_MAPPING = {
+  sevaCategory: Number(process.env.DCC_TSC_SEVA_CATEGORY || 8),
+  sevaSubCategory: Number(process.env.DCC_TSC_SEVA_SUBCATEGORY || 25),
+  sevaSubCategoryCode: process.env.DCC_TSC_SEVA_SUBCATEGORY_CODE || "ANGE",
+};
+
+/** DCC account type for a donation: DRM's 4/5 if it sent one, 5 for Touchstone payments, else the default. */
+const resolveDccAccountType = (donation) => {
+  if ([4, TSC_ACCOUNT_TYPE].includes(Number(donation?.dccAccountType))) return Number(donation.dccAccountType);
+  if (isTouchstoneDonation(donation)) return TSC_ACCOUNT_TYPE;
+  return Number(process.env.DCC_ACCOUNT_TYPE || 4);
+};
+
 const resolveSevaMapping = (donation) => {
+  // A Touchstone payment must never fall into an HKMI seva. Only a DCC_SEVA_MAPPINGS entry
+  // written for the touchstone account itself can override the TSC default.
+  if (isTouchstoneDonation(donation)) {
+    const own = DCC_SEVA_MAPPINGS.find((mapping) => mapping && mapping.paymentAccount && mappingMatchesDonation(mapping, donation));
+    if (!own) return { ...TSC_SEVA_MAPPING };
+    return {
+      sevaCategory: Number(own.sevaCategory ?? TSC_SEVA_MAPPING.sevaCategory),
+      sevaSubCategory: Number(own.sevaSubCategory ?? TSC_SEVA_MAPPING.sevaSubCategory),
+      sevaSubCategoryCode: own.sevaSubCategoryCode ?? TSC_SEVA_MAPPING.sevaSubCategoryCode,
+    };
+  }
   const matched = DCC_SEVA_MAPPINGS.find((mapping) => mappingMatchesDonation(mapping, donation))
     || DEFAULT_NAME_BASED_SEVA_MAPPINGS.find((mapping) => mappingMatchesDonation(mapping, donation));
   if (!matched) return DEFAULT_SEVA_MAPPING;
@@ -693,10 +723,8 @@ const buildDccPayload = (donation, gatewayPaymentId, sevaOverride = null) => {
     },
     PAN: donation.panNumber || null,
     amount: String(Number(donation.amount)),
-    // 5 for a TSC seva (set by DRM with the seva), otherwise the usual 4.
-    accountType: [4, 5].includes(Number(donation.dccAccountType))
-      ? Number(donation.dccAccountType)
-      : Number(process.env.DCC_ACCOUNT_TYPE || 4),
+    // 5 for a TSC seva (set by DRM with the seva) or a Touchstone payment, otherwise the usual 4.
+    accountType: resolveDccAccountType(donation),
     sevaCategory: sevaMapping.sevaCategory,
     sevaSubCategory: sevaMapping.sevaSubCategory,
     sevaSubCategoryCode: sevaMapping.sevaSubCategoryCode,
@@ -873,6 +901,8 @@ module.exports = {
   cleanDccSeva,
   dccTransactionId,
   isDccConfigured,
+  isTouchstoneDonation,
+  resolveDccAccountType,
   resolveEnrolledBy,
   resolveSevaMapping,
   syncDonationToDcc,

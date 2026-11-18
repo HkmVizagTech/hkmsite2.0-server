@@ -43,6 +43,17 @@ const tscDonation = { ...drmOld, sevaName: "Annadanam General", dccAccountType: 
 check("a TSC seva: account type 5 with category 8 / sub 25 / code ANGE", (({ accountType, sevaCategory, sevaSubCategory, sevaSubCategoryCode }) => ({ accountType, sevaCategory, sevaSubCategory, sevaSubCategoryCode }))(buildDccPayload(tscDonation, "u1", tscSeva)), { accountType: 5, sevaCategory: 8, sevaSubCategory: 25, sevaSubCategoryCode: "ANGE" });
 check("a donation with no account type: 4, as before", buildDccPayload(drmOld, "u1", chosen).accountType, 4);
 check("an account type that is not 4 or 5 is ignored", buildDccPayload({ ...drmOld, dccAccountType: 7 }, "u1", chosen).accountType, 4);
+
+// Website Touchstone payments (/subhojanam): TSC account type 5 and the TSC seva; the TSC receipt follows.
+const { resolveDccAccountType } = require("../src/services/dcc.service");
+const subho = { ...base, manualPaymentMode: undefined, sourcePage: "/subhojanam", sevaName: "Subhojanam", paymentAccount: "touchstone" };
+const subhoPayload = buildDccPayload(subho, "pay_s1");
+check("a /subhojanam payment: account type 5", subhoPayload.accountType, 5);
+check("a /subhojanam payment: TSC seva 8 / 25 / ANGE", pick(subhoPayload), { cat: 8, sub: 25, code: "ANGE" });
+check("a /subhojanam payment: receipt picks TSC", resolveDccAccountType(subho), 5);
+check("the same seva name on the HKMI account stays 4", buildDccPayload({ ...subho, paymentAccount: "default" }, "pay_s2").accountType, 4);
+check("a website brick donation is still 4", buildDccPayload(website, "pay_1").accountType, 4);
+check("DRM's own 4 on a touchstone record still wins", buildDccPayload({ ...subho, dccAccountType: 4 }, "u1").accountType, 4);
 check("a stored TSC donation retried: still 5", buildDccPayload({ ...tscDonation, dccSevaCategory: 8, dccSevaSubCategory: 25, dccSevaSubCategoryCode: "ANGE" }, "u1").accountType, 5);
 
 // Payment modes, as DCC's ModeOfPayment table has them: 1 Cash, 2 Card, 3 Online, 4 Cheque/DD, 5 Others.
