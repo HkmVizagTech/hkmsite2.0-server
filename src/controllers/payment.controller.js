@@ -295,6 +295,15 @@ function cleanGotram(v) {
 const paymentController = {
   createOrder: async (req, res) => {
     try {
+      // A donation credited to a preacher (a seva-page link whose code resolves to a devotee with a DCC id other
+      // than the temple's default 36) gets no Maha Prasadam. Donations under ID 36 (no code, an unknown code,
+      // a campaigner link, or any /donations page) are unchanged.
+      const _attr = await require('../utils/preacherRef').attributionFor({
+        sourcePage: req.body.sourcePage,
+        campaignerSlug: req.body.campaignerSlug,
+        preacherRef: req.body.preacherRef || (req.body.utm && req.body.utm.ref),
+      });
+      const noPrasadamForPreacherLink = !req.body.campaignerSlug && _attr.dccEnrolledById != null && Number(_attr.dccEnrolledById) !== 36;
       const {
         name,
         email,
@@ -377,8 +386,9 @@ const paymentController = {
         dob: dob || req.body.dob || undefined,
         ...dedicationFromBody(req.body),
         gotram: Number(amount) > 1000 ? cleanGotram(req.body.gotram) : undefined,
-        wantPrasadam: mahaprasadam || req.body.wantPrasadam,
-        prasadamAddress: prasadamAddress || req.body.prasadamAddress,
+        // Preacher-credited donations never get Maha Prasadam (see noPrasadamForPreacherLink above).
+        wantPrasadam: noPrasadamForPreacherLink ? false : (mahaprasadam || req.body.wantPrasadam),
+        prasadamAddress: noPrasadamForPreacherLink ? undefined : (prasadamAddress || req.body.prasadamAddress),
         festivalSlug: req.body.festivalSlug || undefined,
         campaignerSlug: req.body.campaignerSlug || undefined,
         // Receipt attribution: the campaigner's temple devotee, or the preacher whose seva-page link

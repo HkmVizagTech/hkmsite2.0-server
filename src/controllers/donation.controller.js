@@ -1312,13 +1312,15 @@ const donationController = {
   // those actually get a courier box), newest first. The standalone /donations
   // page family is EXCLUDED: that page has its own dedicated admin and its
   // donors are not this panel's business, so they never show up here.
+  // Only the temple's own donations (receipt ID 36 / none) appear in the Prasadam tab and its CSV. Donations credited to a
+  // preacher (any other DCC id) never get Maha Prasadam, so they are excluded here too, including older records.
   listPrasadamRequests: async (req, res) => {
     try {
       const { status, q, seva, sourcePage } = req.query;
       const filter = {
         wantPrasadam: true,
         status: "completed",
-        ...EXCLUDE_DONATIONS_PAGE,
+        ...ADMIN_DONATIONS_SCOPE,
         ...buildDateRangeMatch(req.query.from, req.query.to),
       };
 
@@ -1376,7 +1378,7 @@ const donationController = {
       // Dropdown options for the seva / page filters — distinct values
       // across ALL prasadam opt-ins (excluding /donations), so the option
       // lists stay stable no matter what is currently filtered.
-      const optMatch = { wantPrasadam: true, status: "completed", ...EXCLUDE_DONATIONS_PAGE };
+      const optMatch = { wantPrasadam: true, status: "completed", ...ADMIN_DONATIONS_SCOPE };
 
       const [total, requests, counts, sevaAgg, pageAgg] = await Promise.all([
         donationModel.countDocuments(filter),
@@ -1486,7 +1488,7 @@ const donationController = {
       const filter = {
         wantPrasadam: true,
         status: "completed",
-        ...EXCLUDE_DONATIONS_PAGE,
+        ...ADMIN_DONATIONS_SCOPE,
         ...buildDateRangeMatch(req.query.from, req.query.to),
       };
 
