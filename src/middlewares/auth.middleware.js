@@ -67,6 +67,16 @@ const shopAdminMiddleware = (req, res, next) => {
 	next();
 };
 
+// Read-only access for the "devotee" role: the programs dashboard, registration
+// filters and CSV export, and nothing else. Only GET routes use this; every
+// route that changes a program or a registration stays admin-only.
+const programsViewMiddleware = (req, res, next) => {
+	if (req.user.role !== "admin" && req.user.role !== "devotee") {
+		return res.status(403).json({ message: "Admin access required" });
+	}
+	next();
+};
+
 // Scoped access for the preacher dashboard, per-module. Unlike the other
 // scoped middlewares above (which only check req.user.role from the JWT),
 // this does a fresh DB lookup — a preacher's allowedModules can change at
@@ -121,4 +131,4 @@ const donorAuthMiddleware = (req, res, next) => {
 	}
 };
 
-module.exports = { authMiddleware, adminMiddleware, donationsAdminMiddleware, blogsAdminMiddleware, shopAdminMiddleware, preacherModuleMiddleware, donorAuthMiddleware };
+module.exports = { authMiddleware, adminMiddleware, donationsAdminMiddleware, blogsAdminMiddleware, shopAdminMiddleware, programsViewMiddleware, preacherModuleMiddleware, donorAuthMiddleware };

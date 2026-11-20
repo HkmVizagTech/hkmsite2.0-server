@@ -175,6 +175,10 @@ const userController = {
 
     profile: async (req, res) => {
         try {
+            // A devotee signed in by mobile OTP has no user account; answer from the token itself.
+            if (req.user.type === "devoteePortal" && req.user.role === "devotee") {
+                return res.status(200).json({ user: { email: req.user.mobile, name: req.user.name, role: "devotee", allowedModules: [] } });
+            }
             const user = await userModel.findById(req.user.userId, "-password");
             if (!user) return res.status(404).json({ message: "User not found" });
             res.status(200).json({ user });

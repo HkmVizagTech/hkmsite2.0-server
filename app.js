@@ -159,6 +159,7 @@ app.use("/contact-messages", contactMessageRouter);
 app.use("/gita-course", gitaCourseRouter);
 app.use("/programs", programRouter);
 app.use("/preacher-portal", require("./src/routes/preacherPortal.routes").preacherPortalRouter);
+app.use("/devotee-portal", require("./src/routes/devoteePortal.routes").devoteePortalRouter);
 app.use("/patron-requests", patronRequestRouter);
 app.use("/dashboard", dashboardRouter);
 app.use("/devotees", devoteeRouter);
