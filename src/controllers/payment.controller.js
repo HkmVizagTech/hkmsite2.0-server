@@ -132,7 +132,14 @@ async function processWebhookEventInline(event) {
           const { markRegistrationPaidByOrder } = require('./registration.controller');
           const reg = await markRegistrationPaidByOrder({ orderId, paymentId: payment.id });
           if (reg) console.log('Event registration paid for order', orderId);
-          else console.warn('No donation, shop order or event registration found for order:', orderId);
+          else {
+            // A program registration fee (Admin → Programs, e.g. Bala Samskriti).
+            // No DCC / receipt — marking it paid sends the WhatsApp thank-you.
+            const { markProgramRegistrationPaidByOrder } = require('./program.controller');
+            const programReg = await markProgramRegistrationPaidByOrder({ orderId, paymentId: payment.id });
+            if (programReg) console.log('Program registration paid for order', orderId);
+            else console.warn('No donation, shop order, event or program registration found for order:', orderId);
+          }
         }
       }
       break;
@@ -156,6 +163,16 @@ async function processWebhookEventInline(event) {
             await shopOrder.save();
             console.log('Shop order marked failed:', shopOrder.orderNumber);
           }
+          break;
+        }
+      }
+      // Program registration fees (Admin → Programs): pending → failed unless a
+      // retry on the same order was captured.
+      {
+        const { markProgramRegistrationFailedByOrder } = require('./program.controller');
+        const programReg = await markProgramRegistrationFailedByOrder({ orderId, payment });
+        if (programReg) {
+          console.log('Program registration payment.failed handled for order', orderId, '->', programReg.paymentStatus);
           break;
         }
       }
