@@ -64,7 +64,31 @@ const volunteerRegistrationSchema = new mongoose.Schema(
 
 volunteerRegistrationSchema.index({ eventId: 1 });
 
+// General volunteer sign-up from the website's /volunteer page (not tied to a particular event).
+const volunteerSignupSchema = new mongoose.Schema(
+  {
+    name: { type: String, required: true, trim: true, maxlength: 120 },
+    phone: { type: String, required: true, trim: true, index: true }, // 10-digit Indian mobile
+    email: { type: String, trim: true, lowercase: true, default: "", maxlength: 160 },
+    city: { type: String, trim: true, default: "", maxlength: 120 },
+    age: { type: Number },
+    gender: { type: String, enum: ["", "male", "female", "other"], default: "" },
+    occupation: { type: String, trim: true, default: "", maxlength: 160 }, // student / working / etc, free text
+    interests: { type: [String], default: [] }, // ways to serve
+    availability: { type: [String], default: [] }, // e.g. weekdays, weekends, festivals
+    startDate: { type: Date }, // preferred start date
+    message: { type: String, trim: true, default: "", maxlength: 1000 },
+    status: { type: String, enum: ["new", "contacted", "active", "not_reachable"], default: "new" },
+    notes: { type: String, trim: true, default: "", maxlength: 1000 }, // admin's own note
+    utm: { type: mongoose.Schema.Types.Mixed },
+  },
+  { timestamps: true, versionKey: false, collection: "volunteer_signups" }
+);
+volunteerSignupSchema.index({ createdAt: -1 });
+
 const volunteerEventModel = mongoose.model("volunteerEvent", volunteerEventSchema);
 const volunteerRegistrationModel = mongoose.model("volunteerRegistration", volunteerRegistrationSchema);
 
-module.exports = { volunteerEventModel, volunteerRegistrationModel };
+const volunteerSignupModel = mongoose.model("volunteerSignup", volunteerSignupSchema);
+
+module.exports = { volunteerEventModel, volunteerRegistrationModel, volunteerSignupModel };

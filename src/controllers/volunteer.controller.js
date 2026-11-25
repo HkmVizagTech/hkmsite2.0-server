@@ -1,4 +1,11 @@
-const { volunteerEventModel, volunteerRegistrationModel } = require("../models/volunteer.model");
+const { volunteerEventModel, volunteerRegistrationModel, volunteerSignupModel } = require("../models/volunteer.model");
+
+const INTERESTS = [
+  "festivals", "prasadam", "subhojanam", "temple-services", "harinaam", "book-distribution", "outreach",
+  "medical", "editorial", "photography", "architecture", "design", "drama", "it", "social-media", "other",
+];
+const AVAILABILITY = ["daily", "weekdays", "weekends", "festival-days", "flexible"];
+const pick = (arr, allowed) => [...new Set((Array.isArray(arr) ? arr : []).map((x) => String(x)))].filter((x) => allowed.includes(x));
 
 const volunteerController = {
   listActive: async (req, res) => {
@@ -141,6 +148,94 @@ const volunteerController = {
     } catch (err) {
       console.error("Volunteer register error:", err);
       res.status(500).json({ message: "Server error", error: err.message });
+    }
+  },
+
+  // PUBLIC — POST /volunteers/signup  (the form on the website's /volunteer page)
+  // One entry per mobile number: signing up again just refreshes that person's details.
+  signup: async (req, res) => {
+    try {
+      const b = req.body || {};
+      const name = String(b.name || "").trim().slice(0, 120);
+      const phone = String(b.phone || "").replace(/\D/g, "").replace(/^(91|0)(?=\d{10}$)/, "");
+      if (name.length < 2) return res.status(400).json({ message: "Please enter your name." });
+      if (!/^[6-9]\d{9}$/.test(phone)) return res.status(400).json({ message: "Please enter a valid 10-digit mobile number." });
+      const email = String(b.email || "").trim().toLowerCase().slice(0, 160);
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ message: "Please enter a valid email address." });
+      const interests = pick(b.skill ? [b.skill] : b.interests, INTERESTS);
+      if (interests.length === 0) return res.status(400).json({ message: "Please select your skill / seva area." });
+      const availability = pick(b.availability, AVAILABILITY);
+      if (availability.length === 0) return res.status(400).json({ message: "Please select your availability." });
+      const startDate = new Date(b.startDate);
+      if (!b.startDate || Number.isNaN(startDate.getTime())) return res.status(400).json({ message: "Please choose your preferred start date." });
+      const age = Number(b.age);
+      const gender = ["male", "female", "other"].includes(b.gender) ? b.gender : "";
+
+      const data = {
+        name,
+        email,
+        city: String(b.city || "").trim().slice(0, 120),
+        gender,
+        occupation: String(b.occupation || "").trim().slice(0, 160),
+        interests,
+        availability,
+        startDate,
+        message: String(b.message || "").trim().slice(0, 1000),
+      };
+      if (Number.isFinite(age) && age >= 5 && age <= 100) data.age = Math.round(age);
+      if (b.utm && typeof b.utm === "object") {
+        const utm = {};
+        for (const k of ["utm_source", "utm_medium", "utm_campaign"]) if (b.utm[k]) utm[k] = String(b.utm[k]).slice(0, 100);
+        if (Object.keys(utm).length) data.utm = utm;
+      }
+
+      const existing = await volunteerSignupModel.findOne({ phone });
+      if (existing) {
+        Object.assign(existing, data);
+        await existing.save();
+        return res.status(200).json({ message: "Updated", alreadyRegistered: true });
+      }
+      await volunteerSignupModel.create({ ...data, phone });
+      return res.status(201).json({ message: "Registered" });
+    } catch (err) {
+      console.error("Volunteer signup error:", err);
+      return res.status(500).json({ message: "Something went wrong. Please try again." });
+    }
+  },
+
+  // ADMIN — GET /volunteers/admin/signups
+  listSignups: async (_req, res) => {
+    try {
+      const signups = await volunteerSignupModel.find().sort({ createdAt: -1 }).limit(2000).lean();
+      res.status(200).json({ signups });
+    } catch (err) {
+      console.error("Volunteer listSignups error:", err);
+      res.status(500).json({ message: "Server error" });
+    }
+  },
+
+  // ADMIN — PUT /volunteers/admin/signups/:id  { status?, notes? }
+  updateSignup: async (req, res) => {
+    try {
+      const b = req.body || {};
+      const set = {};
+      if (["new", "contacted", "active", "not_reachable"].includes(b.status)) set.status = b.status;
+      if (typeof b.notes === "string") set.notes = b.notes.trim().slice(0, 1000);
+      const signup = await volunteerSignupModel.findByIdAndUpdate(req.params.id, { $set: set }, { new: true });
+      if (!signup) return res.status(404).json({ message: "Not found" });
+      res.status(200).json({ signup });
+    } catch (err) {
+      res.status(500).json({ message: "Server error" });
+    }
+  },
+
+  // ADMIN — DELETE /volunteers/admin/signups/:id
+  deleteSignup: async (req, res) => {
+    try {
+      await volunteerSignupModel.findByIdAndDelete(req.params.id);
+      res.status(200).json({ message: "Deleted" });
+    } catch (err) {
+      res.status(500).json({ message: "Server error" });
     }
   },
 
